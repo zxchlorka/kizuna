@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Light mode — clean slate with amber accent */
+    --background: 210 20% 97%;
+    --foreground: 215 25% 10%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 215 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 10%;
+
+    /* Primary: deep slate-blue — professional, serious */
+    --primary: 215 35% 20%;
+    --primary-foreground: 210 20% 97%;
+
+    /* Secondary: light warm gray */
+    --secondary: 210 15% 92%;
+    --secondary-foreground: 215 25% 20%;
+
+    /* Muted: subtle backgrounds */
+    --muted: 210 15% 94%;
+    --muted-foreground: 215 15% 45%;
+
+    /* Accent: electric amber — the signature color */
+    --accent: 38 92% 50%;
+    --accent-foreground: 215 25% 10%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 215 20% 86%;
+    --input: 215 20% 86%;
+    --ring: 38 92% 50%;
+
+    --radius: 0.25rem;
+  }
+
+  .dark {
+    /* Dark mode — near-black terminal with amber accent */
+    --background: 216 28% 7%;
+    --foreground: 210 20% 90%;
+
+    --card: 216 24% 10%;
+    --card-foreground: 210 20% 90%;
+
+    --popover: 216 24% 10%;
+    --popover-foreground: 210 20% 90%;
+
+    /* Primary in dark: bright foreground */
+    --primary: 210 20% 90%;
+    --primary-foreground: 216 28% 7%;
+
+    /* Secondary: slightly lighter dark */
+    --secondary: 216 20% 15%;
+    --secondary-foreground: 210 20% 80%;
+
+    /* Muted: dim backgrounds for deprioritized content */
+    --muted: 216 20% 13%;
+    --muted-foreground: 215 15% 50%;
+
+    /* Accent: same electric amber, pops on dark */
+    --accent: 38 92% 50%;
+    --accent-foreground: 216 28% 7%;
+
+    --destructive: 0 62% 50%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 216 18% 18%;
+    --input: 216 18% 18%;
+    --ring: 38 92% 50%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  html {
+    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* Subtle grid-line texture — the "engineer's graph paper" effect */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: -1;
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.3) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.3) 1px, transparent 1px);
+    background-size: 32px 32px;
+  }
+
+  #root {
+    position: relative;
+    min-height: 100vh;
+  }
+
+  /* Monospace code / data elements */
+  code, kbd, pre, .font-mono {
+    font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  }
+
+  /* Scrollbar styling — dark and slim */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: hsl(var(--background));
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 3px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: hsl(var(--muted-foreground));
+  }
+
+  /* Selection highlight uses accent color */
+  ::selection {
+    background: hsl(var(--accent) / 0.3);
+    color: hsl(var(--foreground));
+  }
+}
+
+@layer utilities {
+  /* Utility for accent-colored text */
+  .text-accent-amber {
+    color: hsl(38 92% 50%);
+  }
+
+  /* Terminal-style blinking cursor for data fields */
+  .cursor-blink::after {
+    content: '|';
+    animation: blink 1.2s step-end infinite;
+    color: hsl(var(--accent));
+    margin-left: 1px;
+  }
+
+  @keyframes blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+  }
+
+  /* Transparent amber backgrounds that Tailwind doesn't generate as bg-amber-500/8 */
+  .bg-amber-500\/8 {
+    background-color: rgb(245 158 11 / 0.08);
+  }
+  .bg-blue-500\/8 {
+    background-color: rgb(59 130 246 / 0.08);
+  }
+}

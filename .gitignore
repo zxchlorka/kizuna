@@ -1,0 +1,32 @@
+bin/
+*.exe
+*.test
+*.out
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Data & secrets
+/data/
+*.key
+.env
+encryption.key
+docs
+memory
+
+# Go
+*.sum.bak
+
+# Frontend deps & build cache
+frontend/node_modules/
+frontend/dist/
+
+# MCP / QA test artifacts
+.playwright-mcp/
+docs/tmp/
+*.png
+*.jpg
+*.jpeg
