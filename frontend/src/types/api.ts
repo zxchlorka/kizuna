@@ -45,3 +45,49 @@ export interface ColumnMeta {
 export interface Schema {
   columns: ColumnMeta[]
 }
+
+export interface DataResult {
+  columns: ColumnMeta[]
+  rows: any[][]
+  total: number
+  has_more: boolean
+}
+
+export interface DataOpts {
+  offset: number
+  limit: number
+  order_by: string
+  order_dir: 'asc' | 'desc'
+  filters: FilterExpr[]
+}
+
+export interface FilterExpr {
+  column: string
+  op: 'eq' | 'neq' | 'gt' | 'lt' | 'like' | 'contains' | 'is_null' | 'is_not_null'
+  value: string
+}
+
+export interface MutateOp {
+  type: 'insert' | 'update' | 'delete'
+  schema: string
+  object: string
+  where?: Record<string, any>
+  data?: Record<string, any>
+}
+
+export interface MutateResult {
+  rows_affected: number
+  row?: any[]
+}
+
+export interface BulkMutateOp {
+  schema: string
+  object: string
+  operations: MutateOp[]
+}
+
+export interface BulkMutateResult {
+  applied: number
+  rows_affected: number
+  message: string
+}

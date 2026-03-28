@@ -11,6 +11,7 @@ type Connector interface {
 	GetData(ctx context.Context, object string, opts DataOpts) (*DataResult, error)
 	Execute(ctx context.Context, command string) (*ExecResult, error)
 	Mutate(ctx context.Context, op MutateOp) (*MutateResult, error)
+	MutateBulk(ctx context.Context, op BulkMutateOp) (*BulkMutateResult, error)
 	DDL(ctx context.Context, op DDLOp) error
 	Close() error
 }
@@ -88,4 +89,17 @@ type ExecResult struct {
 
 type MutateResult struct {
 	RowsAffected int64 `json:"rows_affected"`
+	Row          []any `json:"row,omitempty"`
+}
+
+type BulkMutateOp struct {
+	Schema     string     `json:"schema"`
+	Object     string     `json:"object"`
+	Operations []MutateOp `json:"operations"`
+}
+
+type BulkMutateResult struct {
+	Applied      int    `json:"applied"`
+	RowsAffected int64  `json:"rows_affected"`
+	Message      string `json:"message"`
 }

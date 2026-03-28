@@ -3,6 +3,7 @@ import { Table2 } from 'lucide-react'
 import { Sidebar } from '@/components/Sidebar'
 import { TabBar } from '@/components/TabBar'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { PgTableView } from '@/components/PgTableView'
 
 export default function DataViewPage() {
   const { id } = useParams<{ id: string }>()
@@ -18,16 +19,19 @@ export default function DataViewPage() {
       <div className="flex flex-1 flex-col overflow-hidden">
         <TabBar />
 
-        <div className="flex flex-1 items-center justify-center">
-          {!activeTab ? (
-            <div className="text-center text-muted-foreground">
-              <Table2 className="mx-auto mb-2 h-8 w-8 opacity-40" />
-              <p className="text-sm">Select a table from the object tree</p>
-            </div>
+        <div className="flex flex-1 overflow-hidden">
+          {activeTab ? (
+            <PgTableView
+              connId={activeTab.connId}
+              object={activeTab.object}
+              tabId={activeTab.id}
+            />
           ) : (
-            <div className="text-center text-muted-foreground">
-              <p className="text-sm font-medium text-foreground">{activeTab.object}</p>
-              <p className="mt-1 text-xs">Data loading... (Sprint 2)</p>
+            <div className="flex flex-1 items-center justify-center">
+              <div className="text-center text-muted-foreground">
+                <Table2 className="mx-auto mb-2 h-8 w-8 opacity-40" />
+                <p className="text-sm">Select a table from the object tree</p>
+              </div>
             </div>
           )}
         </div>
