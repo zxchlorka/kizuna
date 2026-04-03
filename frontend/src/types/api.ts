@@ -46,9 +46,11 @@ export interface Schema {
   columns: ColumnMeta[]
 }
 
+export type TableRow = Record<string, unknown>
+
 export interface DataResult {
   columns: ColumnMeta[]
-  rows: any[][]
+  rows: TableRow[]
   total: number
   has_more: boolean
 }
@@ -71,13 +73,13 @@ export interface MutateOp {
   type: 'insert' | 'update' | 'delete'
   schema: string
   object: string
-  where?: Record<string, any>
-  data?: Record<string, any>
+  where?: Record<string, unknown>
+  data?: Record<string, unknown>
 }
 
 export interface MutateResult {
   rows_affected: number
-  row?: any[]
+  row?: unknown[]
 }
 
 export interface BulkMutateOp {

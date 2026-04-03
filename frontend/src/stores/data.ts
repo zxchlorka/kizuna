@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { normalizeDataRows } from '@/lib/table'
 import type {
   BulkMutateOp,
   BulkMutateResult,
@@ -6,27 +7,30 @@ import type {
   DataOpts,
   DataResult,
   MutateOp,
+  TableRow,
 } from '@/types/api'
 
 interface DraftUpdate {
-  where: Record<string, any>
-  data: Record<string, any>
+  where: Record<string, unknown>
+  data: Record<string, unknown>
 }
 
 interface DraftDelete {
-  where: Record<string, any>
+  where: Record<string, unknown>
 }
 
 interface TabData {
   columns: ColumnMeta[]
-  rows: any[][]
+  rows: TableRow[]
   total: number
   loading: boolean
   error: string | null
   opts: DataOpts
   draftUpdates: Record<string, DraftUpdate>
   draftDeletes: Record<string, DraftDelete>
-  draftInserts: Record<string, any>[]
+  draftInserts: Record<string, unknown>[]
+  schemaRequestId: number
+  dataRequestId: number
 }
 
 interface DataStore {
@@ -36,9 +40,9 @@ interface DataStore {
   mutate: (connId: string, op: MutateOp, tabId: string) => Promise<void>
   mutateBulk: (connId: string, op: BulkMutateOp, tabId: string) => Promise<BulkMutateResult>
   setOpts: (tabId: string, opts: Partial<DataOpts>) => void
-  setDraftCell: (tabId: string, rowKey: string, where: Record<string, any>, column: string, value: any) => void
-  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, any>, deleted: boolean) => void
-  stageInsert: (tabId: string, data: Record<string, any>) => void
+  setDraftCell: (tabId: string, rowKey: string, where: Record<string, unknown>, column: string, value: unknown) => void
+  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, unknown>, deleted: boolean) => void
+  stageInsert: (tabId: string, data: Record<string, unknown>) => void
   removeStagedInsert: (tabId: string, index: number) => void
   clearDrafts: (tabId: string) => void
 }
@@ -50,8 +54,6 @@ const DEFAULT_OPTS: DataOpts = {
   order_dir: 'asc',
   filters: [],
 }
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
   return (
@@ -65,6 +67,8 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       draftUpdates: {},
       draftDeletes: {},
       draftInserts: [],
+      schemaRequestId: 0,
+      dataRequestId: 0,
     }
   )
 }
@@ -85,41 +89,25 @@ function cloneDraftDeletes(deletes: Record<string, DraftDelete>): Record<string,
   return next
 }
 
-function normalizeUUIDString(value: string): string | null {
-  const trimmed = value.trim()
-  if (UUID_RE.test(trimmed)) {
-    return trimmed.toLowerCase()
-  }
-  return null
-}
-
-function normalizeUUIDCell(value: unknown): unknown {
-  if (typeof value === 'string') {
-    return normalizeUUIDString(value) ?? value
-  }
-
-  return value
-}
-
-function normalizeRows(result: DataResult): any[][] {
-  if (!result.rows || result.rows.length === 0 || !result.columns || result.columns.length === 0) {
-    return result.rows ?? []
-  }
-
-  return result.rows.map((row) =>
-    row.map((value, idx) => {
-      const col = result.columns[idx]
-      if (!col) return value
-      if (col.data_type.toLowerCase() !== 'uuid') return value
-      return normalizeUUIDCell(value)
-    })
-  )
-}
-
 export const useDataStore = create<DataStore>((set, get) => ({
   tabs: {},
 
   fetchSchema: async (connId: string, object: string, tabId: string) => {
+    const requestId = (() => {
+      let nextRequestId = 1
+      set((state) => {
+        const tab = getOrInitTab(state.tabs, tabId)
+        nextRequestId = tab.schemaRequestId + 1
+        return {
+          tabs: {
+            ...state.tabs,
+            [tabId]: { ...tab, schemaRequestId: nextRequestId, error: null },
+          },
+        }
+      })
+      return nextRequestId
+    })()
+
     try {
       const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/schema`)
       if (!res.ok) {
@@ -129,6 +117,9 @@ export const useDataStore = create<DataStore>((set, get) => ({
       const data: { columns: ColumnMeta[] } = await res.json()
       set((state) => {
         const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.schemaRequestId !== requestId) {
+          return state
+        }
         return {
           tabs: {
             ...state.tabs,
@@ -139,6 +130,9 @@ export const useDataStore = create<DataStore>((set, get) => ({
     } catch (e) {
       set((state) => {
         const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.schemaRequestId !== requestId) {
+          return state
+        }
         return {
           tabs: {
             ...state.tabs,
@@ -150,20 +144,20 @@ export const useDataStore = create<DataStore>((set, get) => ({
   },
 
   fetchData: async (connId: string, object: string, tabId: string, partialOpts?: Partial<DataOpts>) => {
+    let requestId = 1
+    let opts: DataOpts = { ...DEFAULT_OPTS }
+
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
-      const mergedOpts = { ...tab.opts, ...(partialOpts ?? {}) }
+      requestId = tab.dataRequestId + 1
+      opts = { ...tab.opts, ...(partialOpts ?? {}) }
       return {
         tabs: {
           ...state.tabs,
-          [tabId]: { ...tab, loading: true, error: null, opts: mergedOpts },
+          [tabId]: { ...tab, loading: true, error: null, opts, dataRequestId: requestId },
         },
       }
     })
-
-    const { tabs } = get()
-    const tab = tabs[tabId] ?? { opts: { ...DEFAULT_OPTS } }
-    const opts = tab.opts
 
     const params = new URLSearchParams({
       offset: String(opts.offset),
@@ -173,28 +167,31 @@ export const useDataStore = create<DataStore>((set, get) => ({
       params.set('order_by', opts.order_by)
       params.set('order_dir', opts.order_dir)
     }
-    if (opts.filters && opts.filters.length > 0) {
+    if (opts.filters.length > 0) {
       params.set('filters', JSON.stringify(opts.filters))
     }
 
     try {
-      const res = await fetch(
-        `/api/connections/${connId}/objects/${encodeURIComponent(object)}/data?${params.toString()}`
-      )
+      const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/data?${params.toString()}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
       }
+
       const result: DataResult = await res.json()
-      const normalizedRows = normalizeRows(result)
+      const normalizedRows = normalizeDataRows(result)
+
       set((state) => {
-        const current = getOrInitTab(state.tabs, tabId)
+        const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.dataRequestId !== requestId) {
+          return state
+        }
         return {
           tabs: {
             ...state.tabs,
             [tabId]: {
-              ...current,
-              columns: result.columns ?? current.columns,
+              ...tab,
+              columns: result.columns ?? tab.columns,
               rows: normalizedRows,
               total: result.total ?? 0,
               loading: false,
@@ -205,11 +202,14 @@ export const useDataStore = create<DataStore>((set, get) => ({
       })
     } catch (e) {
       set((state) => {
-        const current = getOrInitTab(state.tabs, tabId)
+        const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.dataRequestId !== requestId) {
+          return state
+        }
         return {
           tabs: {
             ...state.tabs,
-            [tabId]: { ...current, loading: false, error: (e as Error).message },
+            [tabId]: { ...tab, loading: false, error: (e as Error).message },
           },
         }
       })
@@ -228,19 +228,18 @@ export const useDataStore = create<DataStore>((set, get) => ({
         throw new Error(body.error || res.statusText)
       }
 
-      const { tabs: currentTabs } = get()
-      const currentTab = currentTabs[tabId]
+      const currentTab = get().tabs[tabId]
       if (currentTab) {
         const fullObject = op.schema ? `${op.schema}.${op.object}` : op.object
         await get().fetchData(connId, fullObject, tabId, currentTab.opts)
       }
     } catch (e) {
       set((state) => {
-        const current = getOrInitTab(state.tabs, tabId)
+        const tab = getOrInitTab(state.tabs, tabId)
         return {
           tabs: {
             ...state.tabs,
-            [tabId]: { ...current, error: (e as Error).message },
+            [tabId]: { ...tab, error: (e as Error).message },
           },
         }
       })
@@ -261,9 +260,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
       }
 
       const result: BulkMutateResult = await res.json()
-
-      const { tabs: currentTabs } = get()
-      const currentTab = currentTabs[tabId]
+      const currentTab = get().tabs[tabId]
       if (currentTab) {
         await get().fetchData(connId, `${op.schema}.${op.object}`, tabId, currentTab.opts)
       }
@@ -271,11 +268,11 @@ export const useDataStore = create<DataStore>((set, get) => ({
       return result
     } catch (e) {
       set((state) => {
-        const current = getOrInitTab(state.tabs, tabId)
+        const tab = getOrInitTab(state.tabs, tabId)
         return {
           tabs: {
             ...state.tabs,
-            [tabId]: { ...current, error: (e as Error).message },
+            [tabId]: { ...tab, error: (e as Error).message },
           },
         }
       })
@@ -302,7 +299,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })
   },
 
-  setDraftCell: (tabId: string, rowKey: string, where: Record<string, any>, column: string, value: any) => {
+  setDraftCell: (tabId: string, rowKey: string, where: Record<string, unknown>, column: string, value: unknown) => {
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
       const nextUpdates = cloneDraftUpdates(tab.draftUpdates)
@@ -319,7 +316,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })
   },
 
-  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, any>, deleted: boolean) => {
+  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, unknown>, deleted: boolean) => {
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
       const nextDeletes = cloneDraftDeletes(tab.draftDeletes)
@@ -341,7 +338,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })
   },
 
-  stageInsert: (tabId: string, data: Record<string, any>) => {
+  stageInsert: (tabId: string, data: Record<string, unknown>) => {
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
       return {
@@ -361,7 +358,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
           ...state.tabs,
           [tabId]: {
             ...tab,
-            draftInserts: tab.draftInserts.filter((_, idx) => idx !== index),
+            draftInserts: tab.draftInserts.filter((_, itemIndex) => itemIndex !== index),
           },
         },
       }
