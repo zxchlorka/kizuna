@@ -80,15 +80,7 @@ func (p *PostgresConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, e
 	}, nil
 }
 
-func (p *PostgresConnector) GetData(ctx context.Context, object string, opts connector.DataOpts) (*connector.DataResult, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
 func (p *PostgresConnector) Execute(ctx context.Context, command string) (*connector.ExecResult, error) {
-	return nil, fmt.Errorf("not implemented")
-}
-
-func (p *PostgresConnector) Mutate(ctx context.Context, op connector.MutateOp) (*connector.MutateResult, error) {
 	return nil, fmt.Errorf("not implemented")
 }
 

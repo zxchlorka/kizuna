@@ -17,6 +17,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 
 	connHandler := handlers.NewConnectionsHandler(cfg, manager)
 	objHandler := handlers.NewObjectsHandler(cfg, manager)
+	dataHandler := handlers.NewDataHandler(cfg, manager)
 
 	r.Get("/api/health", handlers.Health)
 
@@ -31,6 +32,9 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Get("/info", connHandler.Info)
 			r.Get("/objects", objHandler.ListObjects)
 			r.Get("/objects/{name}/schema", objHandler.GetSchema)
+			r.Get("/objects/{name}/data", dataHandler.GetData)
+			r.Post("/mutate", dataHandler.Mutate)
+			r.Post("/mutate/bulk", dataHandler.MutateBulk)
 		})
 	})
 
