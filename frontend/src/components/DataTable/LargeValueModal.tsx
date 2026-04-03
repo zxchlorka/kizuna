@@ -5,15 +5,15 @@ import { Button } from '@/components/ui/button'
 interface LargeValueModalProps {
   open: boolean
   title: string
-  initialValue: any
+  initialValue: unknown
   isJson: boolean
   nullable: boolean
   onClose: () => void
-  onSave: (value: any) => void
+  onSave: (value: unknown) => void
   onSetNull: () => void
 }
 
-function stringifyValue(value: any): string {
+function stringifyValue(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value, null, 2)
   return String(value)

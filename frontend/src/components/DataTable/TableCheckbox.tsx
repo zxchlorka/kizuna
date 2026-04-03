@@ -35,7 +35,7 @@ export function TableCheckbox({
         disabled={disabled}
         onChange={(e) => onChange?.(e.target.checked)}
         className={cn(
-          'm-0 h-5 w-5 shrink-0 appearance-none rounded-sm border-2 border-muted-foreground/40 bg-transparent transition-colors',
+          'm-0 h-5 w-5 shrink-0 appearance-none rounded-md border-2 border-muted-foreground/40 bg-transparent transition-colors',
           'hover:border-muted-foreground/70',
           'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1',
           'checked:border-primary checked:bg-primary',

@@ -11,32 +11,30 @@ import {
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ColumnMeta, FilterExpr } from '@/types/api'
+import type { ColumnMeta, FilterExpr, TableRow } from '@/types/api'
+import type { ColumnFilterState } from '@/types/table'
 import { ColumnHeader } from '@/components/DataTable/ColumnHeader'
 import { EditableCell } from '@/components/DataTable/EditableCell'
 import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
 
-export interface ColumnFilterState {
-  op: FilterExpr['op']
-  value: string
-}
-
 export interface DataTableProps {
   columns: ColumnMeta[]
-  rows: any[][]
+  rows: TableRow[]
   loading: boolean
   sorting: SortingState
   filterState: Record<string, ColumnFilterState>
-  selectedRows: Set<number>
+  selectedRows: Set<string>
   editMode: boolean
-  draftDeletes: Set<number>
+  draftDeletes: Set<string>
+  canSelectRows: boolean
+  getRowKey: (row: TableRow, rowIndex: number) => string
   onSortChange: (col: string, dir: 'asc' | 'desc' | null) => void
   onFilterChange: (column: string, nextState: ColumnFilterState) => void
-  onToggleRow: (rowIndex: number, checked: boolean) => void
-  onToggleAll: (checked: boolean) => void
-  onCellChange: (rowIndex: number, colName: string, value: any) => void
-  getDraftValue: (rowIndex: number, colName: string, fallback: any) => any
-  isDirtyCell: (rowIndex: number, colName: string) => boolean
+  onToggleRow: (rowKey: string, checked: boolean) => void
+  onToggleAll: (rowKeys: string[], checked: boolean) => void
+  onCellChange: (rowKey: string, colName: string, value: unknown) => void
+  getDraftValue: (rowKey: string, colName: string, fallback: unknown) => unknown
+  isDirtyCell: (rowKey: string, colName: string) => boolean
 }
 
 const ROW_HEIGHT = 40
@@ -46,12 +44,12 @@ type TypeCategory = 'numeric' | 'text' | 'boolean' | 'temporal' | 'uuid' | 'json
 
 function getTypeCategory(dataType: string): TypeCategory {
   const dt = dataType.toLowerCase()
-  if (['int2','int4','int8','integer','bigint','numeric','float4','float8','decimal','smallint','real','double precision'].includes(dt)) return 'numeric'
-  if (['text','varchar','char','bpchar','character varying','name'].includes(dt)) return 'text'
-  if (['bool','boolean'].includes(dt)) return 'boolean'
-  if (['timestamp','timestamptz','date','time','timetz','timestamp without time zone','timestamp with time zone'].includes(dt)) return 'temporal'
+  if (['int2', 'int4', 'int8', 'integer', 'bigint', 'numeric', 'float4', 'float8', 'decimal', 'smallint', 'real', 'double precision'].includes(dt)) return 'numeric'
+  if (['text', 'varchar', 'char', 'bpchar', 'character varying', 'name'].includes(dt)) return 'text'
+  if (['bool', 'boolean'].includes(dt)) return 'boolean'
+  if (['timestamp', 'timestamptz', 'date', 'time', 'timetz', 'timestamp without time zone', 'timestamp with time zone'].includes(dt)) return 'temporal'
   if (dt === 'uuid') return 'uuid'
-  if (['json','jsonb'].includes(dt)) return 'json'
+  if (['json', 'jsonb'].includes(dt)) return 'json'
   return 'other'
 }
 
@@ -130,6 +128,8 @@ export function DataTable({
   selectedRows,
   editMode,
   draftDeletes,
+  canSelectRows,
+  getRowKey,
   onSortChange,
   onFilterChange,
   onToggleRow,
@@ -140,49 +140,62 @@ export function DataTable({
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
-  const columnMetaByName = useMemo(() => new Map(columnMetas.map((c) => [c.name, c])), [columnMetas])
+  const columnMetaByName = useMemo(() => new Map(columnMetas.map((column) => [column.name, column])), [columnMetas])
+  const pageRowKeys = useMemo(() => rows.map((row, index) => getRowKey(row, index)), [getRowKey, rows])
+  const allSelected = canSelectRows && pageRowKeys.length > 0 && pageRowKeys.every((rowKey) => selectedRows.has(rowKey))
+  const someSelected = canSelectRows && pageRowKeys.some((rowKey) => selectedRows.has(rowKey))
 
-  const columnDefs = useMemo<ColumnDef<any[]>[]>(() => {
-    const selectColumn: ColumnDef<any[]> = {
+  const columnDefs = useMemo<ColumnDef<TableRow>[]>(() => {
+    const selectColumn: ColumnDef<TableRow> = {
       id: '__select__',
       header: () => (
-        <div className="flex h-9 w-full items-center justify-center">
+        <div className="flex h-9 w-full items-center justify-center px-1.5">
           <TableCheckbox
-            checked={rows.length > 0 && selectedRows.size === rows.length}
-            indeterminate={selectedRows.size > 0 && selectedRows.size < rows.length}
-            onChange={onToggleAll}
+            checked={allSelected}
+            indeterminate={!allSelected && someSelected}
+            disabled={!canSelectRows}
+            onChange={(checked) => onToggleAll(pageRowKeys, checked)}
           />
         </div>
       ),
-      cell: ({ row }) => (
-        <div className="flex h-full items-center justify-center">
-          <TableCheckbox
-            checked={selectedRows.has(row.index)}
-            onChange={(checked) => onToggleRow(row.index, checked)}
-          />
-        </div>
-      ),
-      size: 52,
-      minSize: 52,
-      maxSize: 52,
+      cell: ({ row }) => {
+        const rowKey = getRowKey(row.original, row.index)
+        return (
+          <div className="flex h-full items-center justify-center px-1.5">
+            <TableCheckbox
+              checked={selectedRows.has(rowKey)}
+              disabled={!canSelectRows}
+              onChange={(checked) => onToggleRow(rowKey, checked)}
+            />
+          </div>
+        )
+      },
+      size: 60,
+      minSize: 60,
+      maxSize: 60,
       enableResizing: false,
       enableSorting: false,
     }
 
-    const dataColumns = columnMetas.map((col, colIndex) => ({
-      id: col.name,
-      accessorFn: (row: any[]) => row[colIndex],
-      header: ({ header, column }: any) => <ColumnHeader header={header} column={column} meta={col} />,
-      cell: ({ row, cell }: any) => (
-        <EditableCell
-          value={getDraftValue(row.index, col.name, cell.getValue())}
-          colMeta={col}
-          editMode={editMode}
-          dirty={isDirtyCell(row.index, col.name)}
-          rowDeleted={draftDeletes.has(row.index)}
-          onChange={(newValue) => onCellChange(row.index, col.name, newValue)}
-        />
+    const dataColumns: ColumnDef<TableRow>[] = columnMetas.map((column) => ({
+      id: column.name,
+      accessorFn: (row) => row[column.name],
+      header: ({ header, column: tanstackColumn }) => (
+        <ColumnHeader header={header} column={tanstackColumn} meta={column} />
       ),
+      cell: ({ row, cell }) => {
+        const rowKey = getRowKey(row.original, row.index)
+        return (
+          <EditableCell
+            value={getDraftValue(rowKey, column.name, cell.getValue())}
+            colMeta={column}
+            editMode={editMode}
+            dirty={isDirtyCell(rowKey, column.name)}
+            rowDeleted={draftDeletes.has(rowKey)}
+            onChange={(newValue) => onCellChange(rowKey, column.name, newValue)}
+          />
+        )
+      },
       size: 170,
       minSize: 90,
       enableResizing: true,
@@ -191,26 +204,31 @@ export function DataTable({
 
     return [selectColumn, ...dataColumns]
   }, [
+    allSelected,
+    canSelectRows,
     columnMetas,
-    rows.length,
-    selectedRows,
+    draftDeletes,
+    editMode,
+    getDraftValue,
+    getRowKey,
+    isDirtyCell,
+    onCellChange,
     onToggleAll,
     onToggleRow,
-    getDraftValue,
-    editMode,
-    isDirtyCell,
-    draftDeletes,
-    onCellChange,
+    pageRowKeys,
+    selectedRows,
+    someSelected,
   ])
 
   const table = useReactTable({
     data: rows,
     columns: columnDefs,
     getCoreRowModel: getCoreRowModel(),
+    getRowId: (row, index) => getRowKey(row, index),
     state: { sorting, columnSizing },
     onSortingChange: (updater) => {
       const next = typeof updater === 'function' ? updater(sorting) : updater
-      const nonSelect = next.find((s) => s.id !== '__select__')
+      const nonSelect = next.find((entry) => entry.id !== '__select__')
       if (!nonSelect) {
         if (sorting.length > 0) {
           onSortChange(sorting[0].id, null)
@@ -228,7 +246,6 @@ export function DataTable({
 
   const tableRows = table.getRowModel().rows
   const useVirtualization = tableRows.length > VIRTUALIZE_THRESHOLD
-
   const virtualizer = useVirtualizer({
     count: useVirtualization ? tableRows.length : 0,
     getScrollElement: () => parentRef.current,
@@ -278,15 +295,15 @@ export function DataTable({
                   {header.column.id === '__select__'
                     ? null
                     : (() => {
-                        const colId = header.column.id
-                        const meta = columnMetaByName.get(colId)
+                        const columnId = header.column.id
+                        const meta = columnMetaByName.get(columnId)
                         if (!meta) return null
 
                         const category = getTypeCategory(meta.data_type)
                         const ops = FILTER_OPS_BY_CATEGORY[category]
                         const defaultOp = DEFAULT_OP_BY_CATEGORY[category]
-                        const saved = filterState[colId]
-                        const opValid = saved && ops.some((o) => o.value === saved.op)
+                        const saved = filterState[columnId]
+                        const opValid = saved && ops.some((op) => op.value === saved.op)
                         const state = opValid ? saved : { op: defaultOp, value: '' }
                         const isNullOp = state.op === 'is_null' || state.op === 'is_not_null'
 
@@ -294,7 +311,7 @@ export function DataTable({
                           <div className="flex items-center gap-0.5">
                             <select
                               value={state.op}
-                              onChange={(e) => onFilterChange(colId, { ...state, op: e.target.value as FilterExpr['op'] })}
+                              onChange={(e) => onFilterChange(columnId, { ...state, op: e.target.value as FilterExpr['op'] })}
                               className="h-6 w-[52px] shrink-0 rounded border border-border bg-background px-1 text-[11px] text-foreground outline-none ring-ring/20 focus:ring-2"
                               title="Filter operator"
                             >
@@ -309,7 +326,7 @@ export function DataTable({
                                 type="text"
                                 placeholder="filter..."
                                 value={state.value}
-                                onChange={(e) => onFilterChange(colId, { ...state, value: e.target.value })}
+                                onChange={(e) => onFilterChange(columnId, { ...state, value: e.target.value })}
                                 className="h-6 w-full min-w-0 rounded border border-border bg-background px-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none ring-ring/20 focus:ring-2"
                               />
                             )}
@@ -325,7 +342,8 @@ export function DataTable({
             {useVirtualization
               ? virtualItems.map((virtualRow) => {
                   const row = tableRows[virtualRow.index]
-                  const rowDeleted = draftDeletes.has(row.index)
+                  const rowKey = getRowKey(row.original, row.index)
+                  const rowDeleted = draftDeletes.has(rowKey)
                   return (
                     <tr
                       key={row.id}
@@ -351,7 +369,8 @@ export function DataTable({
                   )
                 })
               : tableRows.map((row) => {
-                  const rowDeleted = draftDeletes.has(row.index)
+                  const rowKey = getRowKey(row.original, row.index)
+                  const rowDeleted = draftDeletes.has(rowKey)
                   return (
                     <tr
                       key={row.id}

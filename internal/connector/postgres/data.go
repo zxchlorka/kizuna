@@ -10,6 +10,18 @@ import (
 	"github.com/qsnake66/infraview/internal/connector"
 )
 
+func buildResultRow(columns []connector.ColumnMeta, values []any) map[string]any {
+	row := make(map[string]any, len(columns))
+	for idx, column := range columns {
+		if idx < len(values) {
+			row[column.Name] = values[idx]
+			continue
+		}
+		row[column.Name] = nil
+	}
+	return row
+}
+
 func (p *PostgresConnector) GetData(ctx context.Context, object string, opts connector.DataOpts) (*connector.DataResult, error) {
 	schema, table, err := parseSchemaTable(object)
 	if err != nil {
@@ -148,14 +160,14 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 	}
 	defer rows.Close()
 
-	var resultRows [][]any
+	var resultRows []map[string]any
 	for rows.Next() {
 		vals, err := rows.Values()
 		if err != nil {
 			wg.Wait()
 			return nil, fmt.Errorf("failed to scan row: %w", err)
 		}
-		resultRows = append(resultRows, vals)
+		resultRows = append(resultRows, buildResultRow(schemaResult.Columns, vals))
 	}
 	if err := rows.Err(); err != nil {
 		wg.Wait()

@@ -1,11 +1,11 @@
 import type { Column, Header } from '@tanstack/react-table'
 import { ChevronDown, ChevronUp, ChevronsUpDown, Key } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import type { ColumnMeta } from '@/types/api'
+import type { ColumnMeta, TableRow } from '@/types/api'
 
 interface ColumnHeaderProps {
-  header: Header<any[], unknown>
-  column: Column<any[], unknown>
+  header: Header<TableRow, unknown>
+  column: Column<TableRow, unknown>
   meta: ColumnMeta
 }
 

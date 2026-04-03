@@ -61,10 +61,10 @@ type FilterExpr struct {
 }
 
 type DataResult struct {
-	Columns []ColumnMeta `json:"columns"`
-	Rows    [][]any      `json:"rows"`
-	Total   int64        `json:"total"`
-	HasMore bool         `json:"has_more"`
+	Columns []ColumnMeta     `json:"columns"`
+	Rows    []map[string]any `json:"rows"`
+	Total   int64            `json:"total"`
+	HasMore bool             `json:"has_more"`
 }
 
 type MutateOp struct {

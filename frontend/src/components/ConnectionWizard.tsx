@@ -59,7 +59,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
       setSavedId(null)
       setForm(blankForm)
     }
-  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [editConnection, open])
 
   const updateField = <K extends keyof ConnectionInput>(key: K, value: ConnectionInput[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }))

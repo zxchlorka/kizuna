@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { ChevronDown, ChevronRight, Expand, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta } from '@/types/api'
@@ -6,12 +6,12 @@ import { LargeValueModal } from '@/components/DataTable/LargeValueModal'
 import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
 
 interface EditableCellProps {
-  value: any
+  value: unknown
   colMeta: ColumnMeta
   editMode: boolean
   dirty: boolean
   rowDeleted: boolean
-  onChange: (newValue: any) => void
+  onChange: (newValue: unknown) => void
 }
 
 const TIMESTAMP_TYPES = new Set(['timestamp', 'timestamptz', 'date', 'time', 'timetz'])
@@ -22,8 +22,11 @@ const NUMERIC_TYPES = new Set(['numeric', 'float4', 'float8', 'decimal'])
 const UUID_TYPES = new Set(['uuid'])
 const TEXT_TYPES = new Set(['text', 'varchar', 'bpchar', 'char'])
 
-function formatTimestamp(value: any): string {
+function formatTimestamp(value: unknown): string {
   try {
+    if (!(typeof value === 'string' || typeof value === 'number' || value instanceof Date)) {
+      return String(value)
+    }
     const d = new Date(value)
     if (Number.isNaN(d.getTime())) return String(value)
     const pad = (n: number) => String(n).padStart(2, '0')
@@ -36,13 +39,13 @@ function formatTimestamp(value: any): string {
   }
 }
 
-function toInputValue(value: any): string {
+function toInputValue(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value, null, 2)
   return String(value)
 }
 
-function parseValue(raw: string, dataType: string, nullable: boolean): { value?: any; error?: string } {
+function parseValue(raw: string, dataType: string, nullable: boolean): { value?: unknown; error?: string } {
   const dt = dataType.toLowerCase()
   const trimmed = raw.trim()
 
@@ -168,7 +171,7 @@ export function EditableCell({
     setError(null)
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     if (e.key === 'Escape') {
       e.preventDefault()
       cancelEdit()
@@ -205,7 +208,7 @@ export function EditableCell({
       <div className="relative h-full w-full p-1">
         {multiline ? (
           <textarea
-            ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+            ref={inputRef as RefObject<HTMLTextAreaElement>}
             value={inputValue}
             onChange={(e) => {
               setInputValue(e.target.value)
@@ -218,7 +221,7 @@ export function EditableCell({
           />
         ) : (
           <input
-            ref={inputRef as React.RefObject<HTMLInputElement>}
+            ref={inputRef as RefObject<HTMLInputElement>}
             type={isInteger || isNumeric ? 'text' : 'text'}
             value={inputValue}
             onChange={(e) => {
