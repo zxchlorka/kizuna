@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, Expand, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta } from '@/types/api'
 import { LargeValueModal } from '@/components/DataTable/LargeValueModal'
+import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
 
 interface EditableCellProps {
   value: any
@@ -50,7 +51,7 @@ function parseValue(raw: string, dataType: string, nullable: boolean): { value?:
       return { value: '' }
     }
     if (nullable) {
-      return { value: null }
+      return { error: 'Use Set NULL to clear this value' }
     }
     return { error: 'Value is required for this column' }
   }
@@ -103,6 +104,7 @@ export function EditableCell({
   const [jsonExpanded, setJsonExpanded] = useState(false)
   const [largeEditorOpen, setLargeEditorOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
+  const skipBlurCommitRef = useRef(false)
 
   const dataType = colMeta.data_type.toLowerCase()
   const isBool = BOOL_TYPES.has(dataType)
@@ -110,10 +112,12 @@ export function EditableCell({
   const isJson = JSON_TYPES.has(dataType)
   const isInteger = INTEGER_TYPES.has(dataType)
   const isNumeric = NUMERIC_TYPES.has(dataType)
-  const isFk = colMeta.is_fk && !!colMeta.fk_table
 
   const textValue = useMemo(() => toInputValue(value), [value])
   const largeValue = typeof textValue === 'string' && textValue.length > 120
+  const fkHint = colMeta.is_fk && colMeta.fk_table
+    ? `FK -> ${colMeta.fk_table}${colMeta.fk_column ? `.${colMeta.fk_column}` : ''}`
+    : null
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -175,13 +179,21 @@ export function EditableCell({
     }
   }
 
+  const handleEditorBlur = () => {
+    if (skipBlurCommitRef.current) {
+      skipBlurCommitRef.current = false
+      return
+    }
+    commitEdit()
+  }
+
   const onBoolChange = (checked: boolean) => {
     if (!editMode || rowDeleted) return
     onChange(checked)
   }
 
   const cellClasses = cn(
-    'relative flex h-full items-center px-2 py-1 text-xs',
+    'relative flex h-full items-center overflow-hidden px-2 py-1 text-xs',
     rowDeleted && 'opacity-50 line-through',
     dirty && 'bg-amber-500/10',
     error && 'ring-1 ring-destructive'
@@ -200,6 +212,7 @@ export function EditableCell({
               setError(null)
             }}
             onKeyDown={handleKeyDown}
+            onBlur={handleEditorBlur}
             rows={3}
             className="h-full min-h-[34px] w-full resize-none rounded border border-ring/40 bg-background px-2 py-1 text-xs font-mono outline-none ring-ring/20 focus:ring-2"
           />
@@ -213,6 +226,7 @@ export function EditableCell({
               setError(null)
             }}
             onKeyDown={handleKeyDown}
+            onBlur={handleEditorBlur}
             className="h-full w-full rounded border border-ring/40 bg-background px-2 py-1 text-xs outline-none ring-ring/20 focus:ring-2"
           />
         )}
@@ -222,6 +236,9 @@ export function EditableCell({
             <button
               type="button"
               className="rounded border border-border bg-background px-1 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+              onMouseDown={() => {
+                skipBlurCommitRef.current = true
+              }}
               onClick={setNull}
             >
               NULL
@@ -230,6 +247,9 @@ export function EditableCell({
           <button
             type="button"
             className="rounded border border-border bg-background px-1 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            onMouseDown={() => {
+              skipBlurCommitRef.current = true
+            }}
             onClick={commitEdit}
           >
             Save
@@ -237,6 +257,9 @@ export function EditableCell({
           <button
             type="button"
             className="rounded border border-border bg-background px-1 py-0.5 text-[10px] text-muted-foreground hover:text-foreground"
+            onMouseDown={() => {
+              skipBlurCommitRef.current = true
+            }}
             onClick={cancelEdit}
           >
             Cancel
@@ -249,7 +272,7 @@ export function EditableCell({
 
   if (value === null || value === undefined) {
     return (
-      <div className={cellClasses} onDoubleClick={startEdit}>
+      <div className={cellClasses} onDoubleClick={startEdit} title={fkHint ?? undefined}>
         <span className="font-mono text-xs text-muted-foreground">NULL</span>
         {editMode && !rowDeleted && (
           <button
@@ -266,13 +289,11 @@ export function EditableCell({
 
   if (isBool) {
     return (
-      <div className={cellClasses}>
-        <input
-          type="checkbox"
+      <div className={cn(cellClasses, 'justify-center px-0')}>
+        <TableCheckbox
           checked={Boolean(value)}
           disabled={!editMode || rowDeleted}
-          onChange={(e) => onBoolChange(e.target.checked)}
-          className="h-3.5 w-3.5 cursor-pointer rounded border-border accent-primary disabled:cursor-not-allowed"
+          onChange={onBoolChange}
         />
       </div>
     )
@@ -282,6 +303,9 @@ export function EditableCell({
     if (rowDeleted) return
     setLargeEditorOpen(true)
   }
+
+  const valueTitle = typeof value === 'string' ? value : isJson ? JSON.stringify(value) : String(value)
+  const combinedTitle = fkHint ? `${valueTitle}\n${fkHint}` : valueTitle
 
   return (
     <>
@@ -300,7 +324,7 @@ export function EditableCell({
         ) : null}
 
         <span className={cn('min-w-0 truncate', largeValue && 'max-w-[420px]', isTimestamp && 'font-mono')}
-          title={typeof value === 'string' ? value : undefined}
+          title={combinedTitle}
         >
           {isTimestamp
             ? formatTimestamp(value)
@@ -310,12 +334,6 @@ export function EditableCell({
                 : '{...}'
               : String(value)}
         </span>
-
-        {isFk && (
-          <span className="ml-1 inline-flex shrink-0 items-center rounded border border-border bg-muted/40 px-1 py-0.5 text-[9px] text-muted-foreground">
-            {colMeta.fk_table}
-          </span>
-        )}
 
         {(isJson || largeValue) && (
           <button

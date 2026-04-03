@@ -77,53 +77,109 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 
 	rows, err := p.pool.Query(ctx,
 		`SELECT
-			c.column_name,
-			c.data_type,
-			c.is_nullable,
-			c.column_default,
-			COALESCE(tc.constraint_type, '') as constraint_type,
-			COALESCE(ccu.table_name, '') as fk_table,
-			COALESCE(ccu.column_name, '') as fk_column
-		FROM information_schema.columns c
-		LEFT JOIN information_schema.key_column_usage kcu
-			ON kcu.table_name = c.table_name
-			AND kcu.table_schema = c.table_schema
-			AND kcu.column_name = c.column_name
-		LEFT JOIN information_schema.table_constraints tc
-			ON tc.constraint_name = kcu.constraint_name
-			AND tc.table_schema = c.table_schema
-		LEFT JOIN information_schema.referential_constraints rc
-			ON rc.constraint_name = kcu.constraint_name
-		LEFT JOIN information_schema.constraint_column_usage ccu
-			ON ccu.constraint_name = rc.unique_constraint_name
-		WHERE c.table_name = $1 AND c.table_schema = $2
-		ORDER BY c.ordinal_position`, table, schema)
+			column_name,
+			data_type,
+			is_nullable,
+			column_default
+		FROM information_schema.columns
+		WHERE table_name = $1 AND table_schema = $2
+		ORDER BY ordinal_position`, table, schema)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get schema: %w", err)
 	}
 	defer rows.Close()
 
 	var columns []connector.ColumnMeta
+	indexByName := make(map[string]int)
 	for rows.Next() {
 		var col connector.ColumnMeta
-		var nullable, constraintType, fkTable, fkColumn string
+		var nullable string
 		var colDefault *string
 
-		if err := rows.Scan(&col.Name, &col.DataType, &nullable, &colDefault,
-			&constraintType, &fkTable, &fkColumn); err != nil {
+		if err := rows.Scan(&col.Name, &col.DataType, &nullable, &colDefault); err != nil {
 			return nil, err
 		}
 
 		col.Nullable = nullable == "YES"
 		col.Default = colDefault
-		col.IsPK = constraintType == "PRIMARY KEY"
-		col.IsFK = constraintType == "FOREIGN KEY"
-		col.FKTable = fkTable
-		col.FKColumn = fkColumn
 
+		indexByName[col.Name] = len(columns)
 		columns = append(columns, col)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(columns) == 0 {
+		return &connector.Schema{Columns: columns}, nil
+	}
+
+	pkRows, err := p.pool.Query(ctx,
+		`SELECT kcu.column_name
+		 FROM information_schema.table_constraints tc
+		 JOIN information_schema.key_column_usage kcu
+		   ON kcu.constraint_name = tc.constraint_name
+		  AND kcu.table_schema = tc.table_schema
+		 WHERE tc.table_schema = $1
+		   AND tc.table_name = $2
+		   AND tc.constraint_type = 'PRIMARY KEY'
+		 ORDER BY kcu.ordinal_position`, schema, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get primary keys: %w", err)
+	}
+	defer pkRows.Close()
+
+	for pkRows.Next() {
+		var colName string
+		if err := pkRows.Scan(&colName); err != nil {
+			return nil, err
+		}
+		if idx, ok := indexByName[colName]; ok {
+			columns[idx].IsPK = true
+		}
+	}
+	if err := pkRows.Err(); err != nil {
+		return nil, err
+	}
+
+	fkRows, err := p.pool.Query(ctx,
+		`SELECT
+			kcu.column_name,
+			ccu.table_name,
+			ccu.column_name
+		 FROM information_schema.table_constraints tc
+		 JOIN information_schema.key_column_usage kcu
+		   ON kcu.constraint_name = tc.constraint_name
+		  AND kcu.table_schema = tc.table_schema
+		 JOIN information_schema.referential_constraints rc
+		   ON rc.constraint_name = tc.constraint_name
+		  AND rc.constraint_schema = tc.table_schema
+		 JOIN information_schema.constraint_column_usage ccu
+		   ON ccu.constraint_name = rc.unique_constraint_name
+		  AND ccu.constraint_schema = rc.unique_constraint_schema
+		 WHERE tc.table_schema = $1
+		   AND tc.table_name = $2
+		   AND tc.constraint_type = 'FOREIGN KEY'`, schema, table)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get foreign keys: %w", err)
+	}
+	defer fkRows.Close()
+
+	for fkRows.Next() {
+		var (
+			colName  string
+			fkTable  string
+			fkColumn string
+		)
+		if err := fkRows.Scan(&colName, &fkTable, &fkColumn); err != nil {
+			return nil, err
+		}
+		if idx, ok := indexByName[colName]; ok {
+			columns[idx].IsFK = true
+			columns[idx].FKTable = fkTable
+			columns[idx].FKColumn = fkColumn
+		}
+	}
+	if err := fkRows.Err(); err != nil {
 		return nil, err
 	}
 

@@ -24,8 +24,19 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 
 	// Build column name set for validation
 	colSet := make(map[string]bool, len(schemaResult.Columns))
+	selectCols := make([]string, 0, len(schemaResult.Columns))
 	for _, col := range schemaResult.Columns {
 		colSet[col.Name] = true
+		quotedCol := pgx.Identifier{col.Name}.Sanitize()
+		// Keep API contract stable: UUID is always serialized as canonical text.
+		if strings.EqualFold(col.DataType, "uuid") {
+			selectCols = append(selectCols, fmt.Sprintf("%s::text AS %s", quotedCol, quotedCol))
+			continue
+		}
+		selectCols = append(selectCols, quotedCol)
+	}
+	if len(selectCols) == 0 {
+		return nil, fmt.Errorf("%w: table %s has no columns", connector.ErrBadRequest, object)
 	}
 
 	// Normalize limit
@@ -65,8 +76,16 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 			whereParts = append(whereParts, fmt.Sprintf("%s > $%d", quotedCol, paramIdx))
 			args = append(args, f.Value)
 			paramIdx++
+		case "gte":
+			whereParts = append(whereParts, fmt.Sprintf("%s >= $%d", quotedCol, paramIdx))
+			args = append(args, f.Value)
+			paramIdx++
 		case "lt":
 			whereParts = append(whereParts, fmt.Sprintf("%s < $%d", quotedCol, paramIdx))
+			args = append(args, f.Value)
+			paramIdx++
+		case "lte":
+			whereParts = append(whereParts, fmt.Sprintf("%s <= $%d", quotedCol, paramIdx))
 			args = append(args, f.Value)
 			paramIdx++
 		case "like":
@@ -107,7 +126,8 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 	}
 
 	countSQL := fmt.Sprintf("SELECT count(*) FROM %s%s", tableRef, whereClause)
-	dataSQL := fmt.Sprintf("SELECT * FROM %s%s%s LIMIT %d OFFSET %d",
+	dataSQL := fmt.Sprintf("SELECT %s FROM %s%s%s LIMIT %d OFFSET %d",
+		strings.Join(selectCols, ", "),
 		tableRef, whereClause, orderClause, limit, offset)
 
 	// Run count query in parallel

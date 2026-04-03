@@ -8,6 +8,15 @@ import type {
   MutateOp,
 } from '@/types/api'
 
+interface DraftUpdate {
+  where: Record<string, any>
+  data: Record<string, any>
+}
+
+interface DraftDelete {
+  where: Record<string, any>
+}
+
 interface TabData {
   columns: ColumnMeta[]
   rows: any[][]
@@ -15,8 +24,8 @@ interface TabData {
   loading: boolean
   error: string | null
   opts: DataOpts
-  draftUpdates: Record<number, Record<string, any>>
-  draftDeletes: number[]
+  draftUpdates: Record<string, DraftUpdate>
+  draftDeletes: Record<string, DraftDelete>
   draftInserts: Record<string, any>[]
 }
 
@@ -27,8 +36,8 @@ interface DataStore {
   mutate: (connId: string, op: MutateOp, tabId: string) => Promise<void>
   mutateBulk: (connId: string, op: BulkMutateOp, tabId: string) => Promise<BulkMutateResult>
   setOpts: (tabId: string, opts: Partial<DataOpts>) => void
-  setDraftCell: (tabId: string, rowIndex: number, column: string, value: any) => void
-  toggleDraftDelete: (tabId: string, rowIndex: number, deleted: boolean) => void
+  setDraftCell: (tabId: string, rowKey: string, where: Record<string, any>, column: string, value: any) => void
+  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, any>, deleted: boolean) => void
   stageInsert: (tabId: string, data: Record<string, any>) => void
   removeStagedInsert: (tabId: string, index: number) => void
   clearDrafts: (tabId: string) => void
@@ -42,6 +51,8 @@ const DEFAULT_OPTS: DataOpts = {
   filters: [],
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
   return (
     tabs[tabId] ?? {
@@ -52,18 +63,57 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       error: null,
       opts: { ...DEFAULT_OPTS },
       draftUpdates: {},
-      draftDeletes: [],
+      draftDeletes: {},
       draftInserts: [],
     }
   )
 }
 
-function cloneDraftUpdates(updates: Record<number, Record<string, any>>): Record<number, Record<string, any>> {
-  const next: Record<number, Record<string, any>> = {}
-  Object.entries(updates).forEach(([rowIdx, rowChanges]) => {
-    next[Number(rowIdx)] = { ...rowChanges }
+function cloneDraftUpdates(updates: Record<string, DraftUpdate>): Record<string, DraftUpdate> {
+  const next: Record<string, DraftUpdate> = {}
+  Object.entries(updates).forEach(([rowKey, draft]) => {
+    next[rowKey] = { where: { ...draft.where }, data: { ...draft.data } }
   })
   return next
+}
+
+function cloneDraftDeletes(deletes: Record<string, DraftDelete>): Record<string, DraftDelete> {
+  const next: Record<string, DraftDelete> = {}
+  Object.entries(deletes).forEach(([rowKey, draft]) => {
+    next[rowKey] = { where: { ...draft.where } }
+  })
+  return next
+}
+
+function normalizeUUIDString(value: string): string | null {
+  const trimmed = value.trim()
+  if (UUID_RE.test(trimmed)) {
+    return trimmed.toLowerCase()
+  }
+  return null
+}
+
+function normalizeUUIDCell(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return normalizeUUIDString(value) ?? value
+  }
+
+  return value
+}
+
+function normalizeRows(result: DataResult): any[][] {
+  if (!result.rows || result.rows.length === 0 || !result.columns || result.columns.length === 0) {
+    return result.rows ?? []
+  }
+
+  return result.rows.map((row) =>
+    row.map((value, idx) => {
+      const col = result.columns[idx]
+      if (!col) return value
+      if (col.data_type.toLowerCase() !== 'uuid') return value
+      return normalizeUUIDCell(value)
+    })
+  )
 }
 
 export const useDataStore = create<DataStore>((set, get) => ({
@@ -136,6 +186,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
         throw new Error(body.error || res.statusText)
       }
       const result: DataResult = await res.json()
+      const normalizedRows = normalizeRows(result)
       set((state) => {
         const current = getOrInitTab(state.tabs, tabId)
         return {
@@ -144,7 +195,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
             [tabId]: {
               ...current,
               columns: result.columns ?? current.columns,
-              rows: result.rows ?? [],
+              rows: normalizedRows,
               total: result.total ?? 0,
               loading: false,
               error: null,
@@ -251,13 +302,14 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })
   },
 
-  setDraftCell: (tabId: string, rowIndex: number, column: string, value: any) => {
+  setDraftCell: (tabId: string, rowKey: string, where: Record<string, any>, column: string, value: any) => {
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
       const nextUpdates = cloneDraftUpdates(tab.draftUpdates)
-      const rowDraft = { ...(nextUpdates[rowIndex] ?? {}) }
-      rowDraft[column] = value
-      nextUpdates[rowIndex] = rowDraft
+      const rowDraft = nextUpdates[rowKey] ?? { where: { ...where }, data: {} }
+      rowDraft.where = { ...where }
+      rowDraft.data = { ...rowDraft.data, [column]: value }
+      nextUpdates[rowKey] = rowDraft
       return {
         tabs: {
           ...state.tabs,
@@ -267,19 +319,23 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })
   },
 
-  toggleDraftDelete: (tabId: string, rowIndex: number, deleted: boolean) => {
+  toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, any>, deleted: boolean) => {
     set((state) => {
       const tab = getOrInitTab(state.tabs, tabId)
-      const current = new Set(tab.draftDeletes)
+      const nextDeletes = cloneDraftDeletes(tab.draftDeletes)
+      const nextUpdates = cloneDraftUpdates(tab.draftUpdates)
+
       if (deleted) {
-        current.add(rowIndex)
+        nextDeletes[rowKey] = { where: { ...where } }
+        delete nextUpdates[rowKey]
       } else {
-        current.delete(rowIndex)
+        delete nextDeletes[rowKey]
       }
+
       return {
         tabs: {
           ...state.tabs,
-          [tabId]: { ...tab, draftDeletes: Array.from(current) },
+          [tabId]: { ...tab, draftDeletes: nextDeletes, draftUpdates: nextUpdates },
         },
       }
     })
@@ -321,7 +377,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
           [tabId]: {
             ...tab,
             draftUpdates: {},
-            draftDeletes: [],
+            draftDeletes: {},
             draftInserts: [],
           },
         },

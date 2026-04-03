@@ -7,6 +7,7 @@ interface ToolbarProps {
   onRefresh: () => void
   onAddRow: () => void
   onDeleteSelected: () => void
+  canDeleteRows: boolean
   selectedCount: number
   pageSize: number
   onPageSizeChange: (n: number) => void
@@ -22,6 +23,7 @@ export function Toolbar({
   onRefresh,
   onAddRow,
   onDeleteSelected,
+  canDeleteRows,
   selectedCount,
   pageSize,
   onPageSizeChange,
@@ -62,9 +64,21 @@ export function Toolbar({
         </Button>
 
         {selectedCount > 0 && (
-          <Button variant="destructive" size="sm" onClick={onDeleteSelected} className="h-8 gap-1.5 px-2.5">
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={onDeleteSelected}
+            disabled={!canDeleteRows}
+            className="h-8 gap-1.5 px-2.5"
+          >
             <Trash2 className="h-3.5 w-3.5" />
-            <span>{editMode ? `Mark delete (${selectedCount})` : `Delete ${selectedCount}`}</span>
+            <span>
+              {canDeleteRows
+                ? editMode
+                  ? `Mark delete (${selectedCount})`
+                  : `Delete ${selectedCount}`
+                : 'Delete unavailable (no PK)'}
+            </span>
           </Button>
         )}
 

@@ -63,7 +63,7 @@ export interface DataOpts {
 
 export interface FilterExpr {
   column: string
-  op: 'eq' | 'neq' | 'gt' | 'lt' | 'like' | 'contains' | 'is_null' | 'is_not_null'
+  op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte' | 'like' | 'contains' | 'is_null' | 'is_not_null'
   value: string
 }
 

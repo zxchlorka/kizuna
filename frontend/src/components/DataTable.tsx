@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import {
   flexRender,
   getCoreRowModel,
@@ -14,18 +14,24 @@ import { cn } from '@/lib/utils'
 import type { ColumnMeta, FilterExpr } from '@/types/api'
 import { ColumnHeader } from '@/components/DataTable/ColumnHeader'
 import { EditableCell } from '@/components/DataTable/EditableCell'
+import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
+
+export interface ColumnFilterState {
+  op: FilterExpr['op']
+  value: string
+}
 
 export interface DataTableProps {
   columns: ColumnMeta[]
   rows: any[][]
   loading: boolean
   sorting: SortingState
-  filters: FilterExpr[]
+  filterState: Record<string, ColumnFilterState>
   selectedRows: Set<number>
   editMode: boolean
   draftDeletes: Set<number>
   onSortChange: (col: string, dir: 'asc' | 'desc' | null) => void
-  onFilterChange: (filters: FilterExpr[]) => void
+  onFilterChange: (column: string, nextState: ColumnFilterState) => void
   onToggleRow: (rowIndex: number, checked: boolean) => void
   onToggleAll: (checked: boolean) => void
   onCellChange: (rowIndex: number, colName: string, value: any) => void
@@ -35,14 +41,84 @@ export interface DataTableProps {
 
 const ROW_HEIGHT = 40
 const VIRTUALIZE_THRESHOLD = 100
-const FILTER_DEBOUNCE_MS = 300
 
-function filtersToMap(filters: FilterExpr[]): Record<string, string> {
-  const out: Record<string, string> = {}
-  filters.forEach((f) => {
-    out[f.column] = f.value
-  })
-  return out
+type TypeCategory = 'numeric' | 'text' | 'boolean' | 'temporal' | 'uuid' | 'json' | 'other'
+
+function getTypeCategory(dataType: string): TypeCategory {
+  const dt = dataType.toLowerCase()
+  if (['int2','int4','int8','integer','bigint','numeric','float4','float8','decimal','smallint','real','double precision'].includes(dt)) return 'numeric'
+  if (['text','varchar','char','bpchar','character varying','name'].includes(dt)) return 'text'
+  if (['bool','boolean'].includes(dt)) return 'boolean'
+  if (['timestamp','timestamptz','date','time','timetz','timestamp without time zone','timestamp with time zone'].includes(dt)) return 'temporal'
+  if (dt === 'uuid') return 'uuid'
+  if (['json','jsonb'].includes(dt)) return 'json'
+  return 'other'
+}
+
+type FilterOp = { value: FilterExpr['op']; label: string }
+
+const NULL_OPS: FilterOp[] = [
+  { value: 'is_null', label: 'null' },
+  { value: 'is_not_null', label: '!null' },
+]
+
+const FILTER_OPS_BY_CATEGORY: Record<TypeCategory, FilterOp[]> = {
+  numeric: [
+    { value: 'eq', label: '=' },
+    { value: 'neq', label: '!=' },
+    { value: 'gt', label: '>' },
+    { value: 'gte', label: '>=' },
+    { value: 'lt', label: '<' },
+    { value: 'lte', label: '<=' },
+    ...NULL_OPS,
+  ],
+  text: [
+    { value: 'contains', label: '~' },
+    { value: 'eq', label: '=' },
+    { value: 'neq', label: '!=' },
+    { value: 'like', label: 'LIKE' },
+    ...NULL_OPS,
+  ],
+  boolean: [
+    { value: 'eq', label: '=' },
+    ...NULL_OPS,
+  ],
+  temporal: [
+    { value: 'eq', label: '=' },
+    { value: 'gt', label: '>' },
+    { value: 'gte', label: '>=' },
+    { value: 'lt', label: '<' },
+    { value: 'lte', label: '<=' },
+    ...NULL_OPS,
+  ],
+  uuid: [
+    { value: 'eq', label: '=' },
+    { value: 'contains', label: '~' },
+    ...NULL_OPS,
+  ],
+  json: [
+    { value: 'contains', label: '~' },
+    ...NULL_OPS,
+  ],
+  other: [
+    { value: 'contains', label: '~' },
+    { value: 'eq', label: '=' },
+    { value: 'neq', label: '!=' },
+    { value: 'gt', label: '>' },
+    { value: 'lt', label: '<' },
+    { value: 'like', label: 'LIKE' },
+    ...NULL_OPS,
+  ],
+}
+
+const DEFAULT_OP_BY_CATEGORY: Record<TypeCategory, FilterExpr['op']> = {
+  numeric: 'eq',
+  text: 'contains',
+  boolean: 'eq',
+  temporal: 'eq',
+  uuid: 'eq',
+  json: 'contains',
+  other: 'contains',
 }
 
 export function DataTable({
@@ -50,7 +126,7 @@ export function DataTable({
   rows,
   loading,
   sorting,
-  filters,
+  filterState,
   selectedRows,
   editMode,
   draftDeletes,
@@ -64,49 +140,31 @@ export function DataTable({
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
-  const [filterValues, setFilterValues] = useState<Record<string, string>>(() => filtersToMap(filters))
-
-  useEffect(() => {
-    setFilterValues(filtersToMap(filters))
-  }, [filters])
-
-  useEffect(() => {
-    const timeout = setTimeout(() => {
-      const nextFilters: FilterExpr[] = Object.entries(filterValues)
-        .filter(([, value]) => value.trim() !== '')
-        .map(([column, value]) => ({ column, value: value.trim(), op: 'contains' }))
-      onFilterChange(nextFilters)
-    }, FILTER_DEBOUNCE_MS)
-
-    return () => clearTimeout(timeout)
-  }, [filterValues, onFilterChange])
+  const columnMetaByName = useMemo(() => new Map(columnMetas.map((c) => [c.name, c])), [columnMetas])
 
   const columnDefs = useMemo<ColumnDef<any[]>[]>(() => {
     const selectColumn: ColumnDef<any[]> = {
       id: '__select__',
       header: () => (
-        <div className="flex h-full items-center justify-center">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 cursor-pointer rounded border-border accent-primary"
+        <div className="flex h-9 w-full items-center justify-center">
+          <TableCheckbox
             checked={rows.length > 0 && selectedRows.size === rows.length}
-            onChange={(e) => onToggleAll(e.target.checked)}
+            indeterminate={selectedRows.size > 0 && selectedRows.size < rows.length}
+            onChange={onToggleAll}
           />
         </div>
       ),
       cell: ({ row }) => (
         <div className="flex h-full items-center justify-center">
-          <input
-            type="checkbox"
-            className="h-3.5 w-3.5 cursor-pointer rounded border-border accent-primary"
+          <TableCheckbox
             checked={selectedRows.has(row.index)}
-            onChange={(e) => onToggleRow(row.index, e.target.checked)}
+            onChange={(checked) => onToggleRow(row.index, checked)}
           />
         </div>
       ),
-      size: 40,
-      minSize: 40,
-      maxSize: 40,
+      size: 52,
+      minSize: 52,
+      maxSize: 52,
       enableResizing: false,
       enableSorting: false,
     }
@@ -199,7 +257,7 @@ export function DataTable({
                   <th
                     key={header.id}
                     className={cn(
-                      'relative h-9 overflow-hidden border-r border-border px-0 text-left align-middle font-medium text-muted-foreground',
+                      'relative h-9 border-r border-border px-0 text-left align-middle font-medium text-muted-foreground',
                       'last:border-r-0 select-none'
                     )}
                     style={{ width: header.getSize() }}
@@ -217,20 +275,47 @@ export function DataTable({
                   className="h-8 border-r border-border px-1 py-0 align-middle last:border-r-0"
                   style={{ width: header.getSize() }}
                 >
-                  {header.column.id === '__select__' ? null : (
-                    <input
-                      type="text"
-                      placeholder="filter..."
-                      value={filterValues[header.column.id] ?? ''}
-                      onChange={(e) =>
-                        setFilterValues((prev) => ({
-                          ...prev,
-                          [header.column.id]: e.target.value,
-                        }))
-                      }
-                      className="h-6 w-full min-w-0 rounded border border-border bg-background px-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none ring-ring/20 focus:ring-2"
-                    />
-                  )}
+                  {header.column.id === '__select__'
+                    ? null
+                    : (() => {
+                        const colId = header.column.id
+                        const meta = columnMetaByName.get(colId)
+                        if (!meta) return null
+
+                        const category = getTypeCategory(meta.data_type)
+                        const ops = FILTER_OPS_BY_CATEGORY[category]
+                        const defaultOp = DEFAULT_OP_BY_CATEGORY[category]
+                        const saved = filterState[colId]
+                        const opValid = saved && ops.some((o) => o.value === saved.op)
+                        const state = opValid ? saved : { op: defaultOp, value: '' }
+                        const isNullOp = state.op === 'is_null' || state.op === 'is_not_null'
+
+                        return (
+                          <div className="flex items-center gap-0.5">
+                            <select
+                              value={state.op}
+                              onChange={(e) => onFilterChange(colId, { ...state, op: e.target.value as FilterExpr['op'] })}
+                              className="h-6 w-[52px] shrink-0 rounded border border-border bg-background px-1 text-[11px] text-foreground outline-none ring-ring/20 focus:ring-2"
+                              title="Filter operator"
+                            >
+                              {ops.map((op) => (
+                                <option key={op.value} value={op.value}>
+                                  {op.label}
+                                </option>
+                              ))}
+                            </select>
+                            {!isNullOp && (
+                              <input
+                                type="text"
+                                placeholder="filter..."
+                                value={state.value}
+                                onChange={(e) => onFilterChange(colId, { ...state, value: e.target.value })}
+                                className="h-6 w-full min-w-0 rounded border border-border bg-background px-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none ring-ring/20 focus:ring-2"
+                              />
+                            )}
+                          </div>
+                        )
+                      })()}
                 </th>
               ))}
             </tr>
@@ -257,7 +342,7 @@ export function DataTable({
                         <td
                           key={cell.id}
                           className="overflow-hidden border-r border-border p-0 align-middle last:border-r-0"
-                          style={{ width: cell.column.getSize() }}
+                          style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
@@ -280,7 +365,7 @@ export function DataTable({
                         <td
                           key={cell.id}
                           className="overflow-hidden border-r border-border p-0 align-middle last:border-r-0"
-                          style={{ width: cell.column.getSize() }}
+                          style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>

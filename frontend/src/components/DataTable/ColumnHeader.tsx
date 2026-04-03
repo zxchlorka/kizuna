@@ -28,11 +28,29 @@ const TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> 
   uuid: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/30' },
   json: { bg: 'bg-yellow-500/10', text: 'text-yellow-600 dark:text-yellow-400', border: 'border-yellow-500/30' },
   jsonb: { bg: 'bg-yellow-500/10', text: 'text-yellow-600 dark:text-yellow-400', border: 'border-yellow-500/30' },
+  'user-defined': { bg: 'bg-gray-500/10', text: 'text-gray-600 dark:text-gray-400', border: 'border-gray-500/30' },
+}
+
+function normalizeTypeKey(dataType: string): string {
+  const lower = dataType.toLowerCase()
+  const aliases: Record<string, string> = {
+    'character varying': 'varchar',
+    'timestamp without time zone': 'timestamp',
+    'timestamp with time zone': 'timestamptz',
+    'time without time zone': 'time',
+    'time with time zone': 'timetz',
+    'double precision': 'float8',
+    real: 'float4',
+    smallint: 'int2',
+    'user-defined': 'user-defined',
+  }
+  return aliases[lower] ?? lower
 }
 
 function getTypeColors(dataType: string) {
+  const key = normalizeTypeKey(dataType)
   return (
-    TYPE_COLORS[dataType.toLowerCase()] ?? {
+    TYPE_COLORS[key] ?? {
       bg: 'bg-gray-500/10',
       text: 'text-gray-600 dark:text-gray-400',
       border: 'border-gray-500/30',
@@ -40,10 +58,39 @@ function getTypeColors(dataType: string) {
   )
 }
 
+function typeBadgeLabel(dataType: string): string {
+  const key = normalizeTypeKey(dataType)
+  const short: Record<string, string> = {
+    integer: 'int',
+    bigint: 'int8',
+    int2: 'int2',
+    numeric: 'num',
+    float4: 'f4',
+    float8: 'f8',
+    timestamp: 'ts',
+    timestamptz: 'tstz',
+    varchar: 'varchar',
+    boolean: 'bool',
+    'user-defined': 'enum',
+  }
+  const label = short[key] ?? key
+  return label.length > 12 ? `${label.slice(0, 11)}…` : label
+}
+
 export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
   const isSorted = column.getIsSorted()
   const colors = getTypeColors(meta.data_type)
-  const showTypeBadge = header.getSize() >= 170
+  const width = header.getSize()
+  const sortReserve = column.getCanSort() ? 18 : 0
+  const pkReserve = meta.is_pk ? 20 : 0
+  const horizontalPadding = 18
+  const gapReserve = 12
+  const minNameBudget = 44
+  const freeWidth = width - sortReserve - pkReserve - horizontalPadding - gapReserve
+  const showTypeBadge = width >= 120 && freeWidth >= minNameBudget
+  const headerTitle = meta.is_fk && meta.fk_table
+    ? `${meta.name} (${meta.data_type}) • FK -> ${meta.fk_table}${meta.fk_column ? `.${meta.fk_column}` : ''}`
+    : `${meta.name} (${meta.data_type})`
 
   const handleSortClick = () => {
     if (!column.getCanSort()) return
@@ -65,7 +112,7 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
         )}
         onClick={handleSortClick}
         tabIndex={column.getCanSort() ? 0 : undefined}
-        title={showTypeBadge ? undefined : `${meta.name} (${meta.data_type})`}
+        title={headerTitle}
         onKeyDown={(e) => {
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
@@ -89,8 +136,9 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
               colors.text,
               colors.border
             )}
+            title={meta.data_type}
           >
-            {meta.data_type}
+            {typeBadgeLabel(meta.data_type)}
           </span>
         )}
 
@@ -111,12 +159,17 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
         onMouseDown={header.getResizeHandler()}
         onTouchStart={header.getResizeHandler()}
         className={cn(
-          'absolute right-0 top-0 z-10 h-full w-1 cursor-col-resize select-none touch-none',
-          'bg-transparent hover:bg-primary/40 active:bg-primary',
-          column.getIsResizing() && 'bg-primary'
+          'absolute right-0 top-0 z-20 h-full w-3 cursor-col-resize select-none touch-none group/resize',
+          'flex items-center justify-end',
         )}
         onClick={(e) => e.stopPropagation()}
-      />
+      >
+        <div className={cn(
+          'h-1/2 w-px bg-border transition-colors',
+          'group-hover/resize:bg-primary/60 group-active/resize:bg-primary',
+          column.getIsResizing() && 'bg-primary w-[2px]'
+        )} />
+      </div>
     </div>
   )
 }

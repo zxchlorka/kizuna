@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,8 +28,6 @@ type columnDef struct {
 	Nullable   bool
 	HasDefault bool
 }
-
-var uuidRe = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$`)
 
 func (p *PostgresConnector) Mutate(ctx context.Context, op connector.MutateOp) (*connector.MutateResult, error) {
 	return p.mutateWithExecutor(ctx, p.pool, op)
@@ -490,8 +487,8 @@ func coerceUUID(v any, col string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%w: column %q expects uuid string", connector.ErrBadRequest, col)
 	}
-	s = strings.TrimSpace(s)
-	if !uuidRe.MatchString(s) {
+	s, ok = normalizeCanonicalUUID(s)
+	if !ok {
 		return "", fmt.Errorf("%w: column %q expects valid uuid", connector.ErrBadRequest, col)
 	}
 	return s, nil

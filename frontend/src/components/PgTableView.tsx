@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortingState } from '@tanstack/react-table'
 import { AlertCircle, Trash2, X } from 'lucide-react'
-import { DataTable } from '@/components/DataTable'
+import { DataTable, type ColumnFilterState } from '@/components/DataTable'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
@@ -32,6 +32,59 @@ const BOOL_TYPES = new Set(['bool', 'boolean'])
 const JSON_TYPES = new Set(['json', 'jsonb'])
 const UUID_TYPES = new Set(['uuid'])
 const TEXT_TYPES = new Set(['text', 'varchar', 'bpchar', 'char'])
+const TIMESTAMP_TYPES = new Set(['timestamp', 'timestamptz', 'date', 'time', 'timetz'])
+const FILTER_DEBOUNCE_MS = 300
+const BOOL_DEFAULT_SENTINEL = '__default__'
+const VALUELESS_FILTER_OPS = new Set<FilterExpr['op']>(['is_null', 'is_not_null'])
+
+function normalizeFilters(filters: FilterExpr[]): FilterExpr[] {
+  return [...filters]
+    .map((f) => ({
+      column: f.column,
+      op: f.op,
+      value: VALUELESS_FILTER_OPS.has(f.op) ? '' : f.value.trim(),
+    }))
+    .filter((f) => VALUELESS_FILTER_OPS.has(f.op) || f.value !== '')
+    .sort((a, b) => {
+      if (a.column !== b.column) return a.column.localeCompare(b.column)
+      if (a.op !== b.op) return a.op.localeCompare(b.op)
+      return a.value.localeCompare(b.value)
+    })
+}
+
+function filtersEqual(a: FilterExpr[], b: FilterExpr[]): boolean {
+  const na = normalizeFilters(a)
+  const nb = normalizeFilters(b)
+  if (na.length !== nb.length) return false
+  for (let i = 0; i < na.length; i++) {
+    if (na[i].column !== nb[i].column || na[i].op !== nb[i].op || na[i].value !== nb[i].value) {
+      return false
+    }
+  }
+  return true
+}
+
+function defaultFilterOp(dataType: string): FilterExpr['op'] {
+  const dt = dataType.toLowerCase()
+  if (INTEGER_TYPES.has(dt) || NUMERIC_TYPES.has(dt) || TIMESTAMP_TYPES.has(dt) || dt === 'uuid' || BOOL_TYPES.has(dt)) {
+    return 'eq'
+  }
+  return 'contains'
+}
+
+function filtersToState(columns: ColumnMeta[], filters: FilterExpr[]): Record<string, ColumnFilterState> {
+  const out: Record<string, ColumnFilterState> = {}
+  columns.forEach((col) => {
+    out[col.name] = { op: defaultFilterOp(col.data_type), value: '' }
+  })
+  filters.forEach((f) => {
+    out[f.column] = {
+      op: f.op,
+      value: VALUELESS_FILTER_OPS.has(f.op) ? '' : f.value,
+    }
+  })
+  return out
+}
 
 function hasUUIDDefault(col: ColumnMeta): boolean {
   if (!col.default) return false
@@ -40,6 +93,13 @@ function hasUUIDDefault(col: ColumnMeta): boolean {
 }
 
 function parseFormValue(raw: string, col: ColumnMeta): { include: boolean; value?: any; error?: string } {
+  if (raw === BOOL_DEFAULT_SENTINEL) {
+    if (!col.nullable && !col.default) {
+      return { include: false, error: 'Required field' }
+    }
+    return { include: false }
+  }
+
   const dt = col.data_type.toLowerCase()
   const trimmed = raw.trim()
   const nullable = col.nullable
@@ -100,23 +160,31 @@ function parseFormValue(raw: string, col: ColumnMeta): { include: boolean; value
   return { include: true, value: raw }
 }
 
-function buildPkWhere(columns: ColumnMeta[], row: any[]): Record<string, any> {
+function buildPkWhere(columns: ColumnMeta[], row: any[]): { where: Record<string, any>; ok: boolean } {
   const pkCols = columns.filter((c) => c.is_pk)
+  if (pkCols.length === 0) {
+    return { where: {}, ok: false }
+  }
+
   const where: Record<string, any> = {}
-
-  if (pkCols.length > 0) {
-    pkCols.forEach((col) => {
-      const idx = columns.findIndex((c) => c.name === col.name)
-      where[col.name] = row[idx]
-    })
-    return where
+  for (const col of pkCols) {
+    const idx = columns.findIndex((c) => c.name === col.name)
+    if (idx < 0) {
+      return { where: {}, ok: false }
+    }
+    const value = row[idx]
+    if (value === null || value === undefined) {
+      return { where: {}, ok: false }
+    }
+    where[col.name] = value
   }
 
-  if (columns.length > 0) {
-    where[columns[0].name] = row[0]
-  }
+  return { where, ok: true }
+}
 
-  return where
+function stableWhereKey(where: Record<string, any>): string {
+  const keys = Object.keys(where).sort()
+  return keys.map((k) => `${k}=${JSON.stringify(where[k])}`).join('|')
 }
 
 export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
@@ -142,6 +210,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const [newRowErrors, setNewRowErrors] = useState<Record<string, string>>({})
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
+  const skipFirstFilterFetch = useRef(true)
 
   const [schemaName, tableName] = object.includes('.') ? object.split('.', 2) : ['public', object]
 
@@ -151,6 +220,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setSorting([])
     setEditMode(false)
     clearDrafts(tabId)
+    skipFirstFilterFetch.current = true
   }, [connId, object, tabId, clearDrafts, fetchData, fetchSchema])
 
   const columns = tabData?.columns ?? []
@@ -160,12 +230,37 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const error = tabData?.error ?? null
 
   const draftUpdates = tabData?.draftUpdates ?? {}
-  const draftDeletes = new Set(tabData?.draftDeletes ?? [])
+  const draftDeletes = tabData?.draftDeletes ?? {}
   const draftInserts = tabData?.draftInserts ?? []
+  const activeFilters = opts?.filters ?? []
+  const pkColumns = useMemo(() => columns.filter((c) => c.is_pk), [columns])
+  const hasPrimaryKey = pkColumns.length > 0
+  const rowIdentityByIndex = useMemo(
+    () =>
+      rows.map((row) => {
+        const built = buildPkWhere(columns, row)
+        if (!built.ok) return null
+        return { where: built.where, rowKey: stableWhereKey(built.where) }
+      }),
+    [columns, rows]
+  )
+  const deletedRowIndexes = useMemo(() => {
+    const out = new Set<number>()
+    rowIdentityByIndex.forEach((identity, idx) => {
+      if (!identity) return
+      if (draftDeletes[identity.rowKey]) {
+        out.add(idx)
+      }
+    })
+    return out
+  }, [draftDeletes, rowIdentityByIndex])
+
+  const filterState = useMemo(() => filtersToState(columns, activeFilters), [activeFilters, columns])
+  const filterSignature = useMemo(() => JSON.stringify(normalizeFilters(activeFilters)), [activeFilters])
 
   const pendingCount = useMemo(() => {
-    const cells = Object.values(draftUpdates).reduce((sum, rowDraft) => sum + Object.keys(rowDraft).length, 0)
-    return cells + draftDeletes.size + draftInserts.length
+    const cells = Object.values(draftUpdates).reduce((sum, rowDraft) => sum + Object.keys(rowDraft.data).length, 0)
+    return cells + Object.keys(draftDeletes).length + draftInserts.length
   }, [draftUpdates, draftDeletes, draftInserts])
 
   const refresh = useCallback(() => {
@@ -210,35 +305,75 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleFilterChange = useCallback(
     (filters: FilterExpr[]) => {
+      if (filtersEqual(filters, activeFilters)) {
+        return
+      }
       setOpts(tabId, { filters, offset: 0 })
-      fetchData(connId, object, tabId)
     },
-    [connId, object, tabId, setOpts, fetchData]
+    [activeFilters, setOpts, tabId]
   )
+
+  const handleFilterStateChange = useCallback(
+    (column: string, next: ColumnFilterState) => {
+      const nextState: Record<string, ColumnFilterState> = { ...filterState, [column]: next }
+      const nextFilters: FilterExpr[] = Object.entries(nextState).flatMap(([col, state]) => {
+        if (VALUELESS_FILTER_OPS.has(state.op)) {
+          return [{ column: col, op: state.op, value: '' }]
+        }
+        const trimmed = state.value.trim()
+        if (trimmed === '') return []
+        return [{ column: col, op: state.op, value: trimmed }]
+      })
+      handleFilterChange(nextFilters)
+    },
+    [filterState, handleFilterChange]
+  )
+
+  useEffect(() => {
+    if (skipFirstFilterFetch.current) {
+      skipFirstFilterFetch.current = false
+      return
+    }
+
+    const timeout = setTimeout(() => {
+      fetchData(connId, object, tabId)
+    }, FILTER_DEBOUNCE_MS)
+
+    return () => clearTimeout(timeout)
+  }, [connId, fetchData, filterSignature, object, tabId])
 
   const getDraftValue = useCallback(
     (rowIndex: number, colName: string, fallback: any) => {
-      const rowDraft = draftUpdates[rowIndex]
+      const identity = rowIdentityByIndex[rowIndex]
+      if (!identity) return fallback
+      const rowDraft = draftUpdates[identity.rowKey]
       if (!rowDraft) return fallback
-      if (!(colName in rowDraft)) return fallback
-      return rowDraft[colName]
+      if (!(colName in rowDraft.data)) return fallback
+      return rowDraft.data[colName]
     },
-    [draftUpdates]
+    [draftUpdates, rowIdentityByIndex]
   )
 
   const isDirtyCell = useCallback(
     (rowIndex: number, colName: string) => {
-      return Boolean(draftUpdates[rowIndex] && colName in draftUpdates[rowIndex])
+      const identity = rowIdentityByIndex[rowIndex]
+      if (!identity) return false
+      return Boolean(draftUpdates[identity.rowKey] && colName in draftUpdates[identity.rowKey].data)
     },
-    [draftUpdates]
+    [draftUpdates, rowIdentityByIndex]
   )
 
   const handleCellChange = useCallback(
     (rowIndex: number, colName: string, value: any) => {
-      if (!editMode) return
-      setDraftCell(tabId, rowIndex, colName, value)
+      if (!editMode || !hasPrimaryKey) return
+      const identity = rowIdentityByIndex[rowIndex]
+      if (!identity) {
+        setLocalError('Cannot edit this row: primary key value is missing.')
+        return
+      }
+      setDraftCell(tabId, identity.rowKey, identity.where, colName, value)
     },
-    [editMode, setDraftCell, tabId]
+    [editMode, hasPrimaryKey, rowIdentityByIndex, setDraftCell, tabId]
   )
 
   const handleToggleRow = useCallback((rowIndex: number, checked: boolean) => {
@@ -263,29 +398,40 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleDeleteSelected = useCallback(() => {
     if (selectedRows.size === 0) return
+    if (!hasPrimaryKey) {
+      setLocalError('Delete is disabled for tables without primary key.')
+      return
+    }
     if (editMode) {
-      selectedRows.forEach((rowIndex) => toggleDraftDelete(tabId, rowIndex, true))
+      selectedRows.forEach((rowIndex) => {
+        const identity = rowIdentityByIndex[rowIndex]
+        if (!identity) return
+        toggleDraftDelete(tabId, identity.rowKey, identity.where, true)
+      })
       setSelectedRows(new Set())
       return
     }
     setShowDeleteDialog(true)
-  }, [selectedRows, editMode, toggleDraftDelete, tabId])
+  }, [selectedRows, hasPrimaryKey, editMode, rowIdentityByIndex, toggleDraftDelete, tabId])
 
   const confirmImmediateDelete = useCallback(async () => {
+    if (!hasPrimaryKey) {
+      setLocalError('Delete is disabled for tables without primary key.')
+      return
+    }
     setIsSaving(true)
     setLocalError(null)
     try {
       for (const rowIndex of Array.from(selectedRows)) {
-        const row = rows[rowIndex]
-        if (!row) continue
-        const where = buildPkWhere(columns, row)
+        const identity = rowIdentityByIndex[rowIndex]
+        if (!identity) continue
         await mutate(
           connId,
           {
             type: 'delete',
             schema: schemaName,
             object: tableName,
-            where,
+            where: identity.where,
           },
           tabId
         )
@@ -298,7 +444,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     } finally {
       setIsSaving(false)
     }
-  }, [columns, connId, fetchData, mutate, object, rows, schemaName, selectedRows, tabId, tableName])
+  }, [hasPrimaryKey, connId, fetchData, mutate, object, rowIdentityByIndex, schemaName, selectedRows, tabId, tableName])
 
   const handleToggleEditMode = () => {
     if (editMode && pendingCount > 0) {
@@ -319,30 +465,25 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const buildBulkOperations = useCallback((): MutateOp[] => {
     const ops: MutateOp[] = []
 
-    Object.entries(draftUpdates).forEach(([rowIndexRaw, data]) => {
-      const rowIndex = Number(rowIndexRaw)
-      if (draftDeletes.has(rowIndex)) return
-      const row = rows[rowIndex]
-      if (!row) return
-      if (Object.keys(data).length === 0) return
+    Object.entries(draftUpdates).forEach(([rowKey, draft]) => {
+      if (draftDeletes[rowKey]) return
+      if (Object.keys(draft.data).length === 0) return
 
       ops.push({
         type: 'update',
         schema: schemaName,
         object: tableName,
-        where: buildPkWhere(columns, row),
-        data,
+        where: draft.where,
+        data: draft.data,
       })
     })
 
-    draftDeletes.forEach((rowIndex) => {
-      const row = rows[rowIndex]
-      if (!row) return
+    Object.values(draftDeletes).forEach((draft) => {
       ops.push({
         type: 'delete',
         schema: schemaName,
         object: tableName,
-        where: buildPkWhere(columns, row),
+        where: draft.where,
       })
     })
 
@@ -356,7 +497,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     })
 
     return ops
-  }, [columns, draftDeletes, draftInserts, draftUpdates, rows, schemaName, tableName])
+  }, [draftDeletes, draftInserts, draftUpdates, schemaName, tableName])
 
   const handleSaveAll = async () => {
     const operations = buildBulkOperations()
@@ -389,7 +530,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const openAddRowDialog = () => {
     const initial: Record<string, string> = {}
     columns.forEach((col) => {
-      initial[col.name] = ''
+      const dt = col.data_type.toLowerCase()
+      initial[col.name] = BOOL_TYPES.has(dt) ? BOOL_DEFAULT_SENTINEL : ''
     })
     setNewRowData(initial)
     setNewRowErrors({})
@@ -467,6 +609,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onRefresh={refresh}
         onAddRow={openAddRowDialog}
         onDeleteSelected={handleDeleteSelected}
+        canDeleteRows={hasPrimaryKey}
         selectedCount={selectedRows.size}
         pageSize={currentLimit}
         onPageSizeChange={handlePageSizeChange}
@@ -511,12 +654,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             rows={rows}
             loading={isLoading || isSaving}
             sorting={sorting}
-            filters={opts?.filters ?? []}
+            filterState={filterState}
             selectedRows={selectedRows}
-            editMode={editMode}
-            draftDeletes={draftDeletes}
+            editMode={editMode && hasPrimaryKey}
+            draftDeletes={deletedRowIndexes}
             onSortChange={handleSortChange}
-            onFilterChange={handleFilterChange}
+            onFilterChange={handleFilterStateChange}
             onToggleRow={handleToggleRow}
             onToggleAll={handleToggleAll}
             onCellChange={handleCellChange}
@@ -625,7 +768,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
                     {isBool ? (
                       <Select
-                        value={newRowData[col.name] ?? ''}
+                        value={newRowData[col.name] ?? BOOL_DEFAULT_SENTINEL}
                         onValueChange={(value) => {
                           setNewRowData((prev) => ({ ...prev, [col.name]: value }))
                           setNewRowErrors((prev) => ({ ...prev, [col.name]: '' }))
@@ -635,7 +778,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
                           <SelectValue placeholder={col.nullable ? 'default / null' : 'select'} />
                         </SelectTrigger>
                         <SelectContent>
-                          <SelectItem value="">default</SelectItem>
+                          <SelectItem value={BOOL_DEFAULT_SENTINEL}>default</SelectItem>
                           <SelectItem value="true">true</SelectItem>
                           <SelectItem value="false">false</SelectItem>
                           {col.nullable && <SelectItem value="null">null</SelectItem>}
