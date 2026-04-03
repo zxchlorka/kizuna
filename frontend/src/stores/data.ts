@@ -6,6 +6,7 @@ import type {
   ColumnMeta,
   DataOpts,
   DataResult,
+  DDLOp,
   MutateOp,
   TableRow,
 } from '@/types/api'
@@ -39,6 +40,7 @@ interface DataStore {
   fetchData: (connId: string, object: string, tabId: string, opts?: Partial<DataOpts>) => Promise<void>
   mutate: (connId: string, op: MutateOp, tabId: string) => Promise<void>
   mutateBulk: (connId: string, op: BulkMutateOp, tabId: string) => Promise<BulkMutateResult>
+  ddl: (connId: string, op: DDLOp) => Promise<void>
   setOpts: (tabId: string, opts: Partial<DataOpts>) => void
   setDraftCell: (tabId: string, rowKey: string, where: Record<string, unknown>, column: string, value: unknown) => void
   toggleDraftDelete: (tabId: string, rowKey: string, where: Record<string, unknown>, deleted: boolean) => void
@@ -277,6 +279,18 @@ export const useDataStore = create<DataStore>((set, get) => ({
         }
       })
       throw e
+    }
+  },
+
+  ddl: async (connId: string, op: DDLOp) => {
+    const res = await fetch(`/api/connections/${connId}/ddl`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(op),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || res.statusText)
     }
   },
 

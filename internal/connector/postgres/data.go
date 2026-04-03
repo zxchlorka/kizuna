@@ -156,7 +156,7 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 	rows, err := p.pool.Query(ctx, dataSQL, args...)
 	if err != nil {
 		wg.Wait()
-		return nil, fmt.Errorf("failed to query data: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to query data: %w", err))
 	}
 	defer rows.Close()
 
@@ -165,18 +165,18 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 		vals, err := rows.Values()
 		if err != nil {
 			wg.Wait()
-			return nil, fmt.Errorf("failed to scan row: %w", err)
+			return nil, normalizePostgresError(fmt.Errorf("failed to scan row: %w", err))
 		}
 		resultRows = append(resultRows, buildResultRow(schemaResult.Columns, vals))
 	}
 	if err := rows.Err(); err != nil {
 		wg.Wait()
-		return nil, fmt.Errorf("row iteration error: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("row iteration error: %w", err))
 	}
 
 	wg.Wait()
 	if countErr != nil {
-		return nil, fmt.Errorf("failed to count rows: %w", countErr)
+		return nil, normalizePostgresError(fmt.Errorf("failed to count rows: %w", countErr))
 	}
 
 	hasMore := int64(offset+len(resultRows)) < total

@@ -1,0 +1,25 @@
+services:
+  infraview:
+    build: .
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./data:/data
+    environment:
+      CONFIG_PATH: /data/config.json
+    depends_on:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: devdb
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+volumes:
+  postgres-data:

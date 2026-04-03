@@ -12,8 +12,10 @@ services:
     build:
       context: .
       target: debug
+    profiles:
+      - debug
     ports:
-      - "9090:9090"
+      - "9091:9090"
       - "2345:2345"
     volumes:
       - infraview-data:/data

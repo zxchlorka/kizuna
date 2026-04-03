@@ -100,6 +100,23 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
               {connection.host}:{connection.port}/<span className="text-muted-foreground/80">{connection.database}</span>
             </p>
             <p className="truncate text-[10px] text-muted-foreground/50 font-mono">{connection.username}</p>
+            {connection.tags && connection.tags.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-1">
+                {connection.tags.map((tag) => (
+                  <span
+                    key={tag}
+                    className={cn(
+                      'rounded-sm border px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-[0.12em]',
+                      tag === 'production'
+                        ? 'border-amber-500/35 bg-amber-500/10 text-amber-500'
+                        : 'border-border bg-muted/20 text-muted-foreground'
+                    )}
+                  >
+                    {tag}
+                  </span>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Actions (visible on hover) */}

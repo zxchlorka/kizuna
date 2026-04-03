@@ -10,3 +10,15 @@ var ErrConflict = errors.New("conflict")
 
 // ErrNotFound is returned when a mutate operation targets a row that does not exist.
 var ErrNotFound = errors.New("not found")
+
+// ErrForbidden is returned when the data source denies the requested operation.
+var ErrForbidden = errors.New("forbidden")
+
+// ErrTimeout is returned when the data source times out while serving a request.
+var ErrTimeout = errors.New("timeout")
+
+// ErrUnavailable is returned when the data source cannot be reached.
+var ErrUnavailable = errors.New("unavailable")
+
+// ErrRelationNotFound is returned when a requested relation or index does not exist.
+var ErrRelationNotFound = errors.New("relation not found")

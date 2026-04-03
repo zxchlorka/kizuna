@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -27,13 +29,14 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Omit password from response
 	type connResponse struct {
-		ID       string `json:"id"`
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Host     string `json:"host"`
-		Port     int    `json:"port"`
-		Database string `json:"database"`
-		Username string `json:"username"`
+		ID       string   `json:"id"`
+		Name     string   `json:"name"`
+		Type     string   `json:"type"`
+		Host     string   `json:"host"`
+		Port     int      `json:"port"`
+		Database string   `json:"database"`
+		Username string   `json:"username"`
+		Tags     []string `json:"tags,omitempty"`
 	}
 
 	result := make([]connResponse, len(conns))
@@ -46,6 +49,7 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 			Port:     c.Port,
 			Database: c.Database,
 			Username: c.Username,
+			Tags:     slices.Clone(c.Tags),
 		}
 	}
 
@@ -54,13 +58,14 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Host     string `json:"host"`
-		Port     int    `json:"port"`
-		Database string `json:"database"`
-		Username string `json:"username"`
-		Password string `json:"password"`
+		Name     string   `json:"name"`
+		Type     string   `json:"type"`
+		Host     string   `json:"host"`
+		Port     int      `json:"port"`
+		Database string   `json:"database"`
+		Username string   `json:"username"`
+		Tags     []string `json:"tags"`
+		Password string   `json:"password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -96,6 +101,7 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Port:     req.Port,
 		Database: req.Database,
 		Username: req.Username,
+		Tags:     normalizeTags(req.Tags),
 		Password: encPassword,
 	}
 
@@ -115,6 +121,7 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		"port":     conn.Port,
 		"database": conn.Database,
 		"username": conn.Username,
+		"tags":     conn.Tags,
 	})
 }
 
@@ -128,13 +135,14 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string `json:"name"`
-		Type     *string `json:"type"`
-		Host     *string `json:"host"`
-		Port     *int    `json:"port"`
-		Database *string `json:"database"`
-		Username *string `json:"username"`
-		Password *string `json:"password"`
+		Name     *string   `json:"name"`
+		Type     *string   `json:"type"`
+		Host     *string   `json:"host"`
+		Port     *int      `json:"port"`
+		Database *string   `json:"database"`
+		Username *string   `json:"username"`
+		Tags     *[]string `json:"tags"`
+		Password *string   `json:"password"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -159,6 +167,9 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Username != nil {
 		existing.Username = *req.Username
+	}
+	if req.Tags != nil {
+		existing.Tags = normalizeTags(*req.Tags)
 	}
 	if req.Password != nil && *req.Password != "" {
 		encrypted, err := config.Encrypt(h.cfg.EncryptionKey, *req.Password)
@@ -188,6 +199,7 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		"port":     existing.Port,
 		"database": existing.Database,
 		"username": existing.Username,
+		"tags":     existing.Tags,
 	})
 }
 
@@ -213,9 +225,9 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	c, err := h.manager.Get(id)
+	c, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -224,7 +236,7 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
-		writeJSON(w, http.StatusOK, map[string]any{"ok": false, "error": err.Error()})
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -234,15 +246,15 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectionsHandler) Info(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	c, err := h.manager.Get(id)
+	c, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	info, err := c.GetInfo(r.Context())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -255,14 +267,27 @@ func generateID() string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func writeJSON(w http.ResponseWriter, code int, data any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(data)
-}
+func normalizeTags(tags []string) []string {
+	if len(tags) == 0 {
+		return nil
+	}
 
-func writeError(w http.ResponseWriter, code int, msg string) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]any{"error": msg, "code": code})
+	seen := make(map[string]struct{}, len(tags))
+	out := make([]string, 0, len(tags))
+	for _, tag := range tags {
+		normalized := strings.ToLower(strings.TrimSpace(tag))
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	slices.Sort(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }

@@ -8,15 +8,26 @@ interface Tab {
   label: string
 }
 
+export interface TreeVisibility {
+  showTables: boolean
+  showViews: boolean
+  showIndexes: boolean
+}
+
+export type TreeVisibilityKey = keyof TreeVisibility
+
 interface WorkspaceStore {
   tabs: Tab[]
   activeTabId: string | null
   treeItems: Record<string, ObjectItem[]>
   treeLoading: boolean
   expandedSchemas: Set<string>
+  treeVisibility: TreeVisibility
 
   fetchTree: (connId: string, path?: string) => Promise<void>
+  refreshTree: (connId: string) => Promise<void>
   toggleSchema: (schema: string) => void
+  setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   openTab: (connId: string, object: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
@@ -28,6 +39,11 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   treeItems: {},
   treeLoading: false,
   expandedSchemas: new Set(),
+  treeVisibility: {
+    showTables: true,
+    showViews: false,
+    showIndexes: false,
+  },
 
   fetchTree: async (connId: string, path?: string) => {
     set({ treeLoading: true })
@@ -46,6 +62,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }
   },
 
+  refreshTree: async (connId: string) => {
+    const expandedSchemas = Array.from(get().expandedSchemas)
+    set({ treeItems: {}, treeLoading: true })
+    await get().fetchTree(connId)
+    for (const schema of expandedSchemas) {
+      await get().fetchTree(connId, schema)
+    }
+  },
+
   toggleSchema: (schema: string) => {
     set((state) => {
       const next = new Set(state.expandedSchemas)
@@ -56,6 +81,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       }
       return { expandedSchemas: next }
     })
+  },
+
+  setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => {
+    set((state) => ({
+      treeVisibility: {
+        ...state.treeVisibility,
+        [key]: visible,
+      },
+    }))
   },
 
   openTab: (connId: string, object: string) => {

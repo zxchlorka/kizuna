@@ -6,6 +6,7 @@ export interface Connection {
   port: number
   database: string
   username: string
+  tags?: string[]
 }
 
 export interface ConnectionInput {
@@ -16,6 +17,7 @@ export interface ConnectionInput {
   database: string
   username: string
   password: string
+  tags: string[]
 }
 
 export interface TestResult {
@@ -92,4 +94,34 @@ export interface BulkMutateResult {
   applied: number
   rows_affected: number
   message: string
+}
+
+export type DDLType =
+  | 'create_table'
+  | 'drop_table'
+  | 'add_column'
+  | 'drop_column'
+  | 'create_index'
+  | 'drop_index'
+
+export interface DDLColumnInput {
+  name: string
+  type: string
+  nullable: boolean
+  primary_key: boolean
+  default?: unknown
+}
+
+export interface DDLOp {
+  type: DDLType
+  schema: string
+  object: string
+  params: Record<string, unknown>
+}
+
+export interface DDLResult {
+  ok: boolean
+  type: DDLType
+  schema: string
+  object: string
 }

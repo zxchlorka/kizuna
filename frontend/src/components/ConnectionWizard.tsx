@@ -20,6 +20,7 @@ const blankForm: ConnectionInput = {
   database: '',
   username: '',
   password: '',
+  tags: [],
 }
 
 export function ConnectionWizard({ open, onOpenChange, editConnection }: ConnectionWizardProps) {
@@ -53,6 +54,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
         database: editConnection.database,
         username: editConnection.username,
         password: '',
+        tags: editConnection.tags ?? [],
       })
     } else {
       setStep(1)
@@ -212,6 +214,25 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
                   </label>
                   <input type="password" value={form.password} onChange={(e) => updateField('password', e.target.value)} placeholder={isEdit ? '••••••••' : ''} className={inputCls} />
                 </div>
+              </div>
+              <div>
+                <label className={labelCls}>Tags</label>
+                <input
+                  type="text"
+                  value={form.tags.join(', ')}
+                  onChange={(e) =>
+                    updateField(
+                      'tags',
+                      e.target.value
+                        .split(',')
+                        .map((tag) => tag.trim())
+                        .filter(Boolean)
+                    )
+                  }
+                  placeholder="production, reporting"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">Use explicit tags like `production` to enable safety banners.</p>
               </div>
 
               {/* ── Inline test result ── */}

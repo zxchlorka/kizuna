@@ -55,19 +55,15 @@ func (h *DataHandler) GetData(w http.ResponseWriter, r *http.Request) {
 		Filters:  filters,
 	}
 
-	conn, err := h.manager.Get(id)
+	conn, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	result, err := conn.GetData(r.Context(), name, opts)
 	if err != nil {
-		if errors.Is(err, connector.ErrBadRequest) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -88,27 +84,19 @@ func (h *DataHandler) Mutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.manager.Get(id)
+	conn, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	result, err := conn.Mutate(r.Context(), op)
 	if err != nil {
-		if errors.Is(err, connector.ErrBadRequest) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if errors.Is(err, connector.ErrConflict) {
-			writeError(w, http.StatusConflict, err.Error())
-			return
-		}
 		if errors.Is(err, connector.ErrNotFound) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -124,23 +112,19 @@ func (h *DataHandler) MutateBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.manager.Get(id)
+	conn, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	result, err := conn.MutateBulk(r.Context(), op)
 	if err != nil {
-		if errors.Is(err, connector.ErrBadRequest) {
-			writeError(w, http.StatusBadRequest, err.Error())
-			return
-		}
-		if errors.Is(err, connector.ErrConflict) || errors.Is(err, connector.ErrNotFound) {
+		if errors.Is(err, connector.ErrNotFound) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
