@@ -3,7 +3,6 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -554,19 +553,7 @@ func coerceJSON(v any, col string) (string, error) {
 }
 
 func mapPgError(err error) error {
-	var pgErr *pgconn.PgError
-	if !errors.As(err, &pgErr) {
-		return err
-	}
-
-	switch pgErr.Code {
-	case "22P02", "22007", "22003", "23502", "23514":
-		return fmt.Errorf("%w: %s", connector.ErrBadRequest, pgErr.Message)
-	case "23505", "23503":
-		return fmt.Errorf("%w: %s", connector.ErrConflict, pgErr.Message)
-	default:
-		return err
-	}
+	return normalizePostgresError(err)
 }
 
 // sortedKeys returns map keys sorted for deterministic SQL construction.

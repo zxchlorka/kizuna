@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortingState } from '@tanstack/react-table'
-import { AlertCircle, Trash2 } from 'lucide-react'
+import { Trash2 } from 'lucide-react'
+import { AddColumnForm } from '@/components/DDL/AddColumnForm'
+import { CreateIndexForm } from '@/components/DDL/CreateIndexForm'
+import { DropConfirmDialog } from '@/components/DDL/DropConfirmDialog'
 import { DataTable } from '@/components/DataTable'
+import { EmptyState } from '@/components/EmptyState'
+import { ErrorBanner } from '@/components/ErrorBanner'
+import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
 import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
-import { ErrorBanner } from '@/components/PgTableView/ErrorBanner'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
-import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
+import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
   buildRowIdentity,
@@ -19,6 +23,8 @@ import {
   VALUELESS_FILTER_OPS,
 } from '@/lib/table'
 import { useDataStore } from '@/stores/data'
+import { useToastStore } from '@/stores/toast'
+import { useWorkspaceStore } from '@/stores/workspace'
 import type { ColumnMeta, FilterExpr, TableRow } from '@/types/api'
 import type { RowIdentity } from '@/types/table'
 
@@ -35,6 +41,7 @@ const EMPTY_FILTERS: FilterExpr[] = []
 const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
 const EMPTY_DRAFT_DELETES: Record<string, DraftDeleteState> = {}
 const EMPTY_INSERTS: Record<string, unknown>[] = []
+type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | 'drop_index' | null
 
 function parseObjectName(object: string): { schema: string; table: string } {
   const [schema, table] = object.includes('.') ? object.split('.', 2) : ['public', object]
@@ -47,12 +54,16 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const fetchData = useDataStore((state) => state.fetchData)
   const mutate = useDataStore((state) => state.mutate)
   const mutateBulk = useDataStore((state) => state.mutateBulk)
+  const ddl = useDataStore((state) => state.ddl)
   const setOpts = useDataStore((state) => state.setOpts)
   const setDraftCell = useDataStore((state) => state.setDraftCell)
   const toggleDraftDelete = useDataStore((state) => state.toggleDraftDelete)
   const clearDrafts = useDataStore((state) => state.clearDrafts)
   const stageInsert = useDataStore((state) => state.stageInsert)
   const removeStagedInsert = useDataStore((state) => state.removeStagedInsert)
+  const refreshTree = useWorkspaceStore((state) => state.refreshTree)
+  const closeTab = useWorkspaceStore((state) => state.closeTab)
+  const pushToast = useToastStore((state) => state.push)
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
@@ -60,11 +71,13 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
+  const [activeDDLDialog, setActiveDDLDialog] = useState<DDLDialog>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
   const skipFirstFilterFetch = useRef(true)
 
   const { schema: schemaName, table: tableName } = useMemo(() => parseObjectName(object), [object])
+  const schemaObjects = useWorkspaceStore((state) => state.treeItems[schemaName] ?? [])
 
   useEffect(() => {
     void fetchSchema(connId, object, tabId)
@@ -72,6 +85,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setSelectedRows(new Map())
     setSorting([])
     setEditMode(false)
+    setActiveDDLDialog(null)
     setLocalError(null)
     clearDrafts(tabId)
     skipFirstFilterFetch.current = true
@@ -91,6 +105,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const currentOffset = opts?.offset ?? 0
   const currentLimit = opts?.limit ?? 50
   const pkColumns = useMemo(() => columns.filter((column) => column.is_pk), [columns])
+  const indexChoices = useMemo(
+    () => schemaObjects.filter((item) => item.type === 'index').map((item) => item.name),
+    [schemaObjects]
+  )
   const hasPrimaryKey = pkColumns.length > 0
 
   const rowIdentityEntries = useMemo(() => {
@@ -213,6 +231,21 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
     return () => window.clearTimeout(timeout)
   }, [connId, fetchData, filterSignature, object, tabId])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'r') {
+        event.preventDefault()
+        refresh()
+      }
+      if (event.key === 'Escape') {
+        setActiveDDLDialog(null)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [refresh])
 
   const getDraftValue = useCallback(
     (rowKey: string, columnName: string, fallback: unknown) => {
@@ -401,19 +434,149 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     [connId, editMode, fetchData, mutate, object, schemaName, stageInsert, tabId, tableName]
   )
 
+  const handleDDLSuccess = useCallback(
+    async (title: string, message: string, closeCurrentTab = false) => {
+      await refreshTree(connId)
+      if (closeCurrentTab) {
+        closeTab(tabId)
+      } else {
+        await fetchSchema(connId, object, tabId)
+        await fetchData(connId, object, tabId)
+      }
+      pushToast({ tone: 'success', title, message })
+      setActiveDDLDialog(null)
+    },
+    [closeTab, connId, fetchData, fetchSchema, object, pushToast, refreshTree, tabId]
+  )
+
+  const handleDDLAction = useCallback((action: DDLDialog) => {
+    setLocalError(null)
+    if (action === 'drop_column' && columns.length === 0) {
+      setLocalError('There are no columns available to drop.')
+      return
+    }
+    if (action === 'drop_index' && indexChoices.length === 0) {
+      setLocalError('There are no indexes available to drop in this schema.')
+      return
+    }
+    setActiveDDLDialog(action)
+  }, [columns.length, indexChoices.length])
+
+  const submitAddColumn = useCallback(
+    async (payload: { name: string; type: string; nullable: boolean; default?: string }) => {
+      setIsSaving(true)
+      setLocalError(null)
+      try {
+        await ddl(connId, {
+          type: 'add_column',
+          schema: schemaName,
+          object: tableName,
+          params: payload,
+        })
+        await handleDDLSuccess('Column added', `${payload.name} was added to ${schemaName}.${tableName}.`)
+      } catch (e) {
+        const message = (e as Error).message
+        setLocalError(message)
+        pushToast({ tone: 'error', title: 'Add column failed', message })
+        throw e
+      } finally {
+        setIsSaving(false)
+      }
+    },
+    [connId, ddl, handleDDLSuccess, pushToast, schemaName, tableName]
+  )
+
+  const submitCreateIndex = useCallback(
+    async (payload: { name: string; columns: string[]; unique: boolean }) => {
+      setIsSaving(true)
+      setLocalError(null)
+      try {
+        await ddl(connId, {
+          type: 'create_index',
+          schema: schemaName,
+          object: tableName,
+          params: payload,
+        })
+        await handleDDLSuccess('Index created', `${payload.name} was created for ${schemaName}.${tableName}.`)
+      } catch (e) {
+        const message = (e as Error).message
+        setLocalError(message)
+        pushToast({ tone: 'error', title: 'Create index failed', message })
+        throw e
+      } finally {
+        setIsSaving(false)
+      }
+    },
+    [connId, ddl, handleDDLSuccess, pushToast, schemaName, tableName]
+  )
+
+  const submitDangerousDDL = useCallback(
+    async (dialog: Extract<DDLDialog, 'drop_table' | 'drop_column' | 'drop_index'>, target: string) => {
+      setIsSaving(true)
+      setLocalError(null)
+      try {
+        if (dialog === 'drop_table') {
+          await ddl(connId, {
+            type: 'drop_table',
+            schema: schemaName,
+            object: tableName,
+            params: {},
+          })
+          await handleDDLSuccess('Table dropped', `${schemaName}.${tableName} was removed.`, true)
+        }
+        if (dialog === 'drop_column') {
+          if (!target.trim()) {
+            throw new Error('Column name is required.')
+          }
+          await ddl(connId, {
+            type: 'drop_column',
+            schema: schemaName,
+            object: tableName,
+            params: { name: target.trim() },
+          })
+          await handleDDLSuccess('Column dropped', `${target.trim()} was removed from ${schemaName}.${tableName}.`)
+        }
+        if (dialog === 'drop_index') {
+          if (!target.trim()) {
+            throw new Error('Index name is required.')
+          }
+          await ddl(connId, {
+            type: 'drop_index',
+            schema: schemaName,
+            object: target.trim(),
+            params: {},
+          })
+          await handleDDLSuccess('Index dropped', `${target.trim()} was removed from schema ${schemaName}.`)
+        }
+      } catch (e) {
+        const message = (e as Error).message
+        setLocalError(message)
+        pushToast({ tone: 'error', title: 'Drop action failed', message })
+        throw e
+      } finally {
+        setIsSaving(false)
+      }
+    },
+    [connId, ddl, handleDDLSuccess, pushToast, schemaName, tableName]
+  )
+
   const isInitialLoad = isLoading && rows.length === 0 && !error
+  const classifiedLoadError = error ? classifyDataLoadError(error) : null
 
   if (error && rows.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-        <AlertCircle className="h-10 w-10 text-destructive opacity-70" />
-        <div>
-          <p className="text-sm font-medium text-foreground">Failed to load data</p>
-          <p className="mt-1 text-xs text-muted-foreground">{error}</p>
+      <div className="flex flex-1 items-center justify-center p-6">
+        <div className="w-full max-w-xl space-y-4">
+          <ErrorBanner message={classifiedLoadError?.bannerMessage ?? error} onRetry={refresh} />
+          <EmptyState
+            variant="no_data"
+            title={classifiedLoadError?.title ?? 'Unable to load table'}
+            description={
+              classifiedLoadError?.description ??
+              'The current table did not load. Retry once the connection and database are available.'
+            }
+          />
         </div>
-        <Button size="sm" variant="outline" onClick={refresh}>
-          Retry
-        </Button>
       </div>
     )
   }
@@ -434,26 +597,31 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onToggleEditMode={handleToggleEditMode}
         onSaveAll={() => setShowSaveDialog(true)}
         onCancelAll={handleCancelAll}
+        onDDLAction={handleDDLAction}
       />
 
-      {localError && <ErrorBanner message={localError} onDismiss={() => setLocalError(null)} />}
+      {localError && <div className="mx-2 mt-2"><ErrorBanner message={localError} onDismiss={() => setLocalError(null)} /></div>}
 
       <div className="relative flex flex-1 flex-col overflow-hidden p-1">
         {isInitialLoad ? (
           <div className="flex-1 overflow-auto p-2">
-            <div className="space-y-1">
-              <div className="flex gap-1">
-                {[...Array(6)].map((_, index) => (
-                  <Skeleton key={index} className="h-9 flex-1" />
-                ))}
-              </div>
-              {[...Array(10)].map((_, rowIndex) => (
-                <div key={rowIndex} className="flex gap-1">
-                  {[...Array(6)].map((_, columnIndex) => (
-                    <Skeleton key={columnIndex} className="h-8 flex-1" />
-                  ))}
-                </div>
-              ))}
+            <LoadingSkeleton variant="table" />
+          </div>
+        ) : total === 0 ? (
+          <div className="flex flex-1 items-center justify-center p-4">
+            <div className="w-full max-w-md">
+              <EmptyState
+                variant={activeFilters.length > 0 ? 'no_results' : 'no_data'}
+                actionLabel={activeFilters.length > 0 ? 'Clear Filters' : undefined}
+                onAction={
+                  activeFilters.length > 0
+                    ? () => {
+                        setOpts(tabId, { filters: [], offset: 0 })
+                        void fetchData(connId, object, tabId, { filters: [], offset: 0 })
+                      }
+                    : undefined
+                }
+              />
             </div>
           </div>
         ) : (
@@ -530,6 +698,58 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         saving={isSaving}
         onClose={() => setShowAddDialog(false)}
         onSubmit={handleAddRowSubmit}
+      />
+
+      <AddColumnForm
+        open={activeDDLDialog === 'add_column'}
+        tableName={object}
+        saving={isSaving}
+        onOpenChange={(open) => setActiveDDLDialog(open ? 'add_column' : null)}
+        onSubmit={submitAddColumn}
+      />
+
+      <CreateIndexForm
+        open={activeDDLDialog === 'create_index'}
+        tableName={object}
+        columns={columns}
+        saving={isSaving}
+        onOpenChange={(open) => setActiveDDLDialog(open ? 'create_index' : null)}
+        onSubmit={submitCreateIndex}
+      />
+
+      <DropConfirmDialog
+        open={activeDDLDialog === 'drop_table'}
+        title="Drop Table"
+        description={`Delete ${schemaName}.${tableName} from the database.`}
+        targetLabel="table name"
+        expectedValue={tableName}
+        saving={isSaving}
+        onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_table' : null)}
+        onConfirm={(target) => submitDangerousDDL('drop_table', target)}
+      />
+
+      <DropConfirmDialog
+        open={activeDDLDialog === 'drop_column'}
+        title="Drop Column"
+        description={`Delete a column from ${schemaName}.${tableName}.`}
+        targetLabel="column"
+        expectedValue=""
+        choices={columns.map((column) => column.name)}
+        saving={isSaving}
+        onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_column' : null)}
+        onConfirm={(target) => submitDangerousDDL('drop_column', target)}
+      />
+
+      <DropConfirmDialog
+        open={activeDDLDialog === 'drop_index'}
+        title="Drop Index"
+        description={`Delete an index from schema ${schemaName}.`}
+        targetLabel="index"
+        expectedValue=""
+        choices={indexChoices}
+        saving={isSaving}
+        onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_index' : null)}
+        onConfirm={(target) => submitDangerousDDL('drop_index', target)}
       />
     </div>
   )

@@ -2,8 +2,9 @@ package api
 
 import (
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/qsnake66/infraview/internal/api/handlers"
+	apimiddleware "github.com/qsnake66/infraview/internal/api/middleware"
 	"github.com/qsnake66/infraview/internal/config"
 	"github.com/qsnake66/infraview/internal/connector"
 )
@@ -11,13 +12,15 @@ import (
 func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.Router {
 	r := chi.NewRouter()
 
-	r.Use(middleware.Logger)
-	r.Use(middleware.Recoverer)
-	r.Use(middleware.RequestID)
+	r.Use(chimiddleware.RequestID)
+	r.Use(apimiddleware.Recovery)
+	r.Use(apimiddleware.Logging)
+	r.Use(apimiddleware.Audit)
 
 	connHandler := handlers.NewConnectionsHandler(cfg, manager)
 	objHandler := handlers.NewObjectsHandler(cfg, manager)
 	dataHandler := handlers.NewDataHandler(cfg, manager)
+	ddlHandler := handlers.NewDDLHandler(cfg, manager)
 
 	r.Get("/api/health", handlers.Health)
 
@@ -35,6 +38,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Get("/objects/{name}/data", dataHandler.GetData)
 			r.Post("/mutate", dataHandler.Mutate)
 			r.Post("/mutate/bulk", dataHandler.MutateBulk)
+			r.Post("/ddl", ddlHandler.Execute)
 		})
 	})
 

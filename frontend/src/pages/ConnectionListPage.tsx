@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react'
 import { useTheme } from 'next-themes'
-import { Plus, Sun, Moon, Loader2 } from 'lucide-react'
+import { Plus, Sun, Moon, Settings } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { ConnectionCard } from '@/components/ConnectionCard'
 import { ConnectionWizard } from '@/components/ConnectionWizard'
+import { EmptyState } from '@/components/EmptyState'
+import { ErrorBanner } from '@/components/ErrorBanner'
+import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import type { Connection } from '@/types/api'
+import { useNavigate } from 'react-router-dom'
 
 export default function ConnectionListPage() {
+  const navigate = useNavigate()
   const { resolvedTheme, setTheme } = useTheme()
   const { connections, loading, error, fetch: fetchConnections, remove } = useConnectionStore()
   const [wizardOpen, setWizardOpen] = useState(false)
@@ -51,6 +56,19 @@ export default function ConnectionListPage() {
 
           {/* Right — theme toggle */}
           <div className="flex items-center gap-2 animate-fade-in-up" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
+            <button
+              onClick={() => navigate('/settings')}
+              className={cn(
+                'group relative h-8 w-8 flex items-center justify-center rounded-sm',
+                'border border-border text-muted-foreground',
+                'hover:border-amber-500/50 hover:text-amber-500',
+                'transition-all duration-200'
+              )}
+              title="Settings"
+            >
+              <div className="absolute inset-0 rounded-sm bg-amber-500/0 group-hover:bg-amber-500/5 transition-colors duration-200" />
+              <Settings className="relative z-10 h-3.5 w-3.5 transition-transform duration-300 group-hover:rotate-12" />
+            </button>
             {mounted && (
               <button
                 onClick={() => setTheme(resolvedTheme === 'dark' ? 'light' : 'dark')}
@@ -78,56 +96,18 @@ export default function ConnectionListPage() {
 
         {/* Loading */}
         {loading && (
-          <div className="flex items-center justify-center py-28">
-            <div className="flex items-center gap-2.5 text-muted-foreground text-sm">
-              <Loader2 className="h-4 w-4 animate-spin text-amber-500/60" />
-              <span className="font-mono text-xs tracking-wider">connecting...</span>
-            </div>
-          </div>
+          <LoadingSkeleton variant="connections" />
         )}
 
         {/* Error */}
         {error && (
-          <div className="relative rounded-sm border border-destructive/40 bg-destructive/5 px-4 py-3 text-sm text-destructive">
-            <span className="font-mono text-xs opacity-50 mr-2">ERR</span>
-            {error}
-          </div>
+          <ErrorBanner message={error} onRetry={() => void fetchConnections()} />
         )}
 
         {/* Empty state */}
         {!loading && !error && connections.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-28 text-center animate-fade-in-up" style={{ animationFillMode: 'both' }}>
-            <div className="relative mb-6">
-              <div className="h-16 w-16 rounded-sm border border-border bg-card flex items-center justify-center">
-                <svg viewBox="0 0 24 24" className="h-7 w-7 text-muted-foreground/30" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <ellipse cx="12" cy="5" rx="9" ry="3" />
-                  <path d="M3 5V19A9 3 0 0 0 21 19V5" />
-                  <path d="M3 12A9 3 0 0 0 21 12" />
-                </svg>
-              </div>
-              {/* Amber corner brackets */}
-              <div className="absolute -left-px -top-px h-2.5 w-2.5 bg-amber-500/60" />
-              <div className="absolute -right-px -top-px h-2.5 w-2.5 bg-amber-500/60" />
-              <div className="absolute -left-px -bottom-px h-2.5 w-2.5 bg-amber-500/60" />
-              <div className="absolute -right-px -bottom-px h-2.5 w-2.5 bg-amber-500/60" />
-            </div>
-            <p className="font-medium text-foreground font-mono text-sm">No connections</p>
-            <p className="mt-1.5 text-xs text-muted-foreground max-w-xs">
-              Add your first PostgreSQL, Redis, or Kafka connection to start exploring your infrastructure
-            </p>
-            <button
-              onClick={openCreate}
-              className={cn(
-                'mt-7 group flex items-center gap-2',
-                'rounded-sm border border-amber-500/40 bg-amber-500/8 px-4 py-2',
-                'text-sm font-medium text-amber-500 font-mono',
-                'hover:bg-amber-500/15 hover:border-amber-500/70',
-                'transition-all duration-200'
-              )}
-            >
-              <Plus className="h-4 w-4 transition-transform duration-200 group-hover:rotate-90" />
-              New Connection
-            </button>
+          <div className="animate-fade-in-up py-16" style={{ animationFillMode: 'both' }}>
+            <EmptyState variant="no_connections" actionLabel="New Connection" onAction={openCreate} />
           </div>
         )}
 

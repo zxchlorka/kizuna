@@ -77,6 +77,7 @@ type MutateOp struct {
 
 type DDLOp struct {
 	Type   string         `json:"type"`
+	Schema string         `json:"schema"`
 	Object string         `json:"object"`
 	Params map[string]any `json:"params"`
 }

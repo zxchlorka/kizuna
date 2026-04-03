@@ -21,7 +21,7 @@ func (p *PostgresConnector) listSchemas(ctx context.Context) ([]connector.Object
 		 WHERE schema_name NOT IN ('pg_catalog','information_schema','pg_toast')
 		 ORDER BY schema_name`)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list schemas: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to list schemas: %w", err))
 	}
 	defer rows.Close()
 
@@ -29,26 +29,41 @@ func (p *PostgresConnector) listSchemas(ctx context.Context) ([]connector.Object
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
-			return nil, err
+			return nil, normalizePostgresError(err)
 		}
 		objects = append(objects, connector.Object{
 			Name: name,
 			Type: "schema",
 		})
 	}
-	return objects, rows.Err()
+	return objects, normalizePostgresError(rows.Err())
 }
 
 func (p *PostgresConnector) listTables(ctx context.Context, schema string) ([]connector.Object, error) {
 	rows, err := p.pool.Query(ctx,
-		`SELECT t.table_name, t.table_type, COALESCE(s.n_live_tup, 0)
-		 FROM information_schema.tables t
-		 LEFT JOIN pg_stat_user_tables s
-		     ON s.schemaname = t.table_schema AND s.relname = t.table_name
-		 WHERE t.table_schema = $1
-		 ORDER BY t.table_name`, schema)
+		`SELECT DISTINCT name, type, row_count
+		 FROM (
+		 	SELECT
+		 		t.table_name AS name,
+		 		LOWER(t.table_type) AS type,
+		 		COALESCE(s.n_live_tup, 0)::bigint AS row_count
+		 	FROM information_schema.tables t
+		 	LEFT JOIN pg_stat_user_tables s
+		 	    ON s.schemaname = t.table_schema AND s.relname = t.table_name
+		 	WHERE t.table_schema = $1
+
+		 	UNION ALL
+
+		 	SELECT
+		 		i.indexname AS name,
+		 		'index' AS type,
+		 		0::bigint AS row_count
+		 	FROM pg_indexes i
+		 	WHERE i.schemaname = $1
+		 ) objects
+		 ORDER BY type, name`, schema)
 	if err != nil {
-		return nil, fmt.Errorf("failed to list tables: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to list tables: %w", err))
 	}
 	defer rows.Close()
 
@@ -57,16 +72,19 @@ func (p *PostgresConnector) listTables(ctx context.Context, schema string) ([]co
 		var name, tableType string
 		var rowCount int64
 		if err := rows.Scan(&name, &tableType, &rowCount); err != nil {
-			return nil, err
+			return nil, normalizePostgresError(err)
 		}
 		objects = append(objects, connector.Object{
 			Name:     name,
-			Type:     tableType,
+			Type:     normalizeObjectType(tableType),
 			Schema:   schema,
 			RowCount: rowCount,
 		})
 	}
-	return objects, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, normalizePostgresError(err)
+	}
+	return objects, nil
 }
 
 func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*connector.Schema, error) {
@@ -85,7 +103,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		WHERE table_name = $1 AND table_schema = $2
 		ORDER BY ordinal_position`, table, schema)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get schema: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to get schema: %w", err))
 	}
 	defer rows.Close()
 
@@ -97,7 +115,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		var colDefault *string
 
 		if err := rows.Scan(&col.Name, &col.DataType, &nullable, &colDefault); err != nil {
-			return nil, err
+			return nil, normalizePostgresError(err)
 		}
 
 		col.Nullable = nullable == "YES"
@@ -107,7 +125,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		columns = append(columns, col)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, normalizePostgresError(err)
 	}
 	if len(columns) == 0 {
 		return &connector.Schema{Columns: columns}, nil
@@ -124,21 +142,21 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		   AND tc.constraint_type = 'PRIMARY KEY'
 		 ORDER BY kcu.ordinal_position`, schema, table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get primary keys: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to get primary keys: %w", err))
 	}
 	defer pkRows.Close()
 
 	for pkRows.Next() {
 		var colName string
 		if err := pkRows.Scan(&colName); err != nil {
-			return nil, err
+			return nil, normalizePostgresError(err)
 		}
 		if idx, ok := indexByName[colName]; ok {
 			columns[idx].IsPK = true
 		}
 	}
 	if err := pkRows.Err(); err != nil {
-		return nil, err
+		return nil, normalizePostgresError(err)
 	}
 
 	fkRows, err := p.pool.Query(ctx,
@@ -160,7 +178,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		   AND tc.table_name = $2
 		   AND tc.constraint_type = 'FOREIGN KEY'`, schema, table)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get foreign keys: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to get foreign keys: %w", err))
 	}
 	defer fkRows.Close()
 
@@ -171,7 +189,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 			fkColumn string
 		)
 		if err := fkRows.Scan(&colName, &fkTable, &fkColumn); err != nil {
-			return nil, err
+			return nil, normalizePostgresError(err)
 		}
 		if idx, ok := indexByName[colName]; ok {
 			columns[idx].IsFK = true
@@ -180,7 +198,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		}
 	}
 	if err := fkRows.Err(); err != nil {
-		return nil, err
+		return nil, normalizePostgresError(err)
 	}
 
 	return &connector.Schema{Columns: columns}, nil
@@ -193,4 +211,15 @@ func parseSchemaTable(object string) (string, string, error) {
 		return "", "", fmt.Errorf("invalid object name %q: expected schema.table", object)
 	}
 	return parts[0], parts[1], nil
+}
+
+func normalizeObjectType(tableType string) string {
+	switch strings.ToLower(tableType) {
+	case "base table":
+		return "table"
+	case "view":
+		return "view"
+	default:
+		return strings.ToLower(tableType)
+	}
 }

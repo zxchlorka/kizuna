@@ -21,15 +21,15 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	path := r.URL.Query().Get("path")
 
-	c, err := h.manager.Get(id)
+	c, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	objects, err := c.ListObjects(r.Context(), path)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
@@ -40,15 +40,15 @@ func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	name := chi.URLParam(r, "name")
 
-	c, err := h.manager.Get(id)
+	c, err := h.manager.Get(r.Context(), id)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 
 	schema, err := c.GetSchema(r.Context(), name)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeConnectorError(w, err)
 		return
 	}
 

@@ -1,4 +1,5 @@
 import { Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { DDLDropdown, type TableDDLAction } from '@/components/DDL/DDLDropdown'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
@@ -17,6 +18,7 @@ interface ToolbarProps {
   onToggleEditMode: () => void
   onSaveAll: () => void
   onCancelAll: () => void
+  onDDLAction: (action: TableDDLAction) => void
 }
 
 export function Toolbar({
@@ -33,6 +35,7 @@ export function Toolbar({
   onToggleEditMode,
   onSaveAll,
   onCancelAll,
+  onDDLAction,
 }: ToolbarProps) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border bg-background px-3 py-2">
@@ -62,6 +65,8 @@ export function Toolbar({
           <Plus className="h-3.5 w-3.5" />
           <span>Add Row</span>
         </Button>
+
+        <DDLDropdown disabled={loading} onAction={onDDLAction} />
 
         {selectedCount > 0 && (
           <Button

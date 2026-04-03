@@ -1,0 +1,14 @@
+.git
+.idea
+.claude
+bin
+docs/tmp
+frontend/dist
+frontend/node_modules
+node_modules
+config.json
+*.log
+*.png
+*.jpg
+*.jpeg
+.playwright-mcp

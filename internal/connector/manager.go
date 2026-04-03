@@ -1,6 +1,8 @@
 package connector
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -8,7 +10,7 @@ import (
 )
 
 // ConnectorFactory creates a Connector from a connection config.
-type ConnectorFactory func(cfg config.ConnectionConfig, encKey string) (Connector, error)
+type ConnectorFactory func(ctx context.Context, cfg config.ConnectionConfig, encKey string) (Connector, error)
 
 // ConnectionManager manages lazy-initialized connectors.
 type ConnectionManager struct {
@@ -32,20 +34,32 @@ func (m *ConnectionManager) RegisterFactory(connType string, factory ConnectorFa
 }
 
 // Get returns a connector for the given connection ID, creating it lazily if needed.
-func (m *ConnectionManager) Get(id string) (Connector, error) {
+func (m *ConnectionManager) Get(ctx context.Context, id string) (Connector, error) {
 	m.mu.RLock()
 	if c, ok := m.connectors[id]; ok {
 		m.mu.RUnlock()
-		return c, nil
+		if err := c.Ping(ctx); err == nil {
+			return c, nil
+		}
+		m.Remove(id)
+		return m.createConnector(ctx, id, true)
 	}
 	m.mu.RUnlock()
 
+	return m.createConnector(ctx, id, true)
+}
+
+func (m *ConnectionManager) createConnector(ctx context.Context, id string, retry bool) (Connector, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	// Double-check after acquiring write lock
 	if c, ok := m.connectors[id]; ok {
-		return c, nil
+		if err := c.Ping(ctx); err == nil {
+			return c, nil
+		}
+		c.Close()
+		delete(m.connectors, id)
 	}
 
 	connCfg, ok := m.config.GetConnection(id)
@@ -58,13 +72,20 @@ func (m *ConnectionManager) Get(id string) (Connector, error) {
 		return nil, fmt.Errorf("unsupported connection type: %s", connCfg.Type)
 	}
 
-	c, err := factory(connCfg, m.config.EncryptionKey)
+	c, err := factory(ctx, connCfg, m.config.EncryptionKey)
+	if err != nil && retry && isConnectionError(err) {
+		c, err = factory(ctx, connCfg, m.config.EncryptionKey)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connector for %q: %w", id, err)
 	}
 
 	m.connectors[id] = c
 	return c, nil
+}
+
+func isConnectionError(err error) bool {
+	return errors.Is(err, ErrUnavailable) || errors.Is(err, ErrTimeout)
 }
 
 // Remove closes and removes a connector from the pool.

@@ -45,12 +45,12 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create connection pool: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to create connection pool: %w", err))
 	}
 
 	if err := pool.Ping(ctx); err != nil {
 		pool.Close()
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to ping database: %w", err))
 	}
 
 	slog.Info("postgres connector created", "host", cfg.Host, "database", cfg.Database)
@@ -62,14 +62,14 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 }
 
 func (p *PostgresConnector) Ping(ctx context.Context) error {
-	return p.pool.Ping(ctx)
+	return normalizePostgresError(p.pool.Ping(ctx))
 }
 
 func (p *PostgresConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, error) {
 	var version, database string
 	err := p.pool.QueryRow(ctx, "SELECT version(), current_database()").Scan(&version, &database)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get info: %w", err)
+		return nil, normalizePostgresError(fmt.Errorf("failed to get info: %w", err))
 	}
 
 	return &connector.ConnInfo{
@@ -84,10 +84,6 @@ func (p *PostgresConnector) Execute(ctx context.Context, command string) (*conne
 	return nil, fmt.Errorf("not implemented")
 }
 
-func (p *PostgresConnector) DDL(ctx context.Context, op connector.DDLOp) error {
-	return fmt.Errorf("not implemented")
-}
-
 func (p *PostgresConnector) Close() error {
 	p.pool.Close()
 	return nil
@@ -95,7 +91,7 @@ func (p *PostgresConnector) Close() error {
 
 // NewFactory returns a ConnectorFactory for PostgreSQL.
 func NewFactory() connector.ConnectorFactory {
-	return func(cfg config.ConnectionConfig, encKey string) (connector.Connector, error) {
-		return New(context.Background(), cfg, encKey)
+	return func(ctx context.Context, cfg config.ConnectionConfig, encKey string) (connector.Connector, error) {
+		return New(ctx, cfg, encKey)
 	}
 }
