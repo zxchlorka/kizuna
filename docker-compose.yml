@@ -7,8 +7,6 @@ services:
       - infraview-data:/data
     environment:
       CONFIG_PATH: /data/config.json
-    depends_on:
-      - postgres
 
   infraview-debug:
     build:
