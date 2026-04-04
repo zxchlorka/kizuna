@@ -8,6 +8,7 @@ import type {
   DataResult,
   DDLOp,
   MutateOp,
+  ObjectInfo,
   TableRow,
 } from '@/types/api'
 
@@ -25,6 +26,8 @@ interface TabData {
   rows: TableRow[]
   total: number
   loading: boolean
+  objectInfo: ObjectInfo | null
+  objectInfoLoading: boolean
   error: string | null
   opts: DataOpts
   draftUpdates: Record<string, DraftUpdate>
@@ -32,12 +35,14 @@ interface TabData {
   draftInserts: Record<string, unknown>[]
   schemaRequestId: number
   dataRequestId: number
+  objectInfoRequestId: number
 }
 
 interface DataStore {
   tabs: Record<string, TabData>
   fetchSchema: (connId: string, object: string, tabId: string) => Promise<void>
   fetchData: (connId: string, object: string, tabId: string, opts?: Partial<DataOpts>) => Promise<void>
+  fetchObjectInfo: (connId: string, object: string, tabId: string) => Promise<void>
   mutate: (connId: string, op: MutateOp, tabId: string) => Promise<void>
   mutateBulk: (connId: string, op: BulkMutateOp, tabId: string) => Promise<BulkMutateResult>
   ddl: (connId: string, op: DDLOp) => Promise<void>
@@ -64,6 +69,8 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       rows: [],
       total: 0,
       loading: false,
+      objectInfo: null,
+      objectInfoLoading: false,
       error: null,
       opts: { ...DEFAULT_OPTS },
       draftUpdates: {},
@@ -71,6 +78,7 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       draftInserts: [],
       schemaRequestId: 0,
       dataRequestId: 0,
+      objectInfoRequestId: 0,
     }
   )
 }
@@ -212,6 +220,72 @@ export const useDataStore = create<DataStore>((set, get) => ({
           tabs: {
             ...state.tabs,
             [tabId]: { ...tab, loading: false, error: (e as Error).message },
+          },
+        }
+      })
+    }
+  },
+
+  fetchObjectInfo: async (connId: string, object: string, tabId: string) => {
+    const requestId = (() => {
+      let nextRequestId = 1
+      set((state) => {
+        const tab = getOrInitTab(state.tabs, tabId)
+        nextRequestId = tab.objectInfoRequestId + 1
+        return {
+          tabs: {
+            ...state.tabs,
+            [tabId]: {
+              ...tab,
+              objectInfoRequestId: nextRequestId,
+              objectInfoLoading: true,
+              error: null,
+            },
+          },
+        }
+      })
+      return nextRequestId
+    })()
+
+    try {
+      const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/info`)
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(body.error || res.statusText)
+      }
+      const info: ObjectInfo = await res.json()
+      set((state) => {
+        const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.objectInfoRequestId !== requestId) {
+          return state
+        }
+        return {
+          tabs: {
+            ...state.tabs,
+            [tabId]: {
+              ...tab,
+              objectInfo: info,
+              objectInfoLoading: false,
+              error: null,
+            },
+          },
+        }
+      })
+    } catch (e) {
+      set((state) => {
+        const tab = getOrInitTab(state.tabs, tabId)
+        if (tab.objectInfoRequestId !== requestId) {
+          return state
+        }
+        return {
+          tabs: {
+            ...state.tabs,
+            [tabId]: {
+              ...tab,
+              objectInfo: null,
+              objectInfoLoading: false,
+              error: (e as Error).message,
+            },
           },
         }
       })

@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ProductionBanner } from '@/components/ProductionBanner'
 import { useConnectionStore } from '@/stores/connections'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
 
 export default function DataViewPage() {
@@ -34,11 +35,19 @@ export default function DataViewPage() {
 
         <div className="flex flex-1 overflow-hidden">
           {activeTab ? (
-            <PgTableView
-              connId={activeTab.connId}
-              object={activeTab.object}
-              tabId={activeTab.id}
-            />
+            activeTab.objectType === 'index' ? (
+              <IndexInspectorView
+                connId={activeTab.connId}
+                object={activeTab.object}
+                tabId={activeTab.id}
+              />
+            ) : (
+              <PgTableView
+                connId={activeTab.connId}
+                object={activeTab.object}
+                tabId={activeTab.id}
+              />
+            )
           ) : (
             <div className="flex flex-1 items-center justify-center p-6">
               <div className="w-full max-w-md">

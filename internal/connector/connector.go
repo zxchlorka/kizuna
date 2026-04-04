@@ -7,6 +7,7 @@ type Connector interface {
 	Ping(ctx context.Context) error
 	GetInfo(ctx context.Context) (*ConnInfo, error)
 	ListObjects(ctx context.Context, path string) ([]Object, error)
+	GetObjectInfo(ctx context.Context, object string) (*ObjectInfo, error)
 	GetSchema(ctx context.Context, object string) (*Schema, error)
 	GetData(ctx context.Context, object string, opts DataOpts) (*DataResult, error)
 	Execute(ctx context.Context, command string) (*ExecResult, error)
@@ -25,10 +26,23 @@ type ConnInfo struct {
 }
 
 type Object struct {
-	Name     string `json:"name"`
-	Type     string `json:"type"`
-	Schema   string `json:"schema"`
-	RowCount int64  `json:"row_count"`
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Schema     string `json:"schema"`
+	RowCount   int64  `json:"row_count"`
+	ParentName string `json:"parent_name,omitempty"`
+}
+
+type ObjectInfo struct {
+	Name       string   `json:"name"`
+	Schema     string   `json:"schema"`
+	ObjectType string   `json:"object_type"`
+	OwnerTable string   `json:"owner_table,omitempty"`
+	Columns    []string `json:"columns,omitempty"`
+	Method     string   `json:"method,omitempty"`
+	IsUnique   bool     `json:"is_unique"`
+	Predicate  *string  `json:"predicate,omitempty"`
+	Definition string   `json:"definition,omitempty"`
 }
 
 type Schema struct {

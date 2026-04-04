@@ -41,12 +41,13 @@ func (p *PostgresConnector) listSchemas(ctx context.Context) ([]connector.Object
 
 func (p *PostgresConnector) listTables(ctx context.Context, schema string) ([]connector.Object, error) {
 	rows, err := p.pool.Query(ctx,
-		`SELECT DISTINCT name, type, row_count
+		`SELECT DISTINCT name, type, row_count, parent_name
 		 FROM (
 		 	SELECT
 		 		t.table_name AS name,
 		 		LOWER(t.table_type) AS type,
-		 		COALESCE(s.n_live_tup, 0)::bigint AS row_count
+		 		COALESCE(s.n_live_tup, 0)::bigint AS row_count,
+		 		NULL::text AS parent_name
 		 	FROM information_schema.tables t
 		 	LEFT JOIN pg_stat_user_tables s
 		 	    ON s.schemaname = t.table_schema AND s.relname = t.table_name
@@ -57,7 +58,8 @@ func (p *PostgresConnector) listTables(ctx context.Context, schema string) ([]co
 		 	SELECT
 		 		i.indexname AS name,
 		 		'index' AS type,
-		 		0::bigint AS row_count
+		 		0::bigint AS row_count,
+		 		i.tablename AS parent_name
 		 	FROM pg_indexes i
 		 	WHERE i.schemaname = $1
 		 ) objects
@@ -71,14 +73,20 @@ func (p *PostgresConnector) listTables(ctx context.Context, schema string) ([]co
 	for rows.Next() {
 		var name, tableType string
 		var rowCount int64
-		if err := rows.Scan(&name, &tableType, &rowCount); err != nil {
+		var parentName *string
+		if err := rows.Scan(&name, &tableType, &rowCount, &parentName); err != nil {
 			return nil, normalizePostgresError(err)
 		}
+		parent := ""
+		if parentName != nil {
+			parent = *parentName
+		}
 		objects = append(objects, connector.Object{
-			Name:     name,
-			Type:     normalizeObjectType(tableType),
-			Schema:   schema,
-			RowCount: rowCount,
+			Name:       name,
+			Type:       normalizeObjectType(tableType),
+			Schema:     schema,
+			RowCount:   rowCount,
+			ParentName: parent,
 		})
 	}
 	if err := rows.Err(); err != nil {

@@ -41,7 +41,7 @@ const EMPTY_FILTERS: FilterExpr[] = []
 const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
 const EMPTY_DRAFT_DELETES: Record<string, DraftDeleteState> = {}
 const EMPTY_INSERTS: Record<string, unknown>[] = []
-type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | 'drop_index' | null
+type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | null
 
 function parseObjectName(object: string): { schema: string; table: string } {
   const [schema, table] = object.includes('.') ? object.split('.', 2) : ['public', object]
@@ -77,7 +77,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const skipFirstFilterFetch = useRef(true)
 
   const { schema: schemaName, table: tableName } = useMemo(() => parseObjectName(object), [object])
-  const schemaObjects = useWorkspaceStore((state) => state.treeItems[schemaName] ?? [])
 
   useEffect(() => {
     void fetchSchema(connId, object, tabId)
@@ -105,10 +104,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const currentOffset = opts?.offset ?? 0
   const currentLimit = opts?.limit ?? 50
   const pkColumns = useMemo(() => columns.filter((column) => column.is_pk), [columns])
-  const indexChoices = useMemo(
-    () => schemaObjects.filter((item) => item.type === 'index').map((item) => item.name),
-    [schemaObjects]
-  )
   const hasPrimaryKey = pkColumns.length > 0
 
   const rowIdentityEntries = useMemo(() => {
@@ -455,12 +450,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       setLocalError('There are no columns available to drop.')
       return
     }
-    if (action === 'drop_index' && indexChoices.length === 0) {
-      setLocalError('There are no indexes available to drop in this schema.')
-      return
-    }
     setActiveDDLDialog(action)
-  }, [columns.length, indexChoices.length])
+  }, [columns.length])
 
   const submitAddColumn = useCallback(
     async (payload: { name: string; type: string; nullable: boolean; default?: string }) => {
@@ -511,7 +502,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   )
 
   const submitDangerousDDL = useCallback(
-    async (dialog: Extract<DDLDialog, 'drop_table' | 'drop_column' | 'drop_index'>, target: string) => {
+    async (dialog: Extract<DDLDialog, 'drop_table' | 'drop_column'>, target: string) => {
       setIsSaving(true)
       setLocalError(null)
       try {
@@ -535,18 +526,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             params: { name: target.trim() },
           })
           await handleDDLSuccess('Column dropped', `${target.trim()} was removed from ${schemaName}.${tableName}.`)
-        }
-        if (dialog === 'drop_index') {
-          if (!target.trim()) {
-            throw new Error('Index name is required.')
-          }
-          await ddl(connId, {
-            type: 'drop_index',
-            schema: schemaName,
-            object: target.trim(),
-            params: {},
-          })
-          await handleDDLSuccess('Index dropped', `${target.trim()} was removed from schema ${schemaName}.`)
         }
       } catch (e) {
         const message = (e as Error).message
@@ -738,18 +717,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         saving={isSaving}
         onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_column' : null)}
         onConfirm={(target) => submitDangerousDDL('drop_column', target)}
-      />
-
-      <DropConfirmDialog
-        open={activeDDLDialog === 'drop_index'}
-        title="Drop Index"
-        description={`Delete an index from schema ${schemaName}.`}
-        targetLabel="index"
-        expectedValue=""
-        choices={indexChoices}
-        saving={isSaving}
-        onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_index' : null)}
-        onConfirm={(target) => submitDangerousDDL('drop_index', target)}
       />
     </div>
   )
