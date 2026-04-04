@@ -1,4 +1,4 @@
-.PHONY: dev-backend dev-frontend build-frontend build docker docker-run test clean
+.PHONY: dev-backend dev-frontend build-frontend build docker docker-run compose-rebuild test clean
 
 dev-backend:
 	cd cmd/infraview && go run .
@@ -17,6 +17,9 @@ docker:
 
 docker-run:
 	docker run -p 9090:9090 -v infraview-data:/data infraview:latest
+
+compose-rebuild:
+	docker compose up --build -d infraview
 
 test:
 	go test ./...
