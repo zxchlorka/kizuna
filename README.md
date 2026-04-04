@@ -1,120 +1,130 @@
 # InfraView
 
-InfraView is a single-binary web app for exploring and editing PostgreSQL data with a focused UI for schema browsing, table data workflows, and safe operational changes.
+Веб-приложение для просмотра и управления данными в PostgreSQL.
+Один инструмент вместо разрозненных утилит для подключения, просмотра схем и работы с таблицами.
 
-Current scope is `Phase 1 / PostgreSQL`:
+## Возможности
 
-- saved PostgreSQL connections with encrypted passwords
-- object tree for schemas, tables, and indexes
-- paginated table view with sorting, filters, inline edits, inserts, deletes, and batch save
-- DDL flows for create/drop table, add/drop column, and create/drop index
-- structured request logging, panic recovery, and audit logging for write operations
-- light, dark, and system theme support
+- Добавлять PostgreSQL подключения через UI (имя, хост, порт, БД, логин, пароль)
+- Тестировать соединение с замером latency
+- Просматривать дерево объектов: схемы → таблицы (с количеством строк)
+- Просматривать структуру таблицы: колонки, типы, PK/FK
+- Шифровать пароли подключений (AES-256-GCM)
+- Тёмная/светлая/системная тема
 
-## Quick Start
+## Стек
+
+| Слой | Технологии |
+|------|-----------|
+| Backend | Go 1.26, Chi v5, pgx/v5 |
+| Frontend | React 18, TypeScript, Vite, shadcn/ui, Zustand, TanStack Table |
+| Deploy | Docker multi-stage, go:embed (один бинарь) |
+| Порт | 9090 |
+
+## Структура проекта
+
+```
+cmd/infraview/main.go              — entrypoint
+internal/
+  config/
+    config.go                      — загрузка/сохранение config.json
+    crypto.go                      — AES-256-GCM шифрование паролей
+  connector/
+    connector.go                   — Connector interface + общие типы
+    manager.go                     — ConnectionManager (lazy init pool)
+    postgres/
+      postgres.go                  — PostgreSQL коннектор (Ping, GetInfo)
+      schema.go                    — ListObjects, GetSchema
+  api/
+    router.go                      — Chi роутер, все маршруты
+    handlers/
+      health.go                    — GET /api/health
+      connections.go               — CRUD подключений + /test + /info
+      objects.go                   — /objects, /objects/:name/schema
+  server/
+    server.go                      — HTTP сервер + SPA fallback
+frontend/
+  src/                             — React приложение (Vite)
+frontend.go                        — go:embed для frontend/dist
+Dockerfile                         — multi-stage: frontend → backend → final/debug
+Compose configuration              — infraview + infraview-debug + postgres
+```
+
+## REST API
+
+```
+GET    /api/health
+GET    /api/connections
+POST   /api/connections
+PUT    /api/connections/:id
+DELETE /api/connections/:id
+POST   /api/connections/:id/test       → {ok, latency_ms}
+GET    /api/connections/:id/info
+GET    /api/connections/:id/objects?path=
+GET    /api/connections/:id/objects/:name/schema
+```
+
+Все ошибки: `{"error": "message"}` + соответствующий HTTP код.
+
+## Как запустить
+
+### Docker (рекомендуется)
 
 ```bash
-cp docker-compose.example.yml docker-compose.local.yml
-docker compose -f docker-compose.local.yml up -d --build
-open http://localhost:9090
+# Рекомендуемый workflow: пересобрать и поднять рабочий стек приложения
+make compose-rebuild
+
+# Эквивалент напрямую через Docker Compose
+docker compose up --build -d postgres infraview
+
+# Только postgres (для локальной разработки)
+docker compose up postgres
 ```
 
-The app listens on `9090`. PostgreSQL example credentials from the compose file:
+Приложение доступно на [http://localhost:9090](http://localhost:9090)
 
-- host: `localhost`
-- port: `5432`
-- database: `devdb`
-- username: `dev`
-- password: `dev`
-
-## Configuration
-
-InfraView stores runtime config in JSON:
-
-- local default: `./config.json`
-- Docker default: `/data/config.json`
-- override path with `CONFIG_PATH`
-
-Security notes:
-
-- connection passwords are stored encrypted with `AES-256-GCM`
-- do not commit real `config.json` files or production credentials
-- use explicit connection tags such as `production` to enable safety warnings in the UI
-
-## Development
-
-Backend:
+### С отладчиком (Delve remote)
 
 ```bash
-make dev-backend
+docker compose up infraview-debug
 ```
 
-Frontend:
+Затем в GoLand: `Run → Edit Configurations → + → Go Remote → localhost:2345`
+
+### Локально (без Docker)
 
 ```bash
-make dev-frontend
+# 1. Поднять postgres
+docker compose up postgres
+
+# 2. Собрать фронт
+cd frontend && npm install && npm run build && cd ..
+
+# 3. Запустить backend
+go run ./cmd/infraview
 ```
 
-Checks:
+Config сохраняется в `./config.json` (создаётся автоматически при первом запуске).
 
-```bash
-make test
-npm --prefix frontend run lint
-npm --prefix frontend run build
+## Переменные окружения
+
+| Переменная | По умолчанию | Описание |
+|-----------|-------------|---------|
+| `CONFIG_PATH` | `./config.json` | Путь к файлу конфигурации |
+
+В Docker `CONFIG_PATH=/data/config.json` задан через `ENV` в Dockerfile.
+
+## Архитектура
+
+Ключевой принцип — **единый Connector interface**. API-слой не знает тип источника данных, получает `Connector` из `ConnectionManager` и вызывает методы. Инициализация подключений выполняется лениво, по запросу.
+
+```
+HTTP Request
+    → Chi Router
+    → Handler (connections/objects)
+    → ConnectionManager.Get(id)   ← lazy init
+    → Connector (Postgres)
+    → Response JSON
 ```
 
-## Docker
-
-Build the production image:
-
-```bash
-docker build -t infraview:latest .
-```
-
-Run the packaged app:
-
-```bash
-docker run --rm -p 9090:9090 -v "$(pwd)/data:/data" infraview:latest
-```
-
-The repository also includes:
-
-- `docker-compose.yml` for local app + postgres + debug flow
-- `docker-compose.example.yml` as a clean copyable example for end users
-
-## Screenshots
-
-Key UI surfaces covered in Sprint 3:
-
-- connection list with connection health and settings access
-- workspace view with object tree, table tabs, production banner, and DDL controls
-- settings page with light/dark/system theme switching
-
-Browser screenshots are intended to be captured during QA runs against the Dockerized app.
-
-## Architecture
-
-High-level request flow:
-
-```text
-Browser UI
-  -> Chi router / handlers
-  -> ConnectionManager (lazy connector lifecycle)
-  -> Connector interface
-  -> PostgreSQL connector
-  -> JSON response
-```
-
-Key rules in this repository:
-
-- API handlers stay source-agnostic and always work through `ConnectionManager`
-- `internal/connector/connector.go` remains the architectural core
-- frontend assets are embedded into the Go binary via `frontend.go`
-
-More details: [docs/CURRENT_ARCHITECTURE.md](docs/CURRENT_ARCHITECTURE.md)
-
-## Roadmap
-
-- Sprint 4: SQL console and `EXPLAIN ANALYZE`
-- Phase 2: Redis connector
-- Phase 3: Kafka connector
+Пароли шифруются перед записью в `config.json` и расшифровываются при создании коннектора.
