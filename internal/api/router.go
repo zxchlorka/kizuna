@@ -21,6 +21,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	objHandler := handlers.NewObjectsHandler(cfg, manager)
 	dataHandler := handlers.NewDataHandler(cfg, manager)
 	ddlHandler := handlers.NewDDLHandler(cfg, manager)
+	sqlHandler := handlers.NewSQLHandler(cfg, manager)
 
 	r.Get("/api/health", handlers.Health)
 
@@ -40,6 +41,13 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Post("/mutate", dataHandler.Mutate)
 			r.Post("/mutate/bulk", dataHandler.MutateBulk)
 			r.Post("/ddl", ddlHandler.Execute)
+			r.Post("/execute", sqlHandler.Execute)
+			r.Post("/execute-multi", sqlHandler.ExecuteMulti)
+			r.Post("/explain", sqlHandler.Explain)
+			r.Post("/analyze", sqlHandler.Analyze)
+			r.Get("/completions", sqlHandler.Completions)
+			r.Get("/history", sqlHandler.History)
+			r.Delete("/history", sqlHandler.ClearHistory)
 		})
 	})
 

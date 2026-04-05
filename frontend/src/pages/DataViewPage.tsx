@@ -8,6 +8,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
+import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
 
 export default function DataViewPage() {
   const { id } = useParams<{ id: string }>()
@@ -29,13 +30,15 @@ export default function DataViewPage() {
     <div className="flex h-screen bg-background">
       <Sidebar connId={id} />
 
-      <div className="flex flex-1 flex-col overflow-hidden">
+        <div className="flex flex-1 flex-col overflow-hidden">
         <ProductionBanner visible={Boolean(currentConnection?.tags?.includes('production'))} />
-        <TabBar />
+        <TabBar connId={id} />
 
         <div className="flex flex-1 overflow-hidden">
           {activeTab ? (
-            activeTab.objectType === 'index' ? (
+            activeTab.kind === 'sql' ? (
+              <SqlConsole tabId={activeTab.id} connId={activeTab.connId} />
+            ) : activeTab.objectType === 'index' ? (
               <IndexInspectorView
                 connId={activeTab.connId}
                 object={activeTab.object}

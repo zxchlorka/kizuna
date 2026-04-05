@@ -11,6 +11,10 @@ type Connector interface {
 	GetSchema(ctx context.Context, object string) (*Schema, error)
 	GetData(ctx context.Context, object string, opts DataOpts) (*DataResult, error)
 	Execute(ctx context.Context, command string) (*ExecResult, error)
+	ExecuteBatch(ctx context.Context, commands []string) ([]ExecResult, error)
+	Explain(ctx context.Context, query string) (*ExplainResult, error)
+	Analyze(ctx context.Context, query string) (*ExplainResult, error)
+	Completions(ctx context.Context, req CompletionRequest) ([]CompletionItem, error)
 	Mutate(ctx context.Context, op MutateOp) (*MutateResult, error)
 	MutateBulk(ctx context.Context, op BulkMutateOp) (*BulkMutateResult, error)
 	DDL(ctx context.Context, op DDLOp) error
@@ -98,8 +102,16 @@ type DDLOp struct {
 
 type ExecResult struct {
 	Columns      []string `json:"columns"`
+	ColumnTypes  []string `json:"column_types,omitempty"`
 	Rows         [][]any  `json:"rows"`
 	RowsAffected int64    `json:"rows_affected"`
+	Statement    string   `json:"statement,omitempty"`
+	Error        string   `json:"error,omitempty"`
+	DurationMs   int64    `json:"duration_ms"`
+	RowsReturned int      `json:"rows_returned"`
+	Truncated    bool     `json:"truncated,omitempty"`
+	AppliedLimit int      `json:"applied_limit,omitempty"`
+	Skipped      bool     `json:"skipped,omitempty"`
 }
 
 type MutateResult struct {
@@ -117,4 +129,47 @@ type BulkMutateResult struct {
 	Applied      int    `json:"applied"`
 	RowsAffected int64  `json:"rows_affected"`
 	Message      string `json:"message"`
+}
+
+type ExplainNode struct {
+	NodeType         string        `json:"node_type"`
+	RelationName     string        `json:"relation_name,omitempty"`
+	Alias            string        `json:"alias,omitempty"`
+	StartupCost      float64       `json:"startup_cost"`
+	TotalCost        float64       `json:"total_cost"`
+	PlanRows         int64         `json:"plan_rows"`
+	ActualRows       float64       `json:"actual_rows"`
+	ActualTimeMs     float64       `json:"actual_time_ms"`
+	SharedHitBlocks  int64         `json:"shared_hit_blocks"`
+	SharedReadBlocks int64         `json:"shared_read_blocks"`
+	IsBottleneck     bool          `json:"is_bottleneck,omitempty"`
+	Children         []ExplainNode `json:"children,omitempty"`
+}
+
+type ExplainResult struct {
+	Plan       ExplainNode `json:"plan"`
+	DurationMs int64       `json:"duration_ms"`
+	Mode       string      `json:"mode"`
+}
+
+type CompletionRequest struct {
+	Prefix  string `json:"prefix"`
+	Context string `json:"context"`
+	Table   string `json:"table,omitempty"`
+}
+
+type CompletionItem struct {
+	Label  string `json:"label"`
+	Type   string `json:"type"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type HistoryEntry struct {
+	ID           string `json:"id"`
+	Command      string `json:"command"`
+	DurationMs   int64  `json:"duration_ms"`
+	RowsReturned int    `json:"rows_returned"`
+	RowsAffected int64  `json:"rows_affected"`
+	Error        string `json:"error,omitempty"`
+	ExecutedAt   string `json:"executed_at"`
 }
