@@ -54,3 +54,22 @@ func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, schema)
 }
+
+func (h *ObjectsHandler) GetObjectInfo(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	name := chi.URLParam(r, "name")
+
+	c, err := h.manager.Get(r.Context(), id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	info, err := c.GetObjectInfo(r.Context(), name)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, info)
+}

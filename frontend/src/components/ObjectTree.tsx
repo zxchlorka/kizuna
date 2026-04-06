@@ -16,6 +16,50 @@ import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { DDLColumnInput, ObjectItem } from '@/types/api'
 
+interface SchemaChildGroup {
+  primaryItems: ObjectItem[]
+  indexesByParent: Map<string, ObjectItem[]>
+  unattachedIndexes: ObjectItem[]
+}
+
+function groupSchemaChildren(items: ObjectItem[], showTables: boolean): SchemaChildGroup {
+  const indexesByParent = new Map<string, ObjectItem[]>()
+  const unattachedIndexes: ObjectItem[] = []
+
+  items.forEach((item) => {
+    if (item.type !== 'index') {
+      return
+    }
+    if (!item.parent_name) {
+      unattachedIndexes.push(item)
+      return
+    }
+    const existing = indexesByParent.get(item.parent_name) ?? []
+    existing.push(item)
+    indexesByParent.set(item.parent_name, existing)
+  })
+
+  const primaryItems = items.filter((item) => {
+    if (item.type === 'index') {
+      return false
+    }
+    if (item.type === 'table' && !showTables) {
+      return indexesByParent.has(item.name)
+    }
+    return true
+  })
+
+  indexesByParent.forEach((indexes, parentName) => {
+    const hasVisibleParent = primaryItems.some((item) => item.type === 'table' && item.name === parentName)
+    if (!hasVisibleParent) {
+      unattachedIndexes.push(...indexes)
+      indexesByParent.delete(parentName)
+    }
+  })
+
+  return { primaryItems, indexesByParent, unattachedIndexes }
+}
+
 interface ObjectTreeProps {
   connId: string
 }
@@ -112,11 +156,61 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     return `${n}`
   }
 
+  const renderIndexItem = (item: ObjectItem, nested = false) => (
+    <button
+      key={`${item.schema}.${item.name}`}
+      type="button"
+      onClick={() => openTab(connId, `${item.schema}.${item.name}`, 'index')}
+      className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${nested ? 'pl-3' : ''}`}
+      title={item.parent_name ? `${item.name} on ${item.parent_name}` : item.name}
+    >
+      {getIcon(item.type)}
+      <span className="truncate">{item.name}</span>
+    </button>
+  )
+
+  const renderLeafItem = (item: ObjectItem) => {
+    if (item.type === 'schema') {
+      return null
+    }
+
+    const objectKey = `${item.schema}.${item.name}`
+    const objectType = item.type
+    const childIndexes = item.type === 'table' ? schemaChildIndexes.get(item.name) ?? [] : []
+
+    return (
+      <div key={objectKey}>
+        <button
+          type="button"
+          onClick={() => openTab(connId, objectKey, objectType)}
+          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
+        >
+          {getIcon(item.type)}
+          <span className="truncate">{item.name}</span>
+          {item.row_count > 0 && (
+            <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+              {formatCount(item.row_count)}
+            </span>
+          )}
+        </button>
+        {item.type === 'table' && childIndexes.length > 0 && (
+          <div className="ml-4 border-l border-border/70 pl-2">
+            {childIndexes.map((indexItem) => renderIndexItem(indexItem, true))}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  let schemaChildIndexes = new Map<string, ObjectItem[]>()
+
   const renderItem = (item: ObjectItem) => {
     if (item.type === 'schema') {
       const expanded = expandedSchemas.has(item.name)
       const children = treeItems[item.name] || []
       const visibleChildren = getVisibleChildren(children)
+      const groupedChildren = groupSchemaChildren(visibleChildren, treeVisibility.showTables)
+      schemaChildIndexes = groupedChildren.indexesByParent
       const schemaLoading = expanded && !treeItems[item.name] && treeLoading
 
       return (
@@ -165,46 +259,23 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
                   description={schemaEmptyState.description}
                 />
               )}
-              {visibleChildren.map((child) => renderItem(child))}
+              {groupedChildren.primaryItems.map((child) => renderLeafItem(child))}
+              {groupedChildren.unattachedIndexes.length > 0 && (
+                <div className="mt-2 space-y-1 rounded-sm border border-dashed border-border/70 bg-muted/10 px-2 py-2">
+                  <div className="px-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    Unattached indexes
+                  </div>
+                  <div className="space-y-0.5">
+                    {groupedChildren.unattachedIndexes.map((indexItem) => renderIndexItem(indexItem))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>
       )
     }
-
-    const content = (
-      <>
-        {getIcon(item.type)}
-        <span className="truncate">{item.name}</span>
-        {item.row_count > 0 && (
-          <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-            {formatCount(item.row_count)}
-          </span>
-        )}
-      </>
-    )
-
-    if (item.type === 'index') {
-      return (
-        <div
-          key={`${item.schema}.${item.name}`}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground/90"
-          title="Indexes are listed for context only"
-        >
-          {content}
-        </div>
-      )
-    }
-
-    return (
-      <button
-        key={`${item.schema}.${item.name}`}
-        onClick={() => openTab(connId, `${item.schema}.${item.name}`)}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
-      >
-        {content}
-      </button>
-    )
+    return renderLeafItem(item)
   }
 
   if (treeLoading && rootItems.length === 0) {

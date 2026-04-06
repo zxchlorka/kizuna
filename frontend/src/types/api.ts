@@ -1,3 +1,6 @@
+export type ObjectType = 'table' | 'view' | 'index'
+export type ObjectItemType = ObjectType | 'schema'
+
 export interface Connection {
   id: string
   name: string
@@ -28,9 +31,22 @@ export interface TestResult {
 
 export interface ObjectItem {
   name: string
-  type: string
+  type: ObjectItemType
   schema: string
   row_count: number
+  parent_name?: string
+}
+
+export interface ObjectInfo {
+  name: string
+  schema: string
+  object_type: ObjectType
+  owner_table?: string
+  columns: string[]
+  method?: string
+  is_unique: boolean
+  predicate?: string | null
+  definition: string
 }
 
 export interface ColumnMeta {

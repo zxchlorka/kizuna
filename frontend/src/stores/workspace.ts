@@ -1,11 +1,12 @@
 import { create } from 'zustand'
-import type { ObjectItem } from '@/types/api'
+import type { ObjectItem, ObjectType } from '@/types/api'
 
 interface Tab {
   id: string
   connId: string
   object: string
   label: string
+  objectType: ObjectType
 }
 
 export interface TreeVisibility {
@@ -28,7 +29,7 @@ interface WorkspaceStore {
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
-  openTab: (connId: string, object: string) => void
+  openTab: (connId: string, object: string, objectType?: ObjectType) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
 }
@@ -92,7 +93,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }))
   },
 
-  openTab: (connId: string, object: string) => {
+  openTab: (connId: string, object: string, objectType: ObjectType = 'table') => {
     const id = `${connId}:${object}`
     const { tabs } = get()
     const existing = tabs.find((t) => t.id === id)
@@ -101,7 +102,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return
     }
     const label = object
-    const tab: Tab = { id, connId, object, label }
+    const tab: Tab = { id, connId, object, label, objectType }
     set({ tabs: [...tabs, tab], activeTabId: id })
   },
 

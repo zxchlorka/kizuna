@@ -1,6 +1,16 @@
-import { X, Table2 } from 'lucide-react'
+import { Eye, Table2, X, Zap } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useWorkspaceStore } from '@/stores/workspace'
+
+function tabIcon(type: 'table' | 'view' | 'index') {
+  if (type === 'view') {
+    return <Eye className="h-3.5 w-3.5 text-purple-500" />
+  }
+  if (type === 'index') {
+    return <Zap className="h-3.5 w-3.5 text-yellow-500" />
+  }
+  return <Table2 className="h-3.5 w-3.5 text-blue-500" />
+}
 
 export function TabBar() {
   const { tabs, activeTabId, setActiveTab, closeTab } = useWorkspaceStore()
@@ -18,7 +28,7 @@ export function TabBar() {
               : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
           )}
         >
-          <Table2 className="h-3.5 w-3.5" />
+          {tabIcon(tab.objectType)}
           <span className="max-w-[120px] truncate">{tab.label}</span>
           <button
             onClick={(e) => {
