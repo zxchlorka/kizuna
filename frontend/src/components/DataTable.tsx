@@ -274,7 +274,7 @@ export function DataTable({
                   <th
                     key={header.id}
                     className={cn(
-                      'relative h-9 border-r border-border px-0 text-left align-middle font-medium text-muted-foreground',
+                      'relative h-10 border-r border-border px-0 text-left align-middle font-medium text-muted-foreground',
                       'last:border-r-0 select-none'
                     )}
                     style={{ width: header.getSize() }}

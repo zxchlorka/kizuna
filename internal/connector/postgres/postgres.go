@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/qsnake66/infraview/internal/config"
@@ -26,6 +28,21 @@ func resolveHost(host string) string {
 type PostgresConnector struct {
 	pool   *pgxpool.Pool
 	config config.ConnectionConfig
+
+	completionMu    sync.RWMutex
+	tableCache      []completionCacheItem
+	tableCacheUntil time.Time
+	columnCache     map[string]completionCacheBucket
+}
+
+type completionCacheItem struct {
+	label  string
+	detail string
+}
+
+type completionCacheBucket struct {
+	items   []completionCacheItem
+	expires time.Time
 }
 
 // New creates a new PostgresConnector with a pgxpool connection pool.
@@ -56,8 +73,9 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 	slog.Info("postgres connector created", "host", cfg.Host, "database", cfg.Database)
 
 	return &PostgresConnector{
-		pool:   pool,
-		config: cfg,
+		pool:        pool,
+		config:      cfg,
+		columnCache: make(map[string]completionCacheBucket),
 	}, nil
 }
 
@@ -78,10 +96,6 @@ func (p *PostgresConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, e
 		Host:     p.config.Host,
 		Port:     fmt.Sprintf("%d", p.config.Port),
 	}, nil
-}
-
-func (p *PostgresConnector) Execute(ctx context.Context, command string) (*connector.ExecResult, error) {
-	return nil, fmt.Errorf("not implemented")
 }
 
 func (p *PostgresConnector) Close() error {

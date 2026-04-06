@@ -41,6 +41,22 @@ func (c *testObjectsConnector) Execute(context.Context, string) (*connector.Exec
 	return nil, nil
 }
 
+func (c *testObjectsConnector) ExecuteBatch(context.Context, []string) ([]connector.ExecResult, error) {
+	return nil, nil
+}
+
+func (c *testObjectsConnector) Explain(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, nil
+}
+
+func (c *testObjectsConnector) Analyze(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, nil
+}
+
+func (c *testObjectsConnector) Completions(context.Context, connector.CompletionRequest) ([]connector.CompletionItem, error) {
+	return nil, nil
+}
+
 func (c *testObjectsConnector) Mutate(context.Context, connector.MutateOp) (*connector.MutateResult, error) {
 	return nil, nil
 }

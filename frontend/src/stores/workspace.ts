@@ -1,13 +1,23 @@
 import { create } from 'zustand'
 import type { ObjectItem, ObjectType } from '@/types/api'
 
-interface Tab {
+export interface ObjectTab {
+  kind: 'object'
   id: string
   connId: string
   object: string
   label: string
   objectType: ObjectType
 }
+
+export interface SqlTab {
+  kind: 'sql'
+  id: string
+  connId: string
+  label: string
+}
+
+export type WorkspaceTab = ObjectTab | SqlTab
 
 export interface TreeVisibility {
   showTables: boolean
@@ -18,7 +28,7 @@ export interface TreeVisibility {
 export type TreeVisibilityKey = keyof TreeVisibility
 
 interface WorkspaceStore {
-  tabs: Tab[]
+  tabs: WorkspaceTab[]
   activeTabId: string | null
   treeItems: Record<string, ObjectItem[]>
   treeLoading: boolean
@@ -30,6 +40,7 @@ interface WorkspaceStore {
   toggleSchema: (schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   openTab: (connId: string, object: string, objectType?: ObjectType) => void
+  openSqlTab: (connId: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
 }
@@ -102,7 +113,26 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return
     }
     const label = object
-    const tab: Tab = { id, connId, object, label, objectType }
+    const tab: ObjectTab = { kind: 'object', id, connId, object, label, objectType }
+    set({ tabs: [...tabs, tab], activeTabId: id })
+  },
+
+  openSqlTab: (connId: string) => {
+    const { tabs } = get()
+    const existingIds = new Set(tabs.map((tab) => tab.id))
+    let sequence = 1
+    let id = `${connId}:sql:${sequence}`
+    while (existingIds.has(id)) {
+      sequence += 1
+      id = `${connId}:sql:${sequence}`
+    }
+
+    const tab: SqlTab = {
+      kind: 'sql',
+      id,
+      connId,
+      label: sequence === 1 ? 'SQL Console' : `SQL Console ${sequence}`,
+    }
     set({ tabs: [...tabs, tab], activeTabId: id })
   },
 

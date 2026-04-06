@@ -2,6 +2,7 @@ import type { Column, Header } from '@tanstack/react-table'
 import { ChevronDown, ChevronUp, ChevronsUpDown, Key } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta, TableRow } from '@/types/api'
+import { getPostgresTypeBadge } from '@/lib/postgresTypes'
 
 interface ColumnHeaderProps {
   header: Header<TableRow, unknown>
@@ -9,77 +10,9 @@ interface ColumnHeaderProps {
   meta: ColumnMeta
 }
 
-const TYPE_COLORS: Record<string, { bg: string; text: string; border: string }> = {
-  int2: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/30' },
-  int4: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/30' },
-  int8: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/30' },
-  integer: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/30' },
-  bigint: { bg: 'bg-blue-500/10', text: 'text-blue-600 dark:text-blue-400', border: 'border-blue-500/30' },
-  numeric: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/30' },
-  float4: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/30' },
-  float8: { bg: 'bg-cyan-500/10', text: 'text-cyan-600 dark:text-cyan-400', border: 'border-cyan-500/30' },
-  text: { bg: 'bg-green-500/10', text: 'text-green-600 dark:text-green-400', border: 'border-green-500/30' },
-  varchar: { bg: 'bg-green-500/10', text: 'text-green-600 dark:text-green-400', border: 'border-green-500/30' },
-  bool: { bg: 'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400', border: 'border-purple-500/30' },
-  boolean: { bg: 'bg-purple-500/10', text: 'text-purple-600 dark:text-purple-400', border: 'border-purple-500/30' },
-  timestamp: { bg: 'bg-orange-500/10', text: 'text-orange-600 dark:text-orange-400', border: 'border-orange-500/30' },
-  timestamptz: { bg: 'bg-orange-500/10', text: 'text-orange-600 dark:text-orange-400', border: 'border-orange-500/30' },
-  date: { bg: 'bg-orange-500/10', text: 'text-orange-600 dark:text-orange-400', border: 'border-orange-500/30' },
-  uuid: { bg: 'bg-pink-500/10', text: 'text-pink-600 dark:text-pink-400', border: 'border-pink-500/30' },
-  json: { bg: 'bg-yellow-500/10', text: 'text-yellow-600 dark:text-yellow-400', border: 'border-yellow-500/30' },
-  jsonb: { bg: 'bg-yellow-500/10', text: 'text-yellow-600 dark:text-yellow-400', border: 'border-yellow-500/30' },
-  'user-defined': { bg: 'bg-gray-500/10', text: 'text-gray-600 dark:text-gray-400', border: 'border-gray-500/30' },
-}
-
-function normalizeTypeKey(dataType: string): string {
-  const lower = dataType.toLowerCase()
-  const aliases: Record<string, string> = {
-    'character varying': 'varchar',
-    'timestamp without time zone': 'timestamp',
-    'timestamp with time zone': 'timestamptz',
-    'time without time zone': 'time',
-    'time with time zone': 'timetz',
-    'double precision': 'float8',
-    real: 'float4',
-    smallint: 'int2',
-    'user-defined': 'user-defined',
-  }
-  return aliases[lower] ?? lower
-}
-
-function getTypeColors(dataType: string) {
-  const key = normalizeTypeKey(dataType)
-  return (
-    TYPE_COLORS[key] ?? {
-      bg: 'bg-gray-500/10',
-      text: 'text-gray-600 dark:text-gray-400',
-      border: 'border-gray-500/30',
-    }
-  )
-}
-
-function typeBadgeLabel(dataType: string): string {
-  const key = normalizeTypeKey(dataType)
-  const short: Record<string, string> = {
-    integer: 'int',
-    bigint: 'int8',
-    int2: 'int2',
-    numeric: 'num',
-    float4: 'f4',
-    float8: 'f8',
-    timestamp: 'ts',
-    timestamptz: 'tstz',
-    varchar: 'varchar',
-    boolean: 'bool',
-    'user-defined': 'enum',
-  }
-  const label = short[key] ?? key
-  return label.length > 12 ? `${label.slice(0, 11)}…` : label
-}
-
 export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
   const isSorted = column.getIsSorted()
-  const colors = getTypeColors(meta.data_type)
+  const badge = getPostgresTypeBadge(meta.data_type)
   const width = header.getSize()
   const sortReserve = column.getCanSort() ? 18 : 0
   const pkReserve = meta.is_pk ? 20 : 0
@@ -104,7 +37,7 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
   }
 
   return (
-    <div className="relative flex h-full w-full items-center gap-1.5 pr-2">
+    <div className="relative flex h-full w-full items-center gap-1.5 px-3 py-1.5 pr-3">
       <button
         className={cn(
           'group flex h-full min-w-0 flex-1 items-center gap-1.5 text-left',
@@ -132,13 +65,11 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
           <span
             className={cn(
               'inline-flex shrink-0 items-center rounded border px-1.5 py-0.5 text-[10px] font-medium',
-              colors.bg,
-              colors.text,
-              colors.border
+              badge.className
             )}
-            title={meta.data_type}
+            title={badge.title}
           >
-            {typeBadgeLabel(meta.data_type)}
+            {badge.label}
           </span>
         )}
 

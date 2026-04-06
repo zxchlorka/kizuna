@@ -73,6 +73,69 @@ export interface DataResult {
   has_more: boolean
 }
 
+export interface ExecResult {
+  columns: string[]
+  column_types?: string[]
+  rows: unknown[][]
+  rows_affected: number
+  statement?: string
+  error?: string
+  duration_ms: number
+  rows_returned: number
+  truncated?: boolean
+  applied_limit?: number
+  skipped?: boolean
+}
+
+export interface ExecuteRequest {
+  statement: string
+}
+
+export interface ExecuteMultiRequest {
+  statements: string[]
+}
+
+export interface ExecuteMultiResponse {
+  results: ExecResult[]
+}
+
+export interface ExplainNode {
+  node_type: string
+  relation_name?: string
+  alias?: string
+  startup_cost: number
+  total_cost: number
+  plan_rows: number
+  actual_rows: number
+  actual_time_ms: number
+  shared_hit_blocks: number
+  shared_read_blocks: number
+  is_bottleneck?: boolean
+  children?: ExplainNode[]
+}
+
+export interface ExplainResult {
+  plan: ExplainNode
+  duration_ms: number
+  mode: 'explain' | 'analyze'
+}
+
+export interface CompletionItem {
+  label: string
+  type: 'table' | 'column' | 'function' | 'keyword'
+  detail?: string
+}
+
+export interface HistoryEntry {
+  id: string
+  command: string
+  duration_ms: number
+  rows_returned: number
+  rows_affected: number
+  error?: string
+  executed_at: string
+}
+
 export interface DataOpts {
   offset: number
   limit: number

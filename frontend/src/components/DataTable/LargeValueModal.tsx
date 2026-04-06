@@ -11,6 +11,7 @@ interface LargeValueModalProps {
   onClose: () => void
   onSave: (value: unknown) => void
   onSetNull: () => void
+  readOnly?: boolean
 }
 
 function stringifyValue(value: unknown): string {
@@ -28,6 +29,7 @@ export function LargeValueModal({
   onClose,
   onSave,
   onSetNull,
+  readOnly = false,
 }: LargeValueModalProps) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -83,7 +85,7 @@ export function LargeValueModal({
           <div>
             <h3 className="text-sm font-semibold text-foreground">{title}</h3>
             <p className="text-xs text-muted-foreground">
-              {isJson ? 'JSON editor' : 'Text editor'}
+              {readOnly ? (isJson ? 'JSON preview' : 'Text preview') : isJson ? 'JSON editor' : 'Text editor'}
             </p>
           </div>
           <button
@@ -99,28 +101,31 @@ export function LargeValueModal({
         <div className="flex-1 p-4">
           <textarea
             value={text}
+            readOnly={readOnly}
             onChange={(e) => {
               setText(e.target.value)
               setError(null)
             }}
-            className="h-full w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm font-mono text-foreground outline-none ring-ring/40 focus:ring-2"
+            className="h-full w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm font-mono text-foreground outline-none ring-ring/40 focus:ring-2 read-only:cursor-text read-only:ring-0"
             spellCheck={false}
           />
           {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          {nullable && (
+          {!readOnly && nullable && (
             <Button type="button" size="sm" variant="outline" onClick={handleSetNull}>
               Set NULL
             </Button>
           )}
           <Button type="button" size="sm" variant="outline" onClick={onClose}>
-            Cancel
+            {readOnly ? 'Close' : 'Cancel'}
           </Button>
-          <Button type="button" size="sm" onClick={handleSave}>
-            Save
-          </Button>
+          {!readOnly && (
+            <Button type="button" size="sm" onClick={handleSave}>
+              Save
+            </Button>
+          )}
         </div>
       </div>
     </div>

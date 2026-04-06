@@ -26,7 +26,7 @@ export function Sidebar({ connId }: SidebarProps) {
     <div
       className={cn(
         'flex h-full flex-col border-r border-border bg-background transition-all',
-        collapsed ? 'w-10' : 'w-60'
+        collapsed ? 'w-10' : 'w-72'
       )}
     >
       {/* Header */}
