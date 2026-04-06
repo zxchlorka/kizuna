@@ -1,4 +1,4 @@
-import { ChevronDown, FilePlus2, FolderMinus, ListPlus, ListX, ScanSearch, Trash2 } from 'lucide-react'
+import { ChevronDown, FilePlus2, ListPlus, ListX, ScanSearch, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-export type TableDDLAction = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | 'drop_index'
+export type TableDDLAction = 'drop_table' | 'add_column' | 'drop_column' | 'create_index'
 
 interface DDLDropdownProps {
   disabled?: boolean
@@ -21,7 +21,6 @@ const actions: Array<{ action: TableDDLAction; label: string; icon: typeof FileP
   { action: 'create_index', label: 'Create Index', icon: ScanSearch },
   { action: 'drop_table', label: 'Drop Table', icon: Trash2, destructive: true },
   { action: 'drop_column', label: 'Drop Column', icon: ListX, destructive: true },
-  { action: 'drop_index', label: 'Drop Index', icon: FolderMinus, destructive: true },
 ]
 
 export function DDLDropdown({ disabled = false, onAction }: DDLDropdownProps) {
