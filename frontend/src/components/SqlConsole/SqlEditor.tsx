@@ -11,7 +11,7 @@ import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language
 import { searchKeymap } from '@codemirror/search'
 import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
-import { sql } from '@codemirror/lang-sql'
+import { PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
 import { basicSetup } from 'codemirror'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
@@ -232,6 +232,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       () => catalogTablesRef.current,
       () => catalogSchemasRef.current
     )
+    const keywordSource = keywordCompletionSource(PostgreSQL, true)
     const keyBindings = keymap.of([
       ...defaultKeymap,
       ...historyKeymap,
@@ -305,7 +306,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
         closeBrackets(),
         highlightActiveLine(),
         foldGutter(),
-        sql(),
+        sql({
+          dialect: PostgreSQL,
+          upperCaseKeywords: true,
+        }),
         keyBindings,
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {
@@ -316,7 +320,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
         themeCompartment.of(buildTheme(resolvedTheme === 'dark')),
         autocompleteCompartment.of(
           autocompletion({
-            override: [completionSource],
+            override: [completionSource, keywordSource],
             activateOnTyping: true,
           })
         ),

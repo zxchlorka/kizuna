@@ -37,7 +37,7 @@ export function ColumnHeader({ header, column, meta }: ColumnHeaderProps) {
   }
 
   return (
-    <div className="relative flex h-full w-full items-center gap-1.5 pr-2">
+    <div className="relative flex h-full w-full items-center gap-1.5 px-3 py-1.5 pr-3">
       <button
         className={cn(
           'group flex h-full min-w-0 flex-1 items-center gap-1.5 text-left',

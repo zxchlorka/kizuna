@@ -27,53 +27,6 @@ interface ParsedCompletionContext {
   allowAutomatic: boolean
 }
 
-const SQL_KEYWORDS = [
-  'SELECT',
-  'FROM',
-  'WHERE',
-  'JOIN',
-  'LEFT',
-  'RIGHT',
-  'INNER',
-  'OUTER',
-  'ON',
-  'AND',
-  'OR',
-  'NOT',
-  'IN',
-  'EXISTS',
-  'GROUP BY',
-  'ORDER BY',
-  'HAVING',
-  'LIMIT',
-  'OFFSET',
-  'INSERT',
-  'UPDATE',
-  'DELETE',
-  'CREATE',
-  'ALTER',
-  'DROP',
-  'INDEX',
-  'TABLE',
-  'COLUMN',
-  'DISTINCT',
-  'AS',
-  'BETWEEN',
-  'LIKE',
-  'ILIKE',
-  'IS NULL',
-  'IS NOT NULL',
-  'CASE',
-  'WHEN',
-  'THEN',
-  'ELSE',
-  'END',
-  'UNION',
-  'WITH',
-  'RETURNING',
-  'SET',
-]
-
 const CLAUSE_RE = /\b(group\s+by|order\s+by|delete\s+from|from|join|update|into|select|where|having|on|set|returning)\b/gi
 const DOT_RE = /([a-zA-Z_][\w$]*(?:\.[a-zA-Z_][\w$]*)?)\.([a-zA-Z_][\w$]*)?$/
 const SOURCE_ALIAS_STOPWORDS = new Set([
@@ -217,14 +170,6 @@ function dedupe(items: CompletionItem[]): CompletionItem[] {
   })
 }
 
-function localKeywordCompletions(prefix: string): CompletionItem[] {
-  const needle = prefix.trim().toUpperCase()
-  return SQL_KEYWORDS.filter((keyword) => needle === '' || keyword.startsWith(needle)).map((keyword) => ({
-    label: keyword,
-    type: 'keyword' as const,
-  }))
-}
-
 function resolveColumnTargets(parsed: ParsedCompletionContext): string[] {
   if (parsed.table) {
     return [parsed.table]
@@ -234,11 +179,11 @@ function resolveColumnTargets(parsed: ParsedCompletionContext): string[] {
   return Array.from(new Set(targets))
 }
 
-function buildKeywordFallback(prefix: string, requestCompletions: (args: { prefix: string; context: SqlCompletionContext; table?: string }) => Promise<CompletionItem[]>): Promise<CompletionItem[]> {
-  return Promise.all([
-    requestCompletions({ prefix, context: 'keyword' }).catch(() => []),
-    requestCompletions({ prefix, context: 'function' }).catch(() => []),
-  ]).then(([keywords, functions]) => dedupe([...localKeywordCompletions(prefix), ...keywords, ...functions]))
+function buildFunctionFallback(
+  prefix: string,
+  requestCompletions: (args: { prefix: string; context: SqlCompletionContext; table?: string }) => Promise<CompletionItem[]>
+): Promise<CompletionItem[]> {
+  return requestCompletions({ prefix, context: 'function' }).catch(() => [])
 }
 
 export function detectSqlCompletionContext(
@@ -360,15 +305,6 @@ export function createSqlCompletionSource(
             : await requestCompletions({ prefix: parsed.prefix, context: 'table' }, signal).catch(() => [])
         const options = dedupe([...localTables, ...remoteTables])
 
-        if (options.length === 0) {
-          const fallback = await buildKeywordFallback(parsed.prefix, (args) => requestCompletions(args, signal))
-          return {
-            from: parsed.from,
-            options: toCompletionOptions(fallback),
-            validFor: /^[\w$.]*$/,
-          }
-        }
-
         return {
           from: parsed.from,
           options: toCompletionOptions(options),
@@ -394,7 +330,7 @@ export function createSqlCompletionSource(
         }
       }
 
-      const fallback = await buildKeywordFallback(parsed.prefix, (args) => requestCompletions(args, signal))
+      const fallback = await buildFunctionFallback(parsed.prefix, (args) => requestCompletions(args, signal))
       if (fallback.length === 0) {
         return null
       }
