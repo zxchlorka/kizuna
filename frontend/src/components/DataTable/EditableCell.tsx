@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
-import { ChevronDown, ChevronRight, Expand, Pencil } from 'lucide-react'
+import { Expand, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta } from '@/types/api'
 import { LargeValueModal } from '@/components/DataTable/LargeValueModal'
@@ -21,6 +21,9 @@ const INTEGER_TYPES = new Set(['int2', 'int4', 'int8', 'integer', 'bigint'])
 const NUMERIC_TYPES = new Set(['numeric', 'float4', 'float8', 'decimal'])
 const UUID_TYPES = new Set(['uuid'])
 const TEXT_TYPES = new Set(['text', 'varchar', 'bpchar', 'char'])
+const LARGE_VALUE_LENGTH = 120
+const PREVIEW_CHAR_LIMIT = 240
+const PREVIEW_MAX_WIDTH_CLASS = 'max-w-[32rem]'
 
 function formatTimestamp(value: unknown): string {
   try {
@@ -43,6 +46,35 @@ function toInputValue(value: unknown): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value, null, 2)
   return String(value)
+}
+
+function toPreviewString(value: unknown, isJson: boolean): string {
+  if (value === null || value === undefined) return 'NULL'
+
+  if (isJson) {
+    if (typeof value === 'string') {
+      const trimmed = value.trim()
+      return trimmed === '' ? 'Empty' : trimmed.replace(/\s+/g, ' ')
+    }
+    try {
+      const serialized = JSON.stringify(value)
+      return serialized === undefined ? 'Empty' : serialized
+    } catch {
+      return String(value)
+    }
+  }
+
+  const raw = String(value)
+  const collapsed = raw.replace(/\s+/g, ' ').trim()
+  return collapsed === '' ? 'Empty' : collapsed
+}
+
+function clampPreviewString(value: string): string {
+  if (value.length <= PREVIEW_CHAR_LIMIT) {
+    return value
+  }
+
+  return `${value.slice(0, PREVIEW_CHAR_LIMIT - 1)}…`
 }
 
 function parseValue(raw: string, dataType: string, nullable: boolean): { value?: unknown; error?: string } {
@@ -104,7 +136,6 @@ export function EditableCell({
   const [isEditing, setIsEditing] = useState(false)
   const [inputValue, setInputValue] = useState('')
   const [error, setError] = useState<string | null>(null)
-  const [jsonExpanded, setJsonExpanded] = useState(false)
   const [largeEditorOpen, setLargeEditorOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null)
   const skipBlurCommitRef = useRef(false)
@@ -117,7 +148,9 @@ export function EditableCell({
   const isNumeric = NUMERIC_TYPES.has(dataType)
 
   const textValue = useMemo(() => toInputValue(value), [value])
-  const largeValue = typeof textValue === 'string' && textValue.length > 120
+  const fullPreviewValue = useMemo(() => toPreviewString(value, isJson), [value, isJson])
+  const previewValue = useMemo(() => clampPreviewString(fullPreviewValue), [fullPreviewValue])
+  const largeValue = typeof textValue === 'string' && (textValue.length > LARGE_VALUE_LENGTH || textValue.includes('\n'))
   const fkHint = colMeta.is_fk && colMeta.fk_table
     ? `FK -> ${colMeta.fk_table}${colMeta.fk_column ? `.${colMeta.fk_column}` : ''}`
     : null
@@ -307,36 +340,24 @@ export function EditableCell({
     setLargeEditorOpen(true)
   }
 
-  const valueTitle = typeof value === 'string' ? value : isJson ? JSON.stringify(value) : String(value)
-  const combinedTitle = fkHint ? `${valueTitle}\n${fkHint}` : valueTitle
+  const combinedTitle = fkHint ? `${fullPreviewValue}\n${fkHint}` : fullPreviewValue
 
   return (
     <>
       <div className={cellClasses} onDoubleClick={startEdit}>
-        {isJson && typeof value === 'object' ? (
-          <button
-            type="button"
-            className="mr-1 rounded p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
-            onClick={(e) => {
-              e.stopPropagation()
-              setJsonExpanded((v) => !v)
-            }}
-          >
-            {jsonExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          </button>
-        ) : null}
-
-        <span className={cn('min-w-0 truncate', largeValue && 'max-w-[420px]', isTimestamp && 'font-mono')}
+        <div
+          className={cn(
+            'block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap',
+            PREVIEW_MAX_WIDTH_CLASS,
+            (isTimestamp || isJson) && 'font-mono',
+            previewValue === 'Empty' && 'italic text-muted-foreground'
+          )}
           title={combinedTitle}
         >
           {isTimestamp
             ? formatTimestamp(value)
-            : isJson && typeof value === 'object'
-              ? jsonExpanded
-                ? JSON.stringify(value)
-                : '{...}'
-              : String(value)}
-        </span>
+            : previewValue}
+        </div>
 
         {(isJson || largeValue) && (
           <button
@@ -373,6 +394,7 @@ export function EditableCell({
         initialValue={value}
         isJson={isJson}
         nullable={colMeta.nullable}
+        readOnly={!editMode || rowDeleted}
         onClose={() => setLargeEditorOpen(false)}
         onSave={(newValue) => {
           if (!editMode || rowDeleted) return
