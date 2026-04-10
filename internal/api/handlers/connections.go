@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -29,27 +30,29 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Omit password from response
 	type connResponse struct {
-		ID       string   `json:"id"`
-		Name     string   `json:"name"`
-		Type     string   `json:"type"`
-		Host     string   `json:"host"`
-		Port     int      `json:"port"`
-		Database string   `json:"database"`
-		Username string   `json:"username"`
-		Tags     []string `json:"tags,omitempty"`
+		ID             string   `json:"id"`
+		Name           string   `json:"name"`
+		Type           string   `json:"type"`
+		Host           string   `json:"host"`
+		Port           int      `json:"port"`
+		Database       string   `json:"database"`
+		Username       string   `json:"username"`
+		Tags           []string `json:"tags,omitempty"`
+		VisibleSchemas []string `json:"visible_schemas"`
 	}
 
 	result := make([]connResponse, len(conns))
 	for i, c := range conns {
 		result[i] = connResponse{
-			ID:       c.ID,
-			Name:     c.Name,
-			Type:     c.Type,
-			Host:     c.Host,
-			Port:     c.Port,
-			Database: c.Database,
-			Username: c.Username,
-			Tags:     slices.Clone(c.Tags),
+			ID:             c.ID,
+			Name:           c.Name,
+			Type:           c.Type,
+			Host:           c.Host,
+			Port:           c.Port,
+			Database:       c.Database,
+			Username:       c.Username,
+			Tags:           slices.Clone(c.Tags),
+			VisibleSchemas: slices.Clone(c.VisibleSchemas),
 		}
 	}
 
@@ -58,14 +61,15 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string   `json:"name"`
-		Type     string   `json:"type"`
-		Host     string   `json:"host"`
-		Port     int      `json:"port"`
-		Database string   `json:"database"`
-		Username string   `json:"username"`
-		Tags     []string `json:"tags"`
-		Password string   `json:"password"`
+		Name           string   `json:"name"`
+		Type           string   `json:"type"`
+		Host           string   `json:"host"`
+		Port           int      `json:"port"`
+		Database       string   `json:"database"`
+		Username       string   `json:"username"`
+		Tags           []string `json:"tags"`
+		Password       string   `json:"password"`
+		VisibleSchemas []string `json:"visible_schemas"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -94,15 +98,16 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	id := generateID()
 
 	conn := config.ConnectionConfig{
-		ID:       id,
-		Name:     req.Name,
-		Type:     req.Type,
-		Host:     req.Host,
-		Port:     req.Port,
-		Database: req.Database,
-		Username: req.Username,
-		Tags:     normalizeTags(req.Tags),
-		Password: encPassword,
+		ID:             id,
+		Name:           req.Name,
+		Type:           req.Type,
+		Host:           req.Host,
+		Port:           req.Port,
+		Database:       req.Database,
+		Username:       req.Username,
+		Tags:           normalizeTags(req.Tags),
+		Password:       encPassword,
+		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
 	}
 
 	h.cfg.AddConnection(conn)
@@ -114,14 +119,82 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":       conn.ID,
-		"name":     conn.Name,
-		"type":     conn.Type,
-		"host":     conn.Host,
-		"port":     conn.Port,
-		"database": conn.Database,
-		"username": conn.Username,
-		"tags":     conn.Tags,
+		"id":              conn.ID,
+		"name":            conn.Name,
+		"type":            conn.Type,
+		"host":            conn.Host,
+		"port":            conn.Port,
+		"database":        conn.Database,
+		"username":        conn.Username,
+		"tags":            conn.Tags,
+		"visible_schemas": conn.VisibleSchemas,
+	})
+}
+
+func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID             string   `json:"id"`
+		Name           string   `json:"name"`
+		Type           string   `json:"type"`
+		Host           string   `json:"host"`
+		Port           int      `json:"port"`
+		Database       string   `json:"database"`
+		Username       string   `json:"username"`
+		Tags           []string `json:"tags"`
+		Password       string   `json:"password"`
+		VisibleSchemas []string `json:"visible_schemas"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Type == "" || req.Host == "" || req.Database == "" || req.Username == "" || req.Port <= 0 {
+		writeError(w, http.StatusBadRequest, "type, host, port, database, and username are required")
+		return
+	}
+
+	password := req.Password
+	if password == "" && req.ID != "" {
+		existing, ok := h.cfg.GetConnection(req.ID)
+		if !ok {
+			writeError(w, http.StatusNotFound, "connection not found")
+			return
+		}
+		password = existing.Password
+	} else if password != "" {
+		encrypted, err := config.Encrypt(h.cfg.EncryptionKey, password)
+		if err != nil {
+			slog.Error("failed to encrypt transient password", "error", err)
+			writeError(w, http.StatusInternalServerError, "failed to encrypt password")
+			return
+		}
+		password = encrypted
+	}
+
+	cfg := config.ConnectionConfig{
+		ID:             req.ID,
+		Name:           req.Name,
+		Type:           req.Type,
+		Host:           req.Host,
+		Port:           req.Port,
+		Database:       req.Database,
+		Username:       req.Username,
+		Password:       password,
+		Tags:           normalizeTags(req.Tags),
+		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
+	}
+
+	start := time.Now()
+	if err := h.testTransientConnection(r.Context(), cfg); err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"latency_ms": time.Since(start).Milliseconds(),
 	})
 }
 
@@ -192,14 +265,48 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":       existing.ID,
-		"name":     existing.Name,
-		"type":     existing.Type,
-		"host":     existing.Host,
-		"port":     existing.Port,
-		"database": existing.Database,
-		"username": existing.Username,
-		"tags":     existing.Tags,
+		"id":              existing.ID,
+		"name":            existing.Name,
+		"type":            existing.Type,
+		"host":            existing.Host,
+		"port":            existing.Port,
+		"database":        existing.Database,
+		"username":        existing.Username,
+		"tags":            existing.Tags,
+		"visible_schemas": existing.VisibleSchemas,
+	})
+}
+
+func (h *ConnectionsHandler) UpdateVisibleSchemas(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	existing, ok := h.cfg.GetConnection(id)
+	if !ok {
+		writeError(w, http.StatusNotFound, "connection not found")
+		return
+	}
+
+	var req struct {
+		VisibleSchemas []string `json:"visible_schemas"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	existing.VisibleSchemas = normalizeVisibleSchemas(req.VisibleSchemas)
+	h.cfg.UpdateConnection(id, existing)
+
+	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
+		slog.Error("failed to save config", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save configuration")
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"id":              existing.ID,
+		"visible_schemas": existing.VisibleSchemas,
 	})
 }
 
@@ -225,14 +332,18 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
+
+	pingCtx, pingCancel := context.WithTimeout(r.Context(), connectionAcquireTimeout)
+	defer pingCancel()
 
 	start := time.Now()
-	err = c.Ping(r.Context())
+	err = c.Ping(pingCtx)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {
@@ -246,11 +357,12 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 func (h *ConnectionsHandler) Info(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	info, err := c.GetInfo(r.Context())
 	if err != nil {
@@ -290,4 +402,51 @@ func normalizeTags(tags []string) []string {
 		return nil
 	}
 	return out
+}
+
+func normalizeVisibleSchemas(schemas []string) []string {
+	if len(schemas) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(schemas))
+	out := make([]string, 0, len(schemas))
+	for _, schema := range schemas {
+		normalized := strings.TrimSpace(schema)
+		if normalized == "" {
+			continue
+		}
+		if _, ok := seen[normalized]; ok {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		out = append(out, normalized)
+	}
+	slices.Sort(out)
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func (h *ConnectionsHandler) testTransientConnection(ctx context.Context, cfg config.ConnectionConfig) error {
+	factory, ok := h.managerFactory(cfg.Type)
+	if !ok {
+		return fmt.Errorf("unsupported connection type: %s", cfg.Type)
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, connectionAcquireTimeout)
+	defer cancel()
+
+	conn, err := factory(timeoutCtx, cfg, h.cfg.EncryptionKey)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return conn.Ping(timeoutCtx)
+}
+
+func (h *ConnectionsHandler) managerFactory(connType string) (connector.ConnectorFactory, bool) {
+	return h.manager.Factory(connType)
 }

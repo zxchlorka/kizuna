@@ -33,6 +33,14 @@ func (m *ConnectionManager) RegisterFactory(connType string, factory ConnectorFa
 	m.factories[connType] = factory
 }
 
+func (m *ConnectionManager) Factory(connType string) (ConnectorFactory, bool) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	factory, ok := m.factories[connType]
+	return factory, ok
+}
+
 // Get returns a connector for the given connection ID, creating it lazily if needed.
 func (m *ConnectionManager) Get(ctx context.Context, id string) (Connector, error) {
 	m.mu.RLock()

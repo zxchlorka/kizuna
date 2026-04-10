@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObjec
 import { Expand, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta } from '@/types/api'
+import { FkLinkCell } from '@/components/DataTable/FkLinkCell'
 import { LargeValueModal } from '@/components/DataTable/LargeValueModal'
 import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
 
@@ -12,6 +13,7 @@ interface EditableCellProps {
   dirty: boolean
   rowDeleted: boolean
   onChange: (newValue: unknown) => void
+  onNavigateToFk?: (colMeta: ColumnMeta, value: unknown) => void
 }
 
 const TIMESTAMP_TYPES = new Set(['timestamp', 'timestamptz', 'date', 'time', 'timetz'])
@@ -132,6 +134,7 @@ export function EditableCell({
   dirty,
   rowDeleted,
   onChange,
+  onNavigateToFk,
 }: EditableCellProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [inputValue, setInputValue] = useState('')
@@ -341,23 +344,34 @@ export function EditableCell({
   }
 
   const combinedTitle = fkHint ? `${fullPreviewValue}\n${fkHint}` : fullPreviewValue
+  const canNavigateToFk = Boolean(onNavigateToFk && colMeta.is_fk && colMeta.fk_table && colMeta.fk_column)
 
   return (
     <>
       <div className={cellClasses} onDoubleClick={startEdit}>
-        <div
-          className={cn(
-            'block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap',
-            PREVIEW_MAX_WIDTH_CLASS,
-            (isTimestamp || isJson) && 'font-mono',
-            previewValue === 'Empty' && 'italic text-muted-foreground'
-          )}
-          title={combinedTitle}
-        >
-          {isTimestamp
-            ? formatTimestamp(value)
-            : previewValue}
-        </div>
+        {canNavigateToFk ? (
+          <FkLinkCell
+            value={value}
+            colMeta={colMeta}
+            previewValue={isTimestamp ? formatTimestamp(value) : previewValue}
+            title={combinedTitle}
+            onNavigate={onNavigateToFk!}
+          />
+        ) : (
+          <div
+            className={cn(
+              'block min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap',
+              PREVIEW_MAX_WIDTH_CLASS,
+              (isTimestamp || isJson) && 'font-mono',
+              previewValue === 'Empty' && 'italic text-muted-foreground'
+            )}
+            title={combinedTitle}
+          >
+            {isTimestamp
+              ? formatTimestamp(value)
+              : previewValue}
+          </div>
+        )}
 
         {(isJson || largeValue) && (
           <button

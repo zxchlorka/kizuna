@@ -1,9 +1,13 @@
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
+import { SchemaFilterButton } from '@/components/Sidebar/SchemaFilterButton'
+import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { ObjectTree } from '@/components/ObjectTree'
+import { useConnectionStore } from '@/stores/connections'
+import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore, type TreeVisibilityKey } from '@/stores/workspace'
 
 interface SidebarProps {
@@ -13,14 +17,56 @@ interface SidebarProps {
 export function Sidebar({ connId }: SidebarProps) {
   const navigate = useNavigate()
   const [collapsed, setCollapsed] = useState(false)
+  const [schemaDialogOpen, setSchemaDialogOpen] = useState(false)
+  const [schemaFilterSaving, setSchemaFilterSaving] = useState(false)
+  const connections = useConnectionStore((state) => state.connections)
+  const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
+  const pushToast = useToastStore((state) => state.push)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
+  const availableSchemas = useWorkspaceStore((state) => state.availableSchemasByConnection[connId] ?? [])
+  const visibleSchemas = useWorkspaceStore((state) => state.visibleSchemasByConnection[connId] ?? null)
+  const hydrateVisibleSchemas = useWorkspaceStore((state) => state.hydrateVisibleSchemas)
   const setTreeVisibility = useWorkspaceStore((state) => state.setTreeVisibility)
+  const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
+
+  const currentConnection = connections.find((connection) => connection.id === connId)
+
+  useEffect(() => {
+    hydrateVisibleSchemas(connId, currentConnection?.visible_schemas)
+  }, [connId, currentConnection?.visible_schemas, hydrateVisibleSchemas])
+
+  const hiddenSchemaCount = useMemo(() => {
+    if (visibleSchemas === null) {
+      return 0
+    }
+    return Math.max(0, availableSchemas.length - visibleSchemas.length)
+  }, [availableSchemas.length, visibleSchemas])
 
   const filters: Array<{ key: TreeVisibilityKey; label: string; icon: typeof Table2 }> = [
     { key: 'showTables', label: 'Tables', icon: Table2 },
     { key: 'showViews', label: 'Views', icon: Eye },
     { key: 'showIndexes', label: 'Indexes', icon: Zap },
   ]
+
+  const handleSaveVisibleSchemas = async (nextVisibleSchemas: string[] | null) => {
+    setSchemaFilterSaving(true)
+    setVisibleSchemas(connId, nextVisibleSchemas)
+
+    try {
+      await updateVisibleSchemas(connId, nextVisibleSchemas)
+      setSchemaDialogOpen(false)
+    } catch (error) {
+      setVisibleSchemas(connId, currentConnection?.visible_schemas ?? null)
+      pushToast({
+        tone: 'error',
+        title: 'Schema filter save failed',
+        message: (error as Error).message,
+      })
+      throw error
+    } finally {
+      setSchemaFilterSaving(false)
+    }
+  }
 
   return (
     <div
@@ -65,9 +111,16 @@ export function Sidebar({ connId }: SidebarProps) {
       {!collapsed && (
         <div className="flex-1 overflow-auto p-2">
           <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
-            <div className="mb-2 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              Tree Filters
+            <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Tree Filters
+              </div>
+              <SchemaFilterButton
+                hiddenCount={hiddenSchemaCount}
+                disabled={availableSchemas.length === 0}
+                onClick={() => setSchemaDialogOpen(true)}
+              />
             </div>
             <div className="grid grid-cols-3 gap-1">
               {filters.map(({ key, label, icon: Icon }) => {
@@ -89,6 +142,14 @@ export function Sidebar({ connId }: SidebarProps) {
             </div>
           </div>
           <ObjectTree connId={connId} />
+          <SchemaFilterDialog
+            open={schemaDialogOpen}
+            saving={schemaFilterSaving}
+            schemas={availableSchemas}
+            selectedSchemas={visibleSchemas}
+            onOpenChange={setSchemaDialogOpen}
+            onSave={handleSaveVisibleSchemas}
+          />
         </div>
       )}
     </div>

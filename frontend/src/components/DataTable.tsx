@@ -35,6 +35,7 @@ export interface DataTableProps {
   onCellChange: (rowKey: string, colName: string, value: unknown) => void
   getDraftValue: (rowKey: string, colName: string, fallback: unknown) => unknown
   isDirtyCell: (rowKey: string, colName: string) => boolean
+  onNavigateToFk?: (colMeta: ColumnMeta, value: unknown) => void
 }
 
 const ROW_HEIGHT = 40
@@ -137,6 +138,7 @@ export function DataTable({
   onCellChange,
   getDraftValue,
   isDirtyCell,
+  onNavigateToFk,
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
@@ -193,6 +195,7 @@ export function DataTable({
             dirty={isDirtyCell(rowKey, column.name)}
             rowDeleted={draftDeletes.has(rowKey)}
             onChange={(newValue) => onCellChange(rowKey, column.name, newValue)}
+            onNavigateToFk={onNavigateToFk}
           />
         )
       },
@@ -213,6 +216,7 @@ export function DataTable({
     getRowKey,
     isDirtyCell,
     onCellChange,
+    onNavigateToFk,
     onToggleAll,
     onToggleRow,
     pageRowKeys,

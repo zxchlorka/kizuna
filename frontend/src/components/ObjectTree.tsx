@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Eye, Folder, FolderOpen, MoreHorizontal, Plus, Table2, Zap } from 'lucide-react'
 import { CreateTableForm } from '@/components/DDL/CreateTableForm'
 import { EmptyState } from '@/components/EmptyState'
+import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import {
@@ -11,6 +12,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -64,14 +66,37 @@ interface ObjectTreeProps {
   connId: string
 }
 
+function equalSchemaLists(left: string[] | null, right: string[] | null) {
+  if (left === right) return true
+  if (left === null || right === null) return false
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
+
+function normalizeVisibleSchemas(availableSchemas: string[], selectedSchemas: string[] | null): string[] | null {
+  if (selectedSchemas === null) {
+    return null
+  }
+
+  const available = new Set(availableSchemas)
+  const prunedSelection = selectedSchemas.filter((schema) => available.has(schema))
+  const selectedSet = new Set(prunedSelection)
+  const appendedNewSchemas = availableSchemas.filter((schema) => !selectedSet.has(schema))
+  return [...prunedSelection, ...appendedNewSchemas]
+}
+
 export function ObjectTree({ connId }: ObjectTreeProps) {
+  const connections = useConnectionStore((state) => state.connections)
+  const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
   const treeLoading = useWorkspaceStore((state) => state.treeLoading)
+  const treeError = useWorkspaceStore((state) => state.treeErrorsByConnection[connId] ?? null)
   const expandedSchemas = useWorkspaceStore((state) => state.expandedSchemas)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
+  const visibleSchemasByConnection = useWorkspaceStore((state) => state.visibleSchemasByConnection)
   const fetchTree = useWorkspaceStore((state) => state.fetchTree)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
   const toggleSchema = useWorkspaceStore((state) => state.toggleSchema)
+  const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const ddl = useDataStore((state) => state.ddl)
   const pushToast = useToastStore((state) => state.push)
@@ -82,7 +107,27 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     void fetchTree(connId)
   }, [connId, fetchTree])
 
+  const currentConnection = connections.find((connection) => connection.id === connId)
   const rootItems = treeItems[''] || []
+  const availableSchemas = useMemo(
+    () => rootItems.filter((item) => item.type === 'schema').map((item) => item.name),
+    [rootItems]
+  )
+  const persistedVisibleSchemas = currentConnection?.visible_schemas ?? null
+  const visibleSchemaSelection = visibleSchemasByConnection[connId] ?? persistedVisibleSchemas
+  const normalizedVisibleSchemas = useMemo(
+    () => normalizeVisibleSchemas(availableSchemas, visibleSchemaSelection),
+    [availableSchemas, visibleSchemaSelection]
+  )
+  const visibleSchemaSet = useMemo(
+    () => new Set(normalizedVisibleSchemas ?? availableSchemas),
+    [availableSchemas, normalizedVisibleSchemas]
+  )
+  const filteredRootItems = useMemo(
+    () =>
+      rootItems.filter((item) => item.type !== 'schema' || visibleSchemaSet.has(item.name)),
+    [rootItems, visibleSchemaSet]
+  )
   const schemaEmptyState = useMemo(
     () => ({
       title: 'No visible objects',
@@ -90,6 +135,42 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     }),
     []
   )
+  const hiddenSchemasEmptyState = useMemo(
+    () => ({
+      title: 'No schemas visible',
+      description: 'Click the schema filter to enable one or more schemas for this connection.',
+    }),
+    []
+  )
+
+  useEffect(() => {
+    if (!('' in treeItems) || visibleSchemaSelection === null) {
+      return
+    }
+    if (equalSchemaLists(visibleSchemaSelection, normalizedVisibleSchemas)) {
+      return
+    }
+
+    setVisibleSchemas(connId, normalizedVisibleSchemas)
+    if (!equalSchemaLists(persistedVisibleSchemas, normalizedVisibleSchemas)) {
+      void updateVisibleSchemas(connId, normalizedVisibleSchemas).catch((error: Error) => {
+        pushToast({
+          tone: 'error',
+          title: 'Schema filter sync failed',
+          message: error.message,
+        })
+      })
+    }
+  }, [
+    connId,
+    normalizedVisibleSchemas,
+    persistedVisibleSchemas,
+    pushToast,
+    setVisibleSchemas,
+    treeItems,
+    updateVisibleSchemas,
+    visibleSchemaSelection,
+  ])
 
   const handleSchemaClick = (schema: string) => {
     toggleSchema(schema)
@@ -282,13 +363,38 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     return <LoadingSkeleton variant="tree" />
   }
 
+  if (treeError && rootItems.length === 0) {
+    return (
+      <div className="space-y-3">
+        <ErrorBanner message={treeError} onRetry={() => void fetchTree(connId)} />
+        <EmptyState
+          variant="no_tables"
+          compact
+          title="Connection unavailable"
+          description="The object tree could not be loaded. Check the database host, credentials, and network access."
+        />
+      </div>
+    )
+  }
+
   if (!treeLoading && rootItems.length === 0) {
     return <EmptyState variant="no_tables" compact />
   }
 
+  if (!treeLoading && rootItems.length > 0 && filteredRootItems.length === 0) {
+    return (
+      <EmptyState
+        variant="no_tables"
+        compact
+        title={hiddenSchemasEmptyState.title}
+        description={hiddenSchemasEmptyState.description}
+      />
+    )
+  }
+
   return (
     <>
-      <div className="space-y-0.5">{rootItems.map(renderItem)}</div>
+      <div className="space-y-0.5">{filteredRootItems.map(renderItem)}</div>
       <CreateTableForm
         open={createTableSchema !== null}
         schema={createTableSchema ?? 'public'}
