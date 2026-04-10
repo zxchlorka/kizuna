@@ -60,7 +60,13 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
 		cfg.Username, password, host, cfg.Port, cfg.Database)
 
-	pool, err := pgxpool.New(ctx, dsn)
+	poolConfig, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		return nil, normalizePostgresError(fmt.Errorf("failed to parse connection config: %w", err))
+	}
+	poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
+
+	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {
 		return nil, normalizePostgresError(fmt.Errorf("failed to create connection pool: %w", err))
 	}

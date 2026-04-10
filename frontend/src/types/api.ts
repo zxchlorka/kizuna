@@ -10,6 +10,7 @@ export interface Connection {
   database: string
   username: string
   tags?: string[]
+  visible_schemas: string[] | null
 }
 
 export interface ConnectionInput {
@@ -21,6 +22,7 @@ export interface ConnectionInput {
   username: string
   password: string
   tags: string[]
+  visible_schemas?: string[] | null
 }
 
 export interface TestResult {
@@ -60,8 +62,15 @@ export interface ColumnMeta {
   fk_column: string
 }
 
+export interface FKRef {
+  table: string
+  column: string
+  ref_column: string
+}
+
 export interface Schema {
   columns: ColumnMeta[]
+  referenced_by: FKRef[]
 }
 
 export type TableRow = Record<string, unknown>

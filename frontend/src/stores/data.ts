@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { fetchWithTimeout } from '@/lib/http'
 import { normalizeDataRows } from '@/lib/table'
 import type {
   BulkMutateOp,
@@ -7,8 +8,10 @@ import type {
   DataOpts,
   DataResult,
   DDLOp,
+  FKRef,
   MutateOp,
   ObjectInfo,
+  Schema,
   TableRow,
 } from '@/types/api'
 
@@ -23,6 +26,7 @@ interface DraftDelete {
 
 interface TabData {
   columns: ColumnMeta[]
+  referencedBy: FKRef[]
   rows: TableRow[]
   total: number
   loading: boolean
@@ -66,6 +70,7 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
   return (
     tabs[tabId] ?? {
       columns: [],
+      referencedBy: [],
       rows: [],
       total: 0,
       loading: false,
@@ -119,12 +124,12 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })()
 
     try {
-      const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/schema`)
+      const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/schema`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
       }
-      const data: { columns: ColumnMeta[] } = await res.json()
+      const data: Schema = await res.json()
       set((state) => {
         const tab = getOrInitTab(state.tabs, tabId)
         if (tab.schemaRequestId !== requestId) {
@@ -133,7 +138,12 @@ export const useDataStore = create<DataStore>((set, get) => ({
         return {
           tabs: {
             ...state.tabs,
-            [tabId]: { ...tab, columns: data.columns, error: null },
+            [tabId]: {
+              ...tab,
+              columns: data.columns,
+              referencedBy: data.referenced_by ?? [],
+              error: null,
+            },
           },
         }
       })
@@ -146,7 +156,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
         return {
           tabs: {
             ...state.tabs,
-            [tabId]: { ...tab, error: (e as Error).message },
+            [tabId]: { ...tab, referencedBy: [], error: (e as Error).message },
           },
         }
       })
@@ -182,7 +192,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     }
 
     try {
-      const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/data?${params.toString()}`)
+      const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/data?${params.toString()}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
@@ -248,7 +258,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     })()
 
     try {
-      const res = await fetch(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/info`)
+      const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/info`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
@@ -294,7 +304,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
 
   mutate: async (connId: string, op: MutateOp, tabId: string) => {
     try {
-      const res = await fetch(`/api/connections/${connId}/mutate`, {
+      const res = await fetchWithTimeout(`/api/connections/${connId}/mutate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(op),
@@ -325,7 +335,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
 
   mutateBulk: async (connId: string, op: BulkMutateOp, tabId: string) => {
     try {
-      const res = await fetch(`/api/connections/${connId}/mutate/bulk`, {
+      const res = await fetchWithTimeout(`/api/connections/${connId}/mutate/bulk`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(op),
@@ -357,7 +367,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
   },
 
   ddl: async (connId: string, op: DDLOp) => {
-    const res = await fetch(`/api/connections/${connId}/ddl`, {
+    const res = await fetchWithTimeout(`/api/connections/${connId}/ddl`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(op),

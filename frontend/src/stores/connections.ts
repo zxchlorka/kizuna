@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { fetchWithTimeout } from '@/lib/http'
 import type { Connection, ConnectionInput, TestResult } from '@/types/api'
 
 interface ConnectionStore {
@@ -8,8 +9,10 @@ interface ConnectionStore {
   fetch: () => Promise<void>
   create: (input: ConnectionInput) => Promise<Connection>
   update: (id: string, input: Partial<ConnectionInput>) => Promise<Connection>
+  updateVisibleSchemas: (id: string, visibleSchemas: string[] | null) => Promise<Connection>
   remove: (id: string) => Promise<void>
   test: (id: string) => Promise<TestResult>
+  testConfig: (input: Partial<ConnectionInput> & { id?: string }) => Promise<TestResult>
 }
 
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
@@ -20,7 +23,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   fetch: async () => {
     set({ loading: true, error: null })
     try {
-      const res = await fetch('/api/connections')
+      const res = await fetchWithTimeout('/api/connections')
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
@@ -33,7 +36,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
 
   create: async (input: ConnectionInput) => {
-    const res = await fetch('/api/connections', {
+    const res = await fetchWithTimeout('/api/connections', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -48,7 +51,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
 
   update: async (id: string, input: Partial<ConnectionInput>) => {
-    const res = await fetch(`/api/connections/${id}`, {
+    const res = await fetchWithTimeout(`/api/connections/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
@@ -62,8 +65,33 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     return connection
   },
 
+  updateVisibleSchemas: async (id: string, visibleSchemas: string[] | null) => {
+    const res = await fetchWithTimeout(`/api/connections/${id}/visible-schemas`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ visible_schemas: visibleSchemas }),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || res.statusText)
+    }
+
+    const body: { id: string; visible_schemas: string[] | null } = await res.json()
+    const current = get().connections.find((connection) => connection.id === body.id)
+    if (!current) {
+      throw new Error('Connection not found in store')
+    }
+
+    const connection: Connection = {
+      ...current,
+      visible_schemas: body.visible_schemas,
+    }
+    set({ connections: get().connections.map((c) => (c.id === id ? connection : c)) })
+    return connection
+  },
+
   remove: async (id: string) => {
-    const res = await fetch(`/api/connections/${id}`, { method: 'DELETE' })
+    const res = await fetchWithTimeout(`/api/connections/${id}`, { method: 'DELETE' })
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       throw new Error(body.error || res.statusText)
@@ -72,7 +100,21 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
 
   test: async (id: string) => {
-    const res = await fetch(`/api/connections/${id}/test`, { method: 'POST' })
+    const res = await fetchWithTimeout(`/api/connections/${id}/test`, { method: 'POST' })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || res.statusText)
+    }
+    const result: TestResult = await res.json()
+    return result
+  },
+
+  testConfig: async (input: Partial<ConnectionInput> & { id?: string }) => {
+    const res = await fetchWithTimeout('/api/connections/test-config', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       throw new Error(body.error || res.statusText)
