@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,52 @@ import (
 	"github.com/qsnake66/infraview/internal/config"
 	"github.com/qsnake66/infraview/internal/connector"
 )
+
+type testHealthConnector struct {
+	pingCount int
+}
+
+func (c *testHealthConnector) Ping(context.Context) error {
+	c.pingCount++
+	return nil
+}
+
+func (c *testHealthConnector) GetInfo(context.Context) (*connector.ConnInfo, error) { return nil, nil }
+func (c *testHealthConnector) ListObjects(context.Context, string) ([]connector.Object, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) GetObjectInfo(context.Context, string) (*connector.ObjectInfo, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) GetSchema(context.Context, string) (*connector.Schema, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) GetData(context.Context, string, connector.DataOpts) (*connector.DataResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) Execute(context.Context, string) (*connector.ExecResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) ExecuteBatch(context.Context, []string) ([]connector.ExecResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) Explain(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) Analyze(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) Completions(context.Context, connector.CompletionRequest) ([]connector.CompletionItem, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) Mutate(context.Context, connector.MutateOp) (*connector.MutateResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) MutateBulk(context.Context, connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
+	return nil, nil
+}
+func (c *testHealthConnector) DDL(context.Context, connector.DDLOp) error { return nil }
+func (c *testHealthConnector) Close() error                               { return nil }
 
 func newTestConnectionsHandler(t *testing.T, connections []config.ConnectionConfig) *ConnectionsHandler {
 	t.Helper()
@@ -131,4 +178,72 @@ func TestConnectionsHandlerUpdateVisibleSchemas(t *testing.T) {
 			t.Fatalf("expected nil visible_schemas, got %#v", updated.VisibleSchemas)
 		}
 	})
+}
+
+func TestConnectionsHandlerTestDoesNotPingAfterAcquire(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := &config.AppConfig{
+		Connections: []config.ConnectionConfig{
+			{
+				ID:       "conn-1",
+				Name:     "Main",
+				Type:     "postgres",
+				Host:     "localhost",
+				Port:     5432,
+				Database: "app",
+				Username: "postgres",
+			},
+		},
+		EncryptionKey: "test-key",
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	manager := connector.NewConnectionManager(cfg)
+	fake := &testHealthConnector{}
+	manager.RegisterFactory("postgres", func(context.Context, config.ConnectionConfig, string) (connector.Connector, error) {
+		return fake, nil
+	})
+	handler := NewConnectionsHandler(cfg, manager)
+
+	req := withRouteParams(httptest.NewRequest(http.MethodPost, "/api/connections/conn-1/test", nil), map[string]string{"id": "conn-1"})
+	rec := httptest.NewRecorder()
+
+	handler.Test(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+	if fake.pingCount != 0 {
+		t.Fatalf("expected no handler ping after acquire, got %d", fake.pingCount)
+	}
+}
+
+func TestConnectionsHandlerTestTransientConnectionDoesNotPingAfterFactory(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestConnectionsHandler(t, nil)
+	manager := connector.NewConnectionManager(handler.cfg)
+	fake := &testHealthConnector{}
+	manager.RegisterFactory("postgres", func(context.Context, config.ConnectionConfig, string) (connector.Connector, error) {
+		return fake, nil
+	})
+	handler.manager = manager
+
+	err := handler.testTransientConnection(context.Background(), config.ConnectionConfig{
+		Type:     "postgres",
+		Host:     "localhost",
+		Port:     5432,
+		Database: "app",
+		Username: "postgres",
+	})
+	if err != nil {
+		t.Fatalf("testTransientConnection: %v", err)
+	}
+	if fake.pingCount != 0 {
+		t.Fatalf("expected no extra ping after factory, got %d", fake.pingCount)
+	}
 }

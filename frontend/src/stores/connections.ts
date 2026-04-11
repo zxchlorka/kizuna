@@ -5,6 +5,7 @@ import type { Connection, ConnectionInput, TestResult } from '@/types/api'
 interface ConnectionStore {
   connections: Connection[]
   loading: boolean
+  loadedOnce: boolean
   error: string | null
   fetch: () => Promise<void>
   create: (input: ConnectionInput) => Promise<Connection>
@@ -18,9 +19,13 @@ interface ConnectionStore {
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   connections: [],
   loading: false,
+  loadedOnce: false,
   error: null,
 
   fetch: async () => {
+    if (get().loading) {
+      return
+    }
     set({ loading: true, error: null })
     try {
       const res = await fetchWithTimeout('/api/connections')
@@ -29,9 +34,9 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
         throw new Error(body.error || res.statusText)
       }
       const connections: Connection[] = await res.json()
-      set({ connections, loading: false })
+      set({ connections, loading: false, loadedOnce: true })
     } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+      set({ error: (e as Error).message, loading: false, loadedOnce: true })
     }
   },
 

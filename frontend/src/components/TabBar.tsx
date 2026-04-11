@@ -48,11 +48,12 @@ export function TabBar({ connId }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab } = useWorkspaceStore()
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const sqlDisabled = connection?.type === 'redis'
+  const visibleTabs = tabs.filter((tab) => tab.connId === connId)
 
   return (
     <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-border bg-muted/30 pr-2">
       <div className="flex min-h-[42px] flex-1 items-center gap-0 overflow-x-auto">
-        {tabs.map((tab) => (
+        {visibleTabs.map((tab) => (
           <div
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}

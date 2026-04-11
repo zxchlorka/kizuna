@@ -30,6 +30,7 @@ export function Sidebar({ connId }: SidebarProps) {
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
 
   const currentConnection = connections.find((connection) => connection.id === connId)
+  const isRedisConnection = currentConnection?.type === 'redis'
 
   useEffect(() => {
     hydrateVisibleSchemas(connId, currentConnection?.visible_schemas)
@@ -110,46 +111,60 @@ export function Sidebar({ connId }: SidebarProps) {
       {/* Tree */}
       {!collapsed && (
         <div className="flex-1 overflow-auto p-2">
-          <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
-            <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-              <div className="flex items-center gap-2">
+          {isRedisConnection ? (
+            <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
+              <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
                 <SlidersHorizontal className="h-3.5 w-3.5" />
-                Tree Filters
+                Redis Tree
               </div>
-              <SchemaFilterButton
-                hiddenCount={hiddenSchemaCount}
-                disabled={availableSchemas.length === 0}
-                onClick={() => setSchemaDialogOpen(true)}
-              />
+              <p className="mt-2 text-[11px] leading-5 text-muted-foreground">
+                Redis namespaces and typed keys are isolated from PostgreSQL tree state here.
+              </p>
             </div>
-            <div className="grid grid-cols-3 gap-1">
-              {filters.map(({ key, label, icon: Icon }) => {
-                const active = treeVisibility[key]
-                return (
-                  <Button
-                    key={key}
-                    type="button"
-                    size="sm"
-                    variant={active ? 'secondary' : 'outline'}
-                    className="h-8 gap-1.5 px-2 font-mono text-[11px]"
-                    onClick={() => setTreeVisibility(key, !active)}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                    {label}
-                  </Button>
-                )
-              })}
+          ) : (
+            <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
+              <div className="mb-2 flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                  Tree Filters
+                </div>
+                <SchemaFilterButton
+                  hiddenCount={hiddenSchemaCount}
+                  disabled={availableSchemas.length === 0}
+                  onClick={() => setSchemaDialogOpen(true)}
+                />
+              </div>
+              <div className="grid grid-cols-3 gap-1">
+                {filters.map(({ key, label, icon: Icon }) => {
+                  const active = treeVisibility[key]
+                  return (
+                    <Button
+                      key={key}
+                      type="button"
+                      size="sm"
+                      variant={active ? 'secondary' : 'outline'}
+                      className="h-8 gap-1.5 px-2 font-mono text-[11px]"
+                      onClick={() => setTreeVisibility(key, !active)}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      {label}
+                    </Button>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
           <ObjectTree connId={connId} />
-          <SchemaFilterDialog
-            open={schemaDialogOpen}
-            saving={schemaFilterSaving}
-            schemas={availableSchemas}
-            selectedSchemas={visibleSchemas}
-            onOpenChange={setSchemaDialogOpen}
-            onSave={handleSaveVisibleSchemas}
-          />
+          {!isRedisConnection && (
+            <SchemaFilterDialog
+              open={schemaDialogOpen}
+              saving={schemaFilterSaving}
+              schemas={availableSchemas}
+              selectedSchemas={visibleSchemas}
+              onOpenChange={setSchemaDialogOpen}
+              onSave={handleSaveVisibleSchemas}
+            />
+          )}
         </div>
       )}
     </div>

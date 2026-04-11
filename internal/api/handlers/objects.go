@@ -1,7 +1,9 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/qsnake66/infraview/internal/config"
@@ -20,6 +22,7 @@ func NewObjectsHandler(cfg *config.AppConfig, manager *connector.ConnectionManag
 func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	path := r.URL.Query().Get("path")
+	start := time.Now()
 
 	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
@@ -33,6 +36,8 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		writeConnectorError(w, err)
 		return
 	}
+
+	logSlowObjectList(id, path, len(objects), time.Since(start))
 
 	writeJSON(w, http.StatusOK, objects)
 }
@@ -75,4 +80,23 @@ func (h *ObjectsHandler) GetObjectInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, info)
+}
+
+func logSlowObjectList(connectionID, path string, objectCount int, duration time.Duration) {
+	if duration < 250*time.Millisecond {
+		return
+	}
+
+	level := "root"
+	if path != "" {
+		level = "children"
+	}
+
+	slog.Info("slow object tree request",
+		"connection_id", connectionID,
+		"level", level,
+		"path", path,
+		"object_count", objectCount,
+		"duration_ms", duration.Milliseconds(),
+	)
 }

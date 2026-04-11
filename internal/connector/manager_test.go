@@ -7,9 +7,14 @@ import (
 	"github.com/qsnake66/infraview/internal/config"
 )
 
-type testManagerConnector struct{}
+type testManagerConnector struct {
+	pingCount int
+}
 
-func (c *testManagerConnector) Ping(context.Context) error                 { return nil }
+func (c *testManagerConnector) Ping(context.Context) error {
+	c.pingCount++
+	return nil
+}
 func (c *testManagerConnector) GetInfo(context.Context) (*ConnInfo, error) { return nil, nil }
 func (c *testManagerConnector) ListObjects(context.Context, string) ([]Object, error) {
 	return nil, nil
@@ -68,5 +73,36 @@ func TestConnectionManagerSupportsRedisFactory(t *testing.T) {
 	}
 	if got != redisConn {
 		t.Fatalf("unexpected connector returned")
+	}
+}
+
+func TestConnectionManagerSkipsRepeatedValidationWithinTTL(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.AppConfig{
+		Connections: []config.ConnectionConfig{
+			{
+				ID:   "pg-1",
+				Type: "postgres",
+			},
+		},
+		EncryptionKey: "test-key",
+	}
+
+	manager := NewConnectionManager(cfg)
+	pgConn := &testManagerConnector{}
+	manager.RegisterFactory("postgres", func(context.Context, config.ConnectionConfig, string) (Connector, error) {
+		return pgConn, nil
+	})
+
+	if _, err := manager.Get(context.Background(), "pg-1"); err != nil {
+		t.Fatalf("first get: %v", err)
+	}
+	if _, err := manager.Get(context.Background(), "pg-1"); err != nil {
+		t.Fatalf("second get: %v", err)
+	}
+
+	if pgConn.pingCount != 0 {
+		t.Fatalf("expected cached connector get to skip extra ping within ttl, got %d", pgConn.pingCount)
 	}
 }
