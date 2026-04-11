@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
+import { Activity, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useConnectionStore } from '@/stores/connections'
+import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
 import { useToastStore } from '@/stores/toast'
 import type { Connection } from '@/types/api'
 
@@ -12,74 +12,30 @@ interface ConnectionCardProps {
   onEdit: (connection: Connection) => void
 }
 
-type Health = 'unknown' | 'healthy' | 'unhealthy'
-
 export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardProps) {
   const navigate = useNavigate()
-  const test = useConnectionStore((state) => state.test)
   const pushToast = useToastStore((state) => state.push)
-  const [health, setHealth] = useState<Health>('unknown')
-  const [opening, setOpening] = useState(false)
+  const healthEntry = useConnectionHealthStore((state) => state.entries[connection.id])
+  const refreshHealth = useConnectionHealthStore((state) => state.refresh)
   const [retesting, setRetesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
-  const runTest = async () => {
-    setRetesting(true)
-    try {
-      const result = await test(connection.id)
-      setHealth(result.ok ? 'healthy' : 'unhealthy')
-      return result
-    } catch {
-      setHealth('unhealthy')
-      throw new Error('Could not reach the database. Check the host, credentials, and network access.')
-    } finally {
-      setRetesting(false)
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false
-
-    test(connection.id)
-      .then((result) => {
-        if (!cancelled) {
-          setHealth(result.ok ? 'healthy' : 'unhealthy')
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setHealth('unhealthy')
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [connection.id, test])
-
   const handleOpen = async () => {
-    if (opening || deleting || retesting) {
+    if (deleting || retesting) {
       return
     }
 
-    setOpening(true)
-    try {
-      await runTest()
-      navigate(`/connections/${connection.id}`)
-    } catch (error) {
-      pushToast({
-        tone: 'error',
-        title: 'Connection unavailable',
-        message: (error as Error).message,
+    navigate(`/connections/${connection.id}`)
+    if (isConnectionHealthStale(healthEntry)) {
+      void refreshHealth(connection.id).catch(() => {
+        // The page navigation should not be blocked by background health refresh failures.
       })
-    } finally {
-      setOpening(false)
     }
   }
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (opening || deleting) {
+    if (deleting) {
       return
     }
 
@@ -103,7 +59,7 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (opening || deleting) {
+    if (deleting) {
       return
     }
     onEdit(connection)
@@ -111,18 +67,43 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
 
   const handleRetest = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (opening || retesting || deleting) {
+    if (retesting || deleting) {
       return
     }
 
-    void runTest().catch((error) => {
+    setRetesting(true)
+    void refreshHealth(connection.id, { force: true }).catch((error) => {
       pushToast({
         tone: 'error',
         title: 'Connection test failed',
         message: (error as Error).message,
       })
+    }).finally(() => {
+      setRetesting(false)
     })
   }
+
+  const healthStatus = healthEntry?.status ?? 'unknown'
+  const checking = healthEntry?.checking ?? false
+  const latencyLabel = healthEntry?.latencyMs ? `${healthEntry.latencyMs}ms` : null
+  const statusLabel = (() => {
+    if (checking && healthStatus === 'healthy' && latencyLabel) {
+      return `refreshing ${latencyLabel}`
+    }
+    if (checking && healthStatus === 'unhealthy') {
+      return 'retrying...'
+    }
+    if (checking) {
+      return 'checking...'
+    }
+    if (healthStatus === 'healthy') {
+      return latencyLabel ? `ok ${latencyLabel}` : 'online'
+    }
+    if (healthStatus === 'unhealthy') {
+      return 'offline'
+    }
+    return 'unknown'
+  })()
 
   return (
     <div
@@ -183,19 +164,20 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
               <span
                 className={cn(
                   'relative z-10 block h-2 w-2 rounded-full',
-                  health === 'healthy' && 'bg-green-500',
-                  health === 'unhealthy' && 'bg-red-500',
-                  (health === 'unknown' || opening) && 'animate-pulse bg-muted-foreground/30'
+                  healthStatus === 'healthy' && 'bg-green-500',
+                  healthStatus === 'unhealthy' && 'bg-red-500',
+                  healthStatus === 'unknown' && 'bg-muted-foreground/30',
+                  checking && 'animate-pulse'
                 )}
               />
-              {health === 'healthy' && !opening && (
+              {healthStatus === 'healthy' && !checking && (
                 <span className="absolute h-2 w-2 animate-glow-ping rounded-full bg-green-500" />
               )}
             </div>
 
             <button
               onClick={handleEdit}
-              disabled={opening || deleting}
+              disabled={deleting}
               className="rounded-sm p-1 text-muted-foreground/60 opacity-0 transition-all duration-150 group-hover:opacity-100 hover:bg-amber-500/10 hover:text-amber-500 disabled:pointer-events-none disabled:opacity-40"
               title="Edit connection"
             >
@@ -204,7 +186,7 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
 
             <button
               onClick={handleDelete}
-              disabled={deleting || opening}
+              disabled={deleting}
               className={cn(
                 'rounded-sm p-1 opacity-0 transition-all duration-150 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-100',
                 deleting
@@ -223,17 +205,33 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
             {connection.type || 'postgres'}
           </span>
 
-          <button
-            onClick={handleRetest}
-            className={cn(
-              'flex items-center gap-1 font-mono text-[10px] text-muted-foreground/40 transition-colors hover:text-muted-foreground',
-              (retesting || opening || deleting) && 'pointer-events-none'
-            )}
-            title="Re-test connection"
-          >
-            <RefreshCw className={cn('h-2.5 w-2.5', (retesting || opening) && 'animate-spin')} />
-            {deleting ? 'deleting...' : opening ? 'opening...' : retesting ? 'testing...' : 'test'}
-          </button>
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                'font-mono text-[10px] uppercase tracking-[0.12em]',
+                healthStatus === 'healthy' && 'text-green-500',
+                healthStatus === 'unhealthy' && 'text-red-500',
+                healthStatus === 'unknown' && 'text-muted-foreground/50'
+              )}
+            >
+              {statusLabel}
+            </span>
+            <button
+              onClick={handleRetest}
+              className={cn(
+                'flex items-center gap-1 font-mono text-[10px] text-muted-foreground/40 transition-colors hover:text-muted-foreground',
+                (retesting || deleting) && 'pointer-events-none'
+              )}
+              title="Re-test connection"
+            >
+              {checking || retesting ? (
+                <Activity className="h-2.5 w-2.5 animate-pulse" />
+              ) : (
+                <RefreshCw className="h-2.5 w-2.5" />
+              )}
+              {retesting ? 'testing...' : 'test'}
+            </button>
+          </div>
         </div>
       </div>
     </div>

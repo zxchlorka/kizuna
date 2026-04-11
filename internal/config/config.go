@@ -3,20 +3,22 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"sync"
 )
 
 type ConnectionConfig struct {
-	ID             string   `json:"id"`
-	Name           string   `json:"name"`
-	Type           string   `json:"type"` // "postgres", "redis", "kafka"
-	Host           string   `json:"host"`
-	Port           int      `json:"port"`
-	Database       string   `json:"database"`
-	Username       string   `json:"username"`
-	Password       string   `json:"password"` // encrypted
-	Tags           []string `json:"tags,omitempty"`
-	VisibleSchemas []string `json:"visible_schemas"`
+	ID             string       `json:"id"`
+	Name           string       `json:"name"`
+	Type           string       `json:"type"` // "postgres", "redis", "kafka"
+	Host           string       `json:"host"`
+	Port           int          `json:"port"`
+	Database       string       `json:"database"`
+	Username       string       `json:"username"`
+	Password       string       `json:"password"` // encrypted
+	Tags           []string     `json:"tags,omitempty"`
+	VisibleSchemas []string     `json:"visible_schemas"`
+	RedisConfig    *RedisConfig `json:"redis_config,omitempty"`
 }
 
 type AppConfig struct {
@@ -44,6 +46,14 @@ func Load(path string) (*AppConfig, error) {
 	return cfg, nil
 }
 
+func cloneConnection(conn ConnectionConfig) ConnectionConfig {
+	clone := conn
+	clone.Tags = slices.Clone(conn.Tags)
+	clone.VisibleSchemas = slices.Clone(conn.VisibleSchemas)
+	clone.RedisConfig = conn.RedisConfig.Clone()
+	return clone
+}
+
 func (c *AppConfig) Save(path string) error {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -62,7 +72,7 @@ func (c *AppConfig) GetPath() string {
 func (c *AppConfig) AddConnection(conn ConnectionConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Connections = append(c.Connections, conn)
+	c.Connections = append(c.Connections, cloneConnection(conn))
 }
 
 func (c *AppConfig) RemoveConnection(id string) bool {
@@ -82,7 +92,7 @@ func (c *AppConfig) GetConnection(id string) (ConnectionConfig, bool) {
 	defer c.mu.RUnlock()
 	for _, conn := range c.Connections {
 		if conn.ID == id {
-			return conn, true
+			return cloneConnection(conn), true
 		}
 	}
 	return ConnectionConfig{}, false
@@ -93,7 +103,7 @@ func (c *AppConfig) UpdateConnection(id string, updated ConnectionConfig) bool {
 	defer c.mu.Unlock()
 	for i, conn := range c.Connections {
 		if conn.ID == id {
-			c.Connections[i] = updated
+			c.Connections[i] = cloneConnection(updated)
 			return true
 		}
 	}
@@ -104,6 +114,8 @@ func (c *AppConfig) GetConnections() []ConnectionConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	result := make([]ConnectionConfig, len(c.Connections))
-	copy(result, c.Connections)
+	for i, conn := range c.Connections {
+		result[i] = cloneConnection(conn)
+	}
 	return result
 }

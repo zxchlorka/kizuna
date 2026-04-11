@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
+	"time"
 
 	"github.com/qsnake66/infraview/internal/config"
 )
@@ -15,14 +17,21 @@ type ConnectorFactory func(ctx context.Context, cfg config.ConnectionConfig, enc
 // ConnectionManager manages lazy-initialized connectors.
 type ConnectionManager struct {
 	mu         sync.RWMutex
-	connectors map[string]Connector
+	connectors map[string]managedConnector
 	config     *config.AppConfig
 	factories  map[string]ConnectorFactory
 }
 
+type managedConnector struct {
+	connector       Connector
+	lastValidatedAt time.Time
+}
+
+const connectorValidationTTL = 5 * time.Second
+
 func NewConnectionManager(cfg *config.AppConfig) *ConnectionManager {
 	return &ConnectionManager{
-		connectors: make(map[string]Connector),
+		connectors: make(map[string]managedConnector),
 		config:     cfg,
 		factories:  make(map[string]ConnectorFactory),
 	}
@@ -46,11 +55,19 @@ func (m *ConnectionManager) Factory(connType string) (ConnectorFactory, bool) {
 // Get returns a connector for the given connection ID, creating it lazily if needed.
 func (m *ConnectionManager) Get(ctx context.Context, id string) (Connector, error) {
 	m.mu.RLock()
-	if c, ok := m.connectors[id]; ok {
+	if managed, ok := m.connectors[id]; ok {
 		m.mu.RUnlock()
-		if err := c.Ping(ctx); err == nil {
-			return c, nil
+		if time.Since(managed.lastValidatedAt) < connectorValidationTTL {
+			return managed.connector, nil
 		}
+
+		start := time.Now()
+		if err := managed.connector.Ping(ctx); err == nil {
+			logSlowConnectorPhase("cached_ping", id, time.Since(start))
+			m.markValidated(id)
+			return managed.connector, nil
+		}
+		logSlowConnectorPhase("cached_ping", id, time.Since(start))
 		m.Remove(id)
 		return m.createConnector(ctx, id, true)
 	}
@@ -60,6 +77,7 @@ func (m *ConnectionManager) Get(ctx context.Context, id string) (Connector, erro
 }
 
 func (m *ConnectionManager) createConnector(ctx context.Context, id string, retry bool) (Connector, error) {
+	start := time.Now()
 	connCfg, ok := m.config.GetConnection(id)
 	if !ok {
 		return nil, fmt.Errorf("connection %q not found", id)
@@ -76,11 +94,20 @@ func (m *ConnectionManager) createConnector(ctx context.Context, id string, retr
 	defer m.mu.Unlock()
 
 	// Double-check after acquiring write lock
-	if c, ok := m.connectors[id]; ok {
-		if err := c.Ping(ctx); err == nil {
-			return c, nil
+	if managed, ok := m.connectors[id]; ok {
+		if time.Since(managed.lastValidatedAt) < connectorValidationTTL {
+			return managed.connector, nil
 		}
-		c.Close()
+
+		pingStart := time.Now()
+		if err := managed.connector.Ping(ctx); err == nil {
+			logSlowConnectorPhase("cached_ping", id, time.Since(pingStart))
+			managed.lastValidatedAt = time.Now()
+			m.connectors[id] = managed
+			return managed.connector, nil
+		}
+		logSlowConnectorPhase("cached_ping", id, time.Since(pingStart))
+		managed.connector.Close()
 		delete(m.connectors, id)
 	}
 
@@ -88,11 +115,15 @@ func (m *ConnectionManager) createConnector(ctx context.Context, id string, retr
 	if err != nil && retry && isConnectionError(err) {
 		c, err = factory(ctx, connCfg, m.config.EncryptionKey)
 	}
+	logSlowConnectorPhase("create", id, time.Since(start))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create connector for %q: %w", id, err)
 	}
 
-	m.connectors[id] = c
+	m.connectors[id] = managedConnector{
+		connector:       c,
+		lastValidatedAt: time.Now(),
+	}
 	return c, nil
 }
 
@@ -106,7 +137,7 @@ func (m *ConnectionManager) Remove(id string) {
 	defer m.mu.Unlock()
 
 	if c, ok := m.connectors[id]; ok {
-		c.Close()
+		c.connector.Close()
 		delete(m.connectors, id)
 	}
 }
@@ -117,7 +148,31 @@ func (m *ConnectionManager) CloseAll() {
 	defer m.mu.Unlock()
 
 	for id, c := range m.connectors {
-		c.Close()
+		c.connector.Close()
 		delete(m.connectors, id)
 	}
+}
+
+func (m *ConnectionManager) markValidated(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	managed, ok := m.connectors[id]
+	if !ok {
+		return
+	}
+	managed.lastValidatedAt = time.Now()
+	m.connectors[id] = managed
+}
+
+func logSlowConnectorPhase(phase, id string, duration time.Duration) {
+	if duration < 250*time.Millisecond {
+		return
+	}
+
+	slog.Info("slow connector manager phase",
+		"phase", phase,
+		"connection_id", id,
+		"duration_ms", duration.Milliseconds(),
+	)
 }

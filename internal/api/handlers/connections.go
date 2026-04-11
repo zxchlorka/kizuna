@@ -21,6 +21,39 @@ type ConnectionsHandler struct {
 	manager *connector.ConnectionManager
 }
 
+type connectionRequest struct {
+	ID             string              `json:"id"`
+	Name           string              `json:"name"`
+	Type           string              `json:"type"`
+	Host           string              `json:"host"`
+	Port           int                 `json:"port"`
+	Database       string              `json:"database"`
+	Username       string              `json:"username"`
+	Tags           []string            `json:"tags"`
+	Password       string              `json:"password"`
+	VisibleSchemas []string            `json:"visible_schemas"`
+	RedisConfig    *config.RedisConfig `json:"redis_config"`
+}
+
+type connectionResponse struct {
+	ID               string              `json:"id"`
+	Name             string              `json:"name"`
+	Type             string              `json:"type"`
+	Host             string              `json:"host"`
+	Port             int                 `json:"port"`
+	Database         string              `json:"database"`
+	Username         string              `json:"username"`
+	Tags             []string            `json:"tags,omitempty"`
+	VisibleSchemas   []string            `json:"visible_schemas"`
+	RedisConfig      *config.RedisConfig `json:"redis_config,omitempty"`
+	Mode             config.RedisMode    `json:"mode,omitempty"`
+	Separator        string              `json:"separator,omitempty"`
+	TLSEnabled       bool                `json:"tlsEnabled,omitempty"`
+	MasterName       string              `json:"masterName,omitempty"`
+	ClusterAddresses []string            `json:"clusterAddresses,omitempty"`
+	SentinelAddrs    []string            `json:"sentinelAddresses,omitempty"`
+}
+
 func NewConnectionsHandler(cfg *config.AppConfig, manager *connector.ConnectionManager) *ConnectionsHandler {
 	return &ConnectionsHandler{cfg: cfg, manager: manager}
 }
@@ -28,57 +61,23 @@ func NewConnectionsHandler(cfg *config.AppConfig, manager *connector.ConnectionM
 func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 	conns := h.cfg.GetConnections()
 
-	// Omit password from response
-	type connResponse struct {
-		ID             string   `json:"id"`
-		Name           string   `json:"name"`
-		Type           string   `json:"type"`
-		Host           string   `json:"host"`
-		Port           int      `json:"port"`
-		Database       string   `json:"database"`
-		Username       string   `json:"username"`
-		Tags           []string `json:"tags,omitempty"`
-		VisibleSchemas []string `json:"visible_schemas"`
-	}
-
-	result := make([]connResponse, len(conns))
+	result := make([]connectionResponse, len(conns))
 	for i, c := range conns {
-		result[i] = connResponse{
-			ID:             c.ID,
-			Name:           c.Name,
-			Type:           c.Type,
-			Host:           c.Host,
-			Port:           c.Port,
-			Database:       c.Database,
-			Username:       c.Username,
-			Tags:           slices.Clone(c.Tags),
-			VisibleSchemas: slices.Clone(c.VisibleSchemas),
-		}
+		result[i] = buildConnectionResponse(c)
 	}
 
 	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Name           string   `json:"name"`
-		Type           string   `json:"type"`
-		Host           string   `json:"host"`
-		Port           int      `json:"port"`
-		Database       string   `json:"database"`
-		Username       string   `json:"username"`
-		Tags           []string `json:"tags"`
-		Password       string   `json:"password"`
-		VisibleSchemas []string `json:"visible_schemas"`
-	}
-
+	var req connectionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if req.Name == "" || req.Type == "" || req.Host == "" {
-		writeError(w, http.StatusBadRequest, "name, type, and host are required")
+	if err := validateConnectionRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -97,18 +96,8 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// Generate UUID
 	id := generateID()
 
-	conn := config.ConnectionConfig{
-		ID:             id,
-		Name:           req.Name,
-		Type:           req.Type,
-		Host:           req.Host,
-		Port:           req.Port,
-		Database:       req.Database,
-		Username:       req.Username,
-		Tags:           normalizeTags(req.Tags),
-		Password:       encPassword,
-		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
-	}
+	conn := buildConnectionConfig(req, encPassword)
+	conn.ID = id
 
 	h.cfg.AddConnection(conn)
 
@@ -118,40 +107,18 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":              conn.ID,
-		"name":            conn.Name,
-		"type":            conn.Type,
-		"host":            conn.Host,
-		"port":            conn.Port,
-		"database":        conn.Database,
-		"username":        conn.Username,
-		"tags":            conn.Tags,
-		"visible_schemas": conn.VisibleSchemas,
-	})
+	writeJSON(w, http.StatusCreated, buildConnectionResponse(conn))
 }
 
 func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		ID             string   `json:"id"`
-		Name           string   `json:"name"`
-		Type           string   `json:"type"`
-		Host           string   `json:"host"`
-		Port           int      `json:"port"`
-		Database       string   `json:"database"`
-		Username       string   `json:"username"`
-		Tags           []string `json:"tags"`
-		Password       string   `json:"password"`
-		VisibleSchemas []string `json:"visible_schemas"`
-	}
-
+	var req connectionRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
-	if req.Type == "" || req.Host == "" || req.Database == "" || req.Username == "" || req.Port <= 0 {
-		writeError(w, http.StatusBadRequest, "type, host, port, database, and username are required")
+	if err := validateConnectionRequest(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -173,18 +140,7 @@ func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) 
 		password = encrypted
 	}
 
-	cfg := config.ConnectionConfig{
-		ID:             req.ID,
-		Name:           req.Name,
-		Type:           req.Type,
-		Host:           req.Host,
-		Port:           req.Port,
-		Database:       req.Database,
-		Username:       req.Username,
-		Password:       password,
-		Tags:           normalizeTags(req.Tags),
-		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
-	}
+	cfg := buildConnectionConfig(req, password)
 
 	start := time.Now()
 	if err := h.testTransientConnection(r.Context(), cfg); err != nil {
@@ -192,9 +148,12 @@ func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	latency := time.Since(start).Milliseconds()
+	logSlowConnectionCheck("test-config", req.Type, req.Host, req.Database, latency)
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"ok":         true,
-		"latency_ms": time.Since(start).Milliseconds(),
+		"latency_ms": latency,
 	})
 }
 
@@ -208,14 +167,15 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string   `json:"name"`
-		Type     *string   `json:"type"`
-		Host     *string   `json:"host"`
-		Port     *int      `json:"port"`
-		Database *string   `json:"database"`
-		Username *string   `json:"username"`
-		Tags     *[]string `json:"tags"`
-		Password *string   `json:"password"`
+		Name        *string             `json:"name"`
+		Type        *string             `json:"type"`
+		Host        *string             `json:"host"`
+		Port        *int                `json:"port"`
+		Database    *string             `json:"database"`
+		Username    *string             `json:"username"`
+		Tags        *[]string           `json:"tags"`
+		Password    *string             `json:"password"`
+		RedisConfig *config.RedisConfig `json:"redis_config"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -252,6 +212,16 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.Password = encrypted
 	}
+	if req.RedisConfig != nil {
+		existing.RedisConfig = req.RedisConfig.Clone()
+		if existing.RedisConfig != nil {
+			normalized := existing.RedisConfig.Normalize()
+			existing.RedisConfig = &normalized
+		}
+	}
+	if existing.Type != "redis" {
+		existing.RedisConfig = nil
+	}
 
 	h.cfg.UpdateConnection(id, existing)
 
@@ -264,17 +234,7 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"id":              existing.ID,
-		"name":            existing.Name,
-		"type":            existing.Type,
-		"host":            existing.Host,
-		"port":            existing.Port,
-		"database":        existing.Database,
-		"username":        existing.Username,
-		"tags":            existing.Tags,
-		"visible_schemas": existing.VisibleSchemas,
-	})
+	writeJSON(w, http.StatusOK, buildConnectionResponse(existing))
 }
 
 func (h *ConnectionsHandler) UpdateVisibleSchemas(w http.ResponseWriter, r *http.Request) {
@@ -331,25 +291,18 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	start := time.Now()
 
-	c, cancel, err := getConnector(r.Context(), h.manager, id)
+	_, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
 	defer cancel()
 
-	pingCtx, pingCancel := context.WithTimeout(r.Context(), connectionAcquireTimeout)
-	defer pingCancel()
-
-	start := time.Now()
-	err = c.Ping(pingCtx)
 	latency := time.Since(start).Milliseconds()
-
-	if err != nil {
-		writeConnectorError(w, err)
-		return
-	}
+	connCfg, _ := h.cfg.GetConnection(id)
+	logSlowConnectionCheck("test", connCfg.Type, connCfg.Host, connCfg.Database, latency)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency})
 }
@@ -444,9 +397,114 @@ func (h *ConnectionsHandler) testTransientConnection(ctx context.Context, cfg co
 	}
 	defer conn.Close()
 
-	return conn.Ping(timeoutCtx)
+	return nil
 }
 
 func (h *ConnectionsHandler) managerFactory(connType string) (connector.ConnectorFactory, bool) {
 	return h.manager.Factory(connType)
+}
+
+func buildConnectionConfig(req connectionRequest, password string) config.ConnectionConfig {
+	cfg := config.ConnectionConfig{
+		ID:             req.ID,
+		Name:           req.Name,
+		Type:           req.Type,
+		Host:           req.Host,
+		Port:           req.Port,
+		Database:       req.Database,
+		Username:       req.Username,
+		Password:       password,
+		Tags:           normalizeTags(req.Tags),
+		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
+	}
+	if req.RedisConfig != nil {
+		cfg.RedisConfig = req.RedisConfig.Clone()
+		if cfg.RedisConfig != nil {
+			normalized := cfg.RedisConfig.Normalize()
+			cfg.RedisConfig = &normalized
+		}
+	}
+	return cfg
+}
+
+func buildConnectionResponse(conn config.ConnectionConfig) connectionResponse {
+	resp := connectionResponse{
+		ID:             conn.ID,
+		Name:           conn.Name,
+		Type:           conn.Type,
+		Host:           conn.Host,
+		Port:           conn.Port,
+		Database:       conn.Database,
+		Username:       conn.Username,
+		Tags:           slices.Clone(conn.Tags),
+		VisibleSchemas: slices.Clone(conn.VisibleSchemas),
+		RedisConfig:    conn.RedisConfig.Clone(),
+	}
+	if conn.RedisConfig != nil {
+		resp.Mode = conn.RedisConfig.Mode
+		resp.Separator = conn.RedisConfig.Separator
+		resp.TLSEnabled = conn.RedisConfig.TLSEnabled
+		resp.MasterName = conn.RedisConfig.MasterName
+		resp.ClusterAddresses = slices.Clone(conn.RedisConfig.Addresses)
+		resp.SentinelAddrs = slices.Clone(conn.RedisConfig.SentinelAddrs)
+	}
+	return resp
+}
+
+func validateConnectionRequest(req connectionRequest) error {
+	if strings.TrimSpace(req.Name) == "" {
+		return fmt.Errorf("name is required")
+	}
+	if strings.TrimSpace(req.Type) == "" {
+		return fmt.Errorf("type is required")
+	}
+
+	switch req.Type {
+	case "postgres":
+		if strings.TrimSpace(req.Host) == "" || req.Port <= 0 || strings.TrimSpace(req.Database) == "" || strings.TrimSpace(req.Username) == "" {
+			return fmt.Errorf("postgres requires host, port, database, and username")
+		}
+	case "redis":
+		redisCfg := config.RedisConfig{}
+		if req.RedisConfig != nil {
+			redisCfg = req.RedisConfig.Normalize()
+		}
+		switch redisCfg.Mode {
+		case "", config.RedisModeStandalone:
+			if strings.TrimSpace(req.Host) == "" || req.Port <= 0 {
+				return fmt.Errorf("redis standalone requires host and port")
+			}
+		case config.RedisModeCluster:
+			if len(redisCfg.Addresses) == 0 && (strings.TrimSpace(req.Host) == "" || req.Port <= 0) {
+				return fmt.Errorf("redis cluster requires broker addresses")
+			}
+		case config.RedisModeSentinel:
+			if strings.TrimSpace(redisCfg.MasterName) == "" {
+				return fmt.Errorf("redis sentinel requires master_name")
+			}
+			if len(redisCfg.SentinelAddrs) == 0 && (strings.TrimSpace(req.Host) == "" || req.Port <= 0) {
+				return fmt.Errorf("redis sentinel requires sentinel addresses")
+			}
+		default:
+			return fmt.Errorf("unsupported redis mode: %s", redisCfg.Mode)
+		}
+	default:
+		return fmt.Errorf("unsupported connection type: %s", req.Type)
+	}
+
+	return nil
+}
+
+func logSlowConnectionCheck(kind, connType, host, database string, latencyMs int64) {
+	if latencyMs < 250 {
+		return
+	}
+
+	slog.Info("slow connection check",
+		"kind", kind,
+		"type", connType,
+		"host", host,
+		"database", database,
+		"latency_ms", latencyMs,
+	)
 }

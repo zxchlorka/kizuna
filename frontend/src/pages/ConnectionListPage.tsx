@@ -10,19 +10,39 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import type { Connection } from '@/types/api'
 import { useNavigate } from 'react-router-dom'
+import { useConnectionHealthStore } from '@/stores/connectionHealth'
 
 export default function ConnectionListPage() {
   const navigate = useNavigate()
   const { resolvedTheme, setTheme } = useTheme()
-  const { connections, loading, error, fetch: fetchConnections, remove } = useConnectionStore()
+  const { connections, loading, loadedOnce, error, fetch: fetchConnections, remove } = useConnectionStore()
+  const hydrateHealth = useConnectionHealthStore((state) => state.hydrate)
+  const pruneHealth = useConnectionHealthStore((state) => state.prune)
+  const refreshStaleHealth = useConnectionHealthStore((state) => state.refreshStale)
   const [wizardOpen, setWizardOpen] = useState(false)
   const [editingConnection, setEditingConnection] = useState<Connection | undefined>(undefined)
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
-    fetchConnections()
+    hydrateHealth()
     setMounted(true)
-  }, [fetchConnections])
+  }, [hydrateHealth])
+
+  useEffect(() => {
+    if (connections.length > 0 || loading || loadedOnce || error) {
+      return
+    }
+    void fetchConnections()
+  }, [connections.length, error, fetchConnections, loadedOnce, loading])
+
+  useEffect(() => {
+    const connectionIds = connections.map((connection) => connection.id)
+    pruneHealth(connectionIds)
+    if (connectionIds.length === 0) {
+      return
+    }
+    void refreshStaleHealth(connectionIds)
+  }, [connections, pruneHealth, refreshStaleHealth])
 
   const openCreate = () => { setEditingConnection(undefined); setWizardOpen(true) }
   const openEdit = (conn: Connection) => { setEditingConnection(conn); setWizardOpen(true) }

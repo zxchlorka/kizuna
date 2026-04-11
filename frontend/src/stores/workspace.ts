@@ -60,7 +60,7 @@ interface WorkspaceStore {
 
   fetchTree: (connId: string, path?: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
-  toggleSchema: (schema: string) => void
+  toggleSchema: (connId: string, schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   hydrateVisibleSchemas: (connId: string, visibleSchemas: string[] | null | undefined) => void
   setVisibleSchemas: (connId: string, visibleSchemas: string[] | null) => void
@@ -87,6 +87,15 @@ function buildFilterLabel(filters: FilterExpr[]): string {
     .join(', ')
 }
 
+function buildTreeKey(connId: string, path = ''): string {
+  return `${connId}::${path}`
+}
+
+function parseTreeKey(key: string): { connId: string; path: string } {
+  const [connId, path = ''] = key.split('::', 2)
+  return { connId, path }
+}
+
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
@@ -110,7 +119,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       const res = await fetchWithTimeout(`/api/connections/${connId}/objects${query}`)
       if (!res.ok) throw new Error('Failed to fetch objects')
       const items: ObjectItem[] = await res.json()
-      const key = path || ''
+      const key = buildTreeKey(connId, path || '')
       set((state) => ({
         treeItems: { ...state.treeItems, [key]: items },
         treeErrorsByConnection: {
@@ -140,20 +149,33 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   refreshTree: async (connId: string) => {
     const expandedSchemas = Array.from(get().expandedSchemas)
-    set({ treeItems: {}, treeLoading: true })
+      .filter((key) => parseTreeKey(key).connId === connId)
+      .map((key) => parseTreeKey(key).path)
+
+    set((state) => {
+      const nextTreeItems = { ...state.treeItems }
+      Object.keys(nextTreeItems).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextTreeItems[key]
+        }
+      })
+      return { treeItems: nextTreeItems, treeLoading: true }
+    })
+
     await get().fetchTree(connId)
     for (const schema of expandedSchemas) {
       await get().fetchTree(connId, schema)
     }
   },
 
-  toggleSchema: (schema: string) => {
+  toggleSchema: (connId: string, schema: string) => {
     set((state) => {
       const next = new Set(state.expandedSchemas)
-      if (next.has(schema)) {
-        next.delete(schema)
+      const key = buildTreeKey(connId, schema)
+      if (next.has(key)) {
+        next.delete(key)
       } else {
-        next.add(schema)
+        next.add(key)
       }
       return { expandedSchemas: next }
     })

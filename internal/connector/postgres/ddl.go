@@ -60,6 +60,7 @@ func (p *PostgresConnector) DDL(ctx context.Context, op connector.DDLOp) error {
 	if _, err := p.pool.Exec(ctx, statement); err != nil {
 		return normalizePostgresError(err)
 	}
+	p.invalidateObjectCache()
 	p.invalidateCompletionCache()
 	return nil
 }

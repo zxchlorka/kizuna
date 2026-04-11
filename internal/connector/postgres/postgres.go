@@ -33,6 +33,10 @@ type PostgresConnector struct {
 	tableCache      []completionCacheItem
 	tableCacheUntil time.Time
 	columnCache     map[string]completionCacheBucket
+
+	objectCacheMu    sync.RWMutex
+	rootObjectCache  objectCacheBucket
+	childObjectCache map[string]objectCacheBucket
 }
 
 type completionCacheItem struct {
@@ -42,6 +46,11 @@ type completionCacheItem struct {
 
 type completionCacheBucket struct {
 	items   []completionCacheItem
+	expires time.Time
+}
+
+type objectCacheBucket struct {
+	items   []connector.Object
 	expires time.Time
 }
 
@@ -79,9 +88,10 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 	slog.Info("postgres connector created", "host", cfg.Host, "database", cfg.Database)
 
 	return &PostgresConnector{
-		pool:        pool,
-		config:      cfg,
-		columnCache: make(map[string]completionCacheBucket),
+		pool:             pool,
+		config:           cfg,
+		columnCache:      make(map[string]completionCacheBucket),
+		childObjectCache: make(map[string]objectCacheBucket),
 	}, nil
 }
 

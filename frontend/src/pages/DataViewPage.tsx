@@ -17,8 +17,9 @@ export default function DataViewPage() {
   const connections = useConnectionStore((state) => state.connections)
   const fetchConnections = useConnectionStore((state) => state.fetch)
   const { tabs, activeTabId } = useWorkspaceStore()
-  const activeTab = tabs.find((t) => t.id === activeTabId)
   const currentConnection = connections.find((connection) => connection.id === id)
+  const connectionTabs = tabs.filter((tab) => tab.connId === id)
+  const activeTab = connectionTabs.find((t) => t.id === activeTabId) ?? null
 
   useEffect(() => {
     if (connections.length === 0) {
