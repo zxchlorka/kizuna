@@ -55,11 +55,12 @@ func (h *DataHandler) GetData(w http.ResponseWriter, r *http.Request) {
 		Filters:  filters,
 	}
 
-	conn, err := h.manager.Get(r.Context(), id)
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	result, err := conn.GetData(r.Context(), name, opts)
 	if err != nil {
@@ -84,11 +85,12 @@ func (h *DataHandler) Mutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.manager.Get(r.Context(), id)
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	result, err := conn.Mutate(r.Context(), op)
 	if err != nil {
@@ -112,11 +114,12 @@ func (h *DataHandler) MutateBulk(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.manager.Get(r.Context(), id)
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	result, err := conn.MutateBulk(r.Context(), op)
 	if err != nil {

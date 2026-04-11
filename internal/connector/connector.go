@@ -50,7 +50,14 @@ type ObjectInfo struct {
 }
 
 type Schema struct {
-	Columns []ColumnMeta `json:"columns"`
+	Columns      []ColumnMeta `json:"columns"`
+	ReferencedBy []FKRef      `json:"referenced_by,omitempty"`
+}
+
+type FKRef struct {
+	Table     string `json:"table"`
+	Column    string `json:"column"`
+	RefColumn string `json:"ref_column"`
 }
 
 type ColumnMeta struct {

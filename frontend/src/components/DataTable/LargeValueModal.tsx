@@ -33,6 +33,9 @@ export function LargeValueModal({
 }: LargeValueModalProps) {
   const [text, setText] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const helperText = readOnly
+    ? null
+    : 'Changes are staged here. Use Save all in the table toolbar to persist them.'
 
   useEffect(() => {
     if (open) {
@@ -87,6 +90,7 @@ export function LargeValueModal({
             <p className="text-xs text-muted-foreground">
               {readOnly ? (isJson ? 'JSON preview' : 'Text preview') : isJson ? 'JSON editor' : 'Text editor'}
             </p>
+            {helperText && <p className="mt-1 text-xs text-muted-foreground">{helperText}</p>}
           </div>
           <button
             type="button"
@@ -106,7 +110,7 @@ export function LargeValueModal({
               setText(e.target.value)
               setError(null)
             }}
-            className="h-full w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm font-mono text-foreground outline-none ring-ring/40 focus:ring-2 read-only:cursor-text read-only:ring-0"
+            className="h-full w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm font-mono text-foreground outline-none ring-ring/40 focus:ring-2 read-only:cursor-default read-only:bg-muted/15 read-only:text-muted-foreground read-only:ring-0"
             spellCheck={false}
           />
           {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
@@ -123,7 +127,7 @@ export function LargeValueModal({
           </Button>
           {!readOnly && (
             <Button type="button" size="sm" onClick={handleSave}>
-              Save
+              Apply
             </Button>
           )}
         </div>

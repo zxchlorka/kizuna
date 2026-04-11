@@ -28,9 +28,11 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	r.Route("/api/connections", func(r chi.Router) {
 		r.Get("/", connHandler.List)
 		r.Post("/", connHandler.Create)
+		r.Post("/test-config", connHandler.TestConfig)
 
 		r.Route("/{id}", func(r chi.Router) {
 			r.Put("/", connHandler.Update)
+			r.Put("/visible-schemas", connHandler.UpdateVisibleSchemas)
 			r.Delete("/", connHandler.Delete)
 			r.Post("/test", connHandler.Test)
 			r.Get("/info", connHandler.Info)

@@ -1,18 +1,21 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { SortingState } from '@tanstack/react-table'
-import { Trash2 } from 'lucide-react'
+import { Trash2, X } from 'lucide-react'
 import { AddColumnForm } from '@/components/DDL/AddColumnForm'
 import { CreateIndexForm } from '@/components/DDL/CreateIndexForm'
 import { DropConfirmDialog } from '@/components/DDL/DropConfirmDialog'
 import { DataTable } from '@/components/DataTable'
+import { ReferencedByDialog } from '@/components/DataTable/ReferencedByDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
+import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
 import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
+import { Button } from '@/components/ui/button'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
@@ -25,7 +28,7 @@ import {
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { ColumnMeta, FilterExpr, TableRow } from '@/types/api'
+import type { ColumnMeta, FKRef, FilterExpr, TableRow } from '@/types/api'
 import type { RowIdentity } from '@/types/table'
 
 interface PgTableViewProps {
@@ -36,6 +39,7 @@ interface PgTableViewProps {
 
 const FILTER_DEBOUNCE_MS = 300
 const EMPTY_COLUMNS: ColumnMeta[] = []
+const EMPTY_REFERENCED_BY: FKRef[] = []
 const EMPTY_ROWS: TableRow[] = []
 const EMPTY_FILTERS: FilterExpr[] = []
 const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
@@ -46,6 +50,27 @@ type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | 
 function parseObjectName(object: string): { schema: string; table: string } {
   const [schema, table] = object.includes('.') ? object.split('.', 2) : ['public', object]
   return { schema, table }
+}
+
+function formatFilterLabel(filter: FilterExpr): string {
+  const opLabels: Record<FilterExpr['op'], string> = {
+    eq: '=',
+    neq: '!=',
+    gt: '>',
+    gte: '>=',
+    lt: '<',
+    lte: '<=',
+    like: 'LIKE',
+    contains: '~',
+    is_null: 'is null',
+    is_not_null: 'is not null',
+  }
+
+  if (filter.op === 'is_null' || filter.op === 'is_not_null') {
+    return `${filter.column} ${opLabels[filter.op]}`
+  }
+
+  return `${filter.column} ${opLabels[filter.op]} ${filter.value}`
 }
 
 export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
@@ -62,7 +87,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const stageInsert = useDataStore((state) => state.stageInsert)
   const removeStagedInsert = useDataStore((state) => state.removeStagedInsert)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
+  const tabs = useWorkspaceStore((state) => state.tabs)
   const closeTab = useWorkspaceStore((state) => state.closeTab)
+  const openTabWithFilter = useWorkspaceStore((state) => state.openTabWithFilter)
+  const clearObjectTabFilterState = useWorkspaceStore((state) => state.clearObjectTabFilterState)
+  const goBackFromTab = useWorkspaceStore((state) => state.goBackFromTab)
   const pushToast = useToastStore((state) => state.push)
 
   const [sorting, setSorting] = useState<SortingState>([])
@@ -71,6 +100,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
   const [showAddDialog, setShowAddDialog] = useState(false)
+  const [showReferencedByDialog, setShowReferencedByDialog] = useState(false)
   const [activeDDLDialog, setActiveDDLDialog] = useState<DDLDialog>(null)
   const [localError, setLocalError] = useState<string | null>(null)
   const [isSaving, setIsSaving] = useState(false)
@@ -91,6 +121,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [clearDrafts, connId, fetchData, fetchSchema, object, tabId])
 
   const columns = tabData?.columns ?? EMPTY_COLUMNS
+  const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
   const opts = tabData?.opts
   const isLoading = tabData?.loading ?? false
@@ -103,6 +134,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const activeFilters = opts?.filters ?? EMPTY_FILTERS
   const currentOffset = opts?.offset ?? 0
   const currentLimit = opts?.limit ?? 50
+  const activeTab = useMemo(
+    () => tabs.find((tab): tab is Extract<(typeof tabs)[number], { kind: 'object' }> => tab.kind === 'object' && tab.id === tabId),
+    [tabId, tabs]
+  )
   const pkColumns = useMemo(() => columns.filter((column) => column.is_pk), [columns])
   const hasPrimaryKey = pkColumns.length > 0
 
@@ -141,6 +176,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const selectedRowKeys = useMemo(() => new Set(selectedRows.keys()), [selectedRows])
   const filterState = useMemo(() => filtersToState(columns, activeFilters), [activeFilters, columns])
   const filterSignature = useMemo(() => JSON.stringify(normalizeFilters(activeFilters)), [activeFilters])
+  const filterBadgeLabel = useMemo(() => activeFilters.map(formatFilterLabel).join(' and '), [activeFilters])
+  const selectedRowEntry = useMemo(() => {
+    if (selectedRows.size !== 1) {
+      return null
+    }
+    const [rowKey] = Array.from(selectedRows.keys())
+    return rowIdentityEntries.find((entry) => entry.rowKey === rowKey) ?? null
+  }, [rowIdentityEntries, selectedRows])
+  const canOpenReferencedBy = referencedBy.length > 0 && selectedRowEntry !== null
 
   const pendingCount = useMemo(() => {
     const cellUpdates = Object.values(draftUpdates).reduce((sum, rowDraft) => sum + Object.keys(rowDraft.data).length, 0)
@@ -212,6 +256,46 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       handleFilterChange(nextFilters)
     },
     [filterState, handleFilterChange]
+  )
+
+  const handleNavigateToFk = useCallback(
+    (column: ColumnMeta, value: unknown) => {
+      if (value === null || value === undefined || !column.fk_column || !column.fk_table) {
+        return
+      }
+
+      const targetObject = column.fk_table.includes('.') ? column.fk_table : `${schemaName}.${column.fk_table}`
+      openTabWithFilter(connId, targetObject, {
+        column: column.fk_column,
+        op: 'eq',
+        value: String(value),
+      })
+    },
+    [connId, openTabWithFilter, schemaName]
+  )
+
+  const handleClearFilters = useCallback(() => {
+    clearObjectTabFilterState(tabId)
+    setOpts(tabId, { filters: [], offset: 0 })
+    void fetchData(connId, object, tabId, { filters: [], offset: 0 })
+  }, [clearObjectTabFilterState, connId, fetchData, object, setOpts, tabId])
+
+  const handleNavigateBack = useCallback(() => {
+    goBackFromTab(tabId)
+  }, [goBackFromTab, tabId])
+
+  const handleNavigateReferencedBy = useCallback(
+    (reference: FKRef, value: unknown) => {
+      if (value === null || value === undefined) {
+        return
+      }
+      openTabWithFilter(connId, reference.table, {
+        column: reference.column,
+        op: 'eq',
+        value: String(value),
+      })
+    },
+    [connId, openTabWithFilter]
   )
 
   useEffect(() => {
@@ -562,6 +646,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
+      <FkBreadcrumb
+        items={activeTab?.navigationTrail ?? []}
+        onBack={handleNavigateBack}
+      />
+
       <Toolbar
         onRefresh={refresh}
         onAddRow={() => setShowAddDialog(true)}
@@ -577,9 +666,29 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onSaveAll={() => setShowSaveDialog(true)}
         onCancelAll={handleCancelAll}
         onDDLAction={handleDDLAction}
+        canOpenReferencedBy={canOpenReferencedBy}
+        onOpenReferencedBy={() => setShowReferencedByDialog(true)}
       />
 
       {localError && <div className="mx-2 mt-2"><ErrorBanner message={localError} onDismiss={() => setLocalError(null)} /></div>}
+
+      {activeFilters.length > 0 && (
+        <div className="mx-2 mt-2 flex items-center justify-between rounded border border-blue-500/20 bg-blue-500/5 px-3 py-2">
+          <div className="min-w-0 truncate text-xs text-blue-200">
+            <span className="font-medium text-blue-300">Filtered by:</span> {filterBadgeLabel}
+          </div>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-[11px] text-blue-200 hover:text-blue-100"
+            onClick={handleClearFilters}
+          >
+            <X className="h-3.5 w-3.5" />
+            Clear
+          </Button>
+        </div>
+      )}
 
       <div className="relative flex flex-1 flex-col overflow-hidden p-1">
         {isInitialLoad ? (
@@ -597,6 +706,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
                     ? () => {
                         setOpts(tabId, { filters: [], offset: 0 })
                         void fetchData(connId, object, tabId, { filters: [], offset: 0 })
+                        clearObjectTabFilterState(tabId)
                       }
                     : undefined
                 }
@@ -622,6 +732,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             onCellChange={handleCellChange}
             getDraftValue={getDraftValue}
             isDirtyCell={isDirtyCell}
+            onNavigateToFk={handleNavigateToFk}
           />
         )}
       </div>
@@ -652,6 +763,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       )}
 
       <PaginationBar offset={currentOffset} limit={currentLimit} total={total} onPrev={handlePrev} onNext={handleNext} />
+
+      <ReferencedByDialog
+        open={showReferencedByDialog}
+        connId={connId}
+        row={selectedRowEntry?.row ?? null}
+        references={referencedBy}
+        onOpenChange={setShowReferencedByDialog}
+        onNavigate={handleNavigateReferencedBy}
+      />
 
       <DeleteRowsDialog
         open={showDeleteDialog}

@@ -19,6 +19,8 @@ func (p *PostgresConnector) listSchemas(ctx context.Context) ([]connector.Object
 	rows, err := p.pool.Query(ctx,
 		`SELECT schema_name FROM information_schema.schemata
 		 WHERE schema_name NOT IN ('pg_catalog','information_schema','pg_toast')
+		   AND schema_name NOT LIKE 'pg_temp_%'
+		   AND schema_name NOT LIKE 'pg_toast_temp_%'
 		 ORDER BY schema_name`)
 	if err != nil {
 		return nil, normalizePostgresError(fmt.Errorf("failed to list schemas: %w", err))
@@ -170,6 +172,7 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 	fkRows, err := p.pool.Query(ctx,
 		`SELECT
 			kcu.column_name,
+			ccu.table_schema,
 			ccu.table_name,
 			ccu.column_name
 		 FROM information_schema.table_constraints tc
@@ -193,15 +196,16 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 	for fkRows.Next() {
 		var (
 			colName  string
+			fkSchema string
 			fkTable  string
 			fkColumn string
 		)
-		if err := fkRows.Scan(&colName, &fkTable, &fkColumn); err != nil {
+		if err := fkRows.Scan(&colName, &fkSchema, &fkTable, &fkColumn); err != nil {
 			return nil, normalizePostgresError(err)
 		}
 		if idx, ok := indexByName[colName]; ok {
 			columns[idx].IsFK = true
-			columns[idx].FKTable = fkTable
+			columns[idx].FKTable = fmt.Sprintf("%s.%s", fkSchema, fkTable)
 			columns[idx].FKColumn = fkColumn
 		}
 	}
@@ -209,7 +213,49 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 		return nil, normalizePostgresError(err)
 	}
 
-	return &connector.Schema{Columns: columns}, nil
+	referencedByRows, err := p.pool.Query(ctx,
+		`SELECT
+			src_kcu.table_schema,
+			src_kcu.table_name,
+			src_kcu.column_name,
+			tgt_ccu.column_name
+		 FROM information_schema.referential_constraints rc
+		 JOIN information_schema.key_column_usage src_kcu
+		   ON src_kcu.constraint_name = rc.constraint_name
+		  AND src_kcu.constraint_schema = rc.constraint_schema
+		 JOIN information_schema.constraint_column_usage tgt_ccu
+		   ON tgt_ccu.constraint_name = rc.unique_constraint_name
+		  AND tgt_ccu.constraint_schema = rc.unique_constraint_schema
+		 WHERE tgt_ccu.table_schema = $1
+		   AND tgt_ccu.table_name = $2
+		 ORDER BY src_kcu.table_schema, src_kcu.table_name, src_kcu.column_name`, schema, table)
+	if err != nil {
+		return nil, normalizePostgresError(fmt.Errorf("failed to get referenced by metadata: %w", err))
+	}
+	defer referencedByRows.Close()
+
+	referencedBy := make([]connector.FKRef, 0)
+	for referencedByRows.Next() {
+		var (
+			sourceSchema string
+			sourceTable  string
+			sourceColumn string
+			targetColumn string
+		)
+		if err := referencedByRows.Scan(&sourceSchema, &sourceTable, &sourceColumn, &targetColumn); err != nil {
+			return nil, normalizePostgresError(err)
+		}
+		referencedBy = append(referencedBy, connector.FKRef{
+			Table:     fmt.Sprintf("%s.%s", sourceSchema, sourceTable),
+			Column:    sourceColumn,
+			RefColumn: targetColumn,
+		})
+	}
+	if err := referencedByRows.Err(); err != nil {
+		return nil, normalizePostgresError(err)
+	}
+
+	return &connector.Schema{Columns: columns, ReferencedBy: referencedBy}, nil
 }
 
 // parseSchemaTable splits "schema.table" into schema and table parts.

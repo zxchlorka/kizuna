@@ -21,11 +21,12 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	path := r.URL.Query().Get("path")
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	objects, err := c.ListObjects(r.Context(), path)
 	if err != nil {
@@ -40,11 +41,12 @@ func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	name := chi.URLParam(r, "name")
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	schema, err := c.GetSchema(r.Context(), name)
 	if err != nil {
@@ -59,11 +61,12 @@ func (h *ObjectsHandler) GetObjectInfo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	name := chi.URLParam(r, "name")
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
+	defer cancel()
 
 	info, err := c.GetObjectInfo(r.Context(), name)
 	if err != nil {
