@@ -30,6 +30,8 @@ func NewConnectionManager(cfg *config.AppConfig) *ConnectionManager {
 
 // RegisterFactory registers a connector factory for a given connection type.
 func (m *ConnectionManager) RegisterFactory(connType string, factory ConnectorFactory) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.factories[connType] = factory
 }
 
@@ -50,6 +52,18 @@ func (m *ConnectionManager) Get(ctx context.Context, id string) (Connector, erro
 }
 
 func (m *ConnectionManager) createConnector(ctx context.Context, id string, retry bool) (Connector, error) {
+	connCfg, ok := m.config.GetConnection(id)
+	if !ok {
+		return nil, fmt.Errorf("connection %q not found", id)
+	}
+
+	m.mu.RLock()
+	factory, ok := m.factories[connCfg.Type]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("unsupported connection type: %s", connCfg.Type)
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -60,16 +74,6 @@ func (m *ConnectionManager) createConnector(ctx context.Context, id string, retr
 		}
 		c.Close()
 		delete(m.connectors, id)
-	}
-
-	connCfg, ok := m.config.GetConnection(id)
-	if !ok {
-		return nil, fmt.Errorf("connection %q not found", id)
-	}
-
-	factory, ok := m.factories[connCfg.Type]
-	if !ok {
-		return nil, fmt.Errorf("unsupported connection type: %s", connCfg.Type)
 	}
 
 	c, err := factory(ctx, connCfg, m.config.EncryptionKey)

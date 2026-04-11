@@ -1,0 +1,497 @@
+package redis
+
+import (
+	"context"
+	"crypto/tls"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"os"
+	"strconv"
+	"strings"
+
+	"github.com/qsnake66/infraview/internal/config"
+	"github.com/qsnake66/infraview/internal/connector"
+	goredis "github.com/redis/go-redis/v9"
+)
+
+type redisClient interface {
+	Ping(ctx context.Context) *goredis.StatusCmd
+	Info(ctx context.Context, sections ...string) *goredis.StringCmd
+	Close() error
+}
+
+type RedisConnector struct {
+	client redisClient
+	config config.ConnectionConfig
+	redis  redisSettings
+}
+
+type redisSettings struct {
+	mode          config.RedisMode
+	address       string
+	addresses     []string
+	sentinelAddrs []string
+	masterName    string
+	separator     string
+	database      int
+	username      string
+	tlsConfig     *tls.Config
+}
+
+// New creates a RedisConnector for standalone, cluster, or sentinel mode.
+func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*RedisConnector, error) {
+	settings, err := resolveRedisSettings(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	password, err := decryptPassword(encKey, cfg.Password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt password: %w", err)
+	}
+
+	client, err := newRedisClient(settings, password)
+	if err != nil {
+		return nil, err
+	}
+
+	conn := &RedisConnector{
+		client: client,
+		config: cfg,
+		redis:  settings,
+	}
+
+	if err := conn.Ping(ctx); err != nil {
+		_ = client.Close()
+		return nil, fmt.Errorf("failed to ping redis: %w", err)
+	}
+
+	slog.Info("redis connector created",
+		"mode", string(settings.mode),
+		"address", settings.address,
+		"addresses", settings.addresses,
+		"master_name", settings.masterName,
+	)
+
+	return conn, nil
+}
+
+func newRedisConnector(client redisClient, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
+	return &RedisConnector{
+		client: client,
+		config: cfg,
+		redis:  settings,
+	}
+}
+
+func (c *RedisConnector) Ping(ctx context.Context) error {
+	return normalizeRedisError(c.client.Ping(ctx).Err())
+}
+
+func (c *RedisConnector) ListObjects(context.Context, string) ([]connector.Object, error) {
+	return nil, unsupportedRedisOperation("list objects")
+}
+
+func (c *RedisConnector) GetObjectInfo(context.Context, string) (*connector.ObjectInfo, error) {
+	return nil, unsupportedRedisOperation("get object info")
+}
+
+func (c *RedisConnector) GetSchema(context.Context, string) (*connector.Schema, error) {
+	return nil, unsupportedRedisOperation("get schema")
+}
+
+func (c *RedisConnector) GetData(context.Context, string, connector.DataOpts) (*connector.DataResult, error) {
+	return nil, unsupportedRedisOperation("get data")
+}
+
+func (c *RedisConnector) Execute(context.Context, string) (*connector.ExecResult, error) {
+	return nil, unsupportedRedisOperation("execute")
+}
+
+func (c *RedisConnector) ExecuteBatch(context.Context, []string) ([]connector.ExecResult, error) {
+	return nil, unsupportedRedisOperation("execute batch")
+}
+
+func (c *RedisConnector) Explain(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, unsupportedRedisOperation("explain")
+}
+
+func (c *RedisConnector) Analyze(context.Context, string) (*connector.ExplainResult, error) {
+	return nil, unsupportedRedisOperation("analyze")
+}
+
+func (c *RedisConnector) Completions(context.Context, connector.CompletionRequest) ([]connector.CompletionItem, error) {
+	return nil, unsupportedRedisOperation("completions")
+}
+
+func (c *RedisConnector) Mutate(context.Context, connector.MutateOp) (*connector.MutateResult, error) {
+	return nil, unsupportedRedisOperation("mutate")
+}
+
+func (c *RedisConnector) MutateBulk(context.Context, connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
+	return nil, unsupportedRedisOperation("bulk mutate")
+}
+
+func (c *RedisConnector) DDL(context.Context, connector.DDLOp) error {
+	return unsupportedRedisOperation("ddl")
+}
+
+func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, error) {
+	info, err := c.client.Info(ctx).Result()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get redis info: %w", normalizeRedisError(err))
+	}
+
+	parsed := parseRedisInfo(info)
+	host, port := primaryEndpoint(c.redis, c.config)
+	extra := map[string]any{
+		"mode":        string(c.redis.mode),
+		"separator":   c.redis.separator,
+		"tls_enabled": c.redis.tlsConfig != nil,
+		"master_name": c.redis.masterName,
+	}
+
+	for _, key := range []string{"redis_version", "uptime_in_seconds", "connected_clients", "role"} {
+		if value, ok := parsed[key]; ok {
+			extra[key] = value
+		}
+	}
+
+	database := strconv.Itoa(c.redis.database)
+	if c.redis.mode == config.RedisModeCluster {
+		database = ""
+	}
+
+	return &connector.ConnInfo{
+		Version:  parsed["redis_version"],
+		Database: database,
+		Host:     host,
+		Port:     port,
+		Extra:    extra,
+	}, nil
+}
+
+func (c *RedisConnector) Close() error {
+	if c.client == nil {
+		return nil
+	}
+	return c.client.Close()
+}
+
+// NewFactory returns a ConnectorFactory for Redis.
+func NewFactory() connector.ConnectorFactory {
+	return func(ctx context.Context, cfg config.ConnectionConfig, encKey string) (connector.Connector, error) {
+		return New(ctx, cfg, encKey)
+	}
+}
+
+func resolveRedisSettings(cfg config.ConnectionConfig) (redisSettings, error) {
+	redisCfg := config.RedisConfig{}
+	if cfg.RedisConfig != nil {
+		redisCfg = *cfg.RedisConfig
+	}
+	redisCfg = redisCfg.Normalize()
+
+	settings := redisSettings{
+		mode:       redisCfg.Mode,
+		separator:  redisCfg.Separator,
+		username:   firstNonEmpty(redisCfg.Username, cfg.Username),
+		database:   redisCfg.Database,
+		masterName: strings.TrimSpace(redisCfg.MasterName),
+	}
+	legacyDatabase := cfg.RedisConfig == nil
+	if settings.mode == "" {
+		settings.mode = config.RedisModeStandalone
+	}
+
+	switch settings.mode {
+	case config.RedisModeStandalone:
+		settings.address = resolveRedisAddress(firstNonEmpty(strings.TrimSpace(redisCfg.Address), joinHostPort(cfg.Host, cfg.Port)))
+		if settings.address == "" {
+			return redisSettings{}, fmt.Errorf("redis standalone mode requires an address or host/port")
+		}
+	case config.RedisModeCluster:
+		settings.addresses = resolveRedisAddresses(redisCfg.Addresses)
+		if len(settings.addresses) == 0 && strings.TrimSpace(redisCfg.Address) != "" {
+			settings.addresses = resolveRedisAddresses([]string{redisCfg.Address})
+		}
+		if len(settings.addresses) == 0 && cfg.Host != "" {
+			settings.addresses = []string{resolveRedisAddress(joinHostPort(cfg.Host, cfg.Port))}
+		}
+		if len(settings.addresses) == 0 {
+			return redisSettings{}, fmt.Errorf("redis cluster mode requires at least one address")
+		}
+	case config.RedisModeSentinel:
+		settings.sentinelAddrs = resolveRedisAddresses(redisCfg.SentinelAddrs)
+		if len(settings.sentinelAddrs) == 0 && strings.TrimSpace(redisCfg.Address) != "" {
+			settings.sentinelAddrs = resolveRedisAddresses([]string{redisCfg.Address})
+		}
+		if len(settings.sentinelAddrs) == 0 && cfg.Host != "" {
+			settings.sentinelAddrs = []string{resolveRedisAddress(joinHostPort(cfg.Host, cfg.Port))}
+		}
+		if len(settings.sentinelAddrs) == 0 {
+			return redisSettings{}, fmt.Errorf("redis sentinel mode requires at least one sentinel address")
+		}
+		if settings.masterName == "" {
+			return redisSettings{}, fmt.Errorf("redis sentinel mode requires master_name")
+		}
+	default:
+		return redisSettings{}, fmt.Errorf("unsupported redis mode %q", settings.mode)
+	}
+
+	if legacyDatabase && (settings.mode == config.RedisModeStandalone || settings.mode == config.RedisModeSentinel) {
+		if settings.database == 0 && strings.TrimSpace(cfg.Database) != "" {
+			db, err := strconv.Atoi(strings.TrimSpace(cfg.Database))
+			if err != nil {
+				return redisSettings{}, fmt.Errorf("invalid redis database %q: %w", cfg.Database, err)
+			}
+			settings.database = db
+		}
+	}
+
+	if redisCfg.TLSEnabled {
+		settings.tlsConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	}
+
+	return settings, nil
+}
+
+func unsupportedRedisOperation(name string) error {
+	return fmt.Errorf("%w: redis %s is not implemented yet", connector.ErrBadRequest, name)
+}
+
+func newRedisClient(settings redisSettings, password string) (redisClient, error) {
+	switch settings.mode {
+	case config.RedisModeStandalone:
+		options := &goredis.Options{
+			Addr:         settings.address,
+			Username:     settings.username,
+			Password:     password,
+			DB:           settings.database,
+			TLSConfig:    settings.tlsConfig,
+			DialTimeout:  0,
+			ReadTimeout:  0,
+			WriteTimeout: 0,
+		}
+		return goredis.NewClient(options), nil
+	case config.RedisModeCluster:
+		options := &goredis.ClusterOptions{
+			Addrs:        settings.addresses,
+			Username:     settings.username,
+			Password:     password,
+			TLSConfig:    settings.tlsConfig,
+			DialTimeout:  0,
+			ReadTimeout:  0,
+			WriteTimeout: 0,
+		}
+		return goredis.NewClusterClient(options), nil
+	case config.RedisModeSentinel:
+		options := &goredis.FailoverOptions{
+			MasterName:       settings.masterName,
+			SentinelAddrs:    settings.sentinelAddrs,
+			Username:         settings.username,
+			Password:         password,
+			DB:               settings.database,
+			TLSConfig:        settings.tlsConfig,
+			SentinelUsername: settings.username,
+			SentinelPassword: password,
+			DialTimeout:      0,
+			ReadTimeout:      0,
+			WriteTimeout:     0,
+		}
+		return goredis.NewFailoverClient(options), nil
+	default:
+		return nil, fmt.Errorf("unsupported redis mode %q", settings.mode)
+	}
+}
+
+func decryptPassword(encKey, password string) (string, error) {
+	if encKey == "" || password == "" {
+		return password, nil
+	}
+	return config.Decrypt(encKey, password)
+}
+
+func primaryEndpoint(settings redisSettings, cfg config.ConnectionConfig) (string, string) {
+	switch settings.mode {
+	case config.RedisModeStandalone:
+		return splitAddress(settings.address)
+	case config.RedisModeCluster:
+		if len(settings.addresses) > 0 {
+			return splitAddress(settings.addresses[0])
+		}
+	case config.RedisModeSentinel:
+		if len(settings.sentinelAddrs) > 0 {
+			return splitAddress(settings.sentinelAddrs[0])
+		}
+	}
+	if cfg.Host != "" {
+		return cfg.Host, strconv.Itoa(portOrDefault(cfg.Port))
+	}
+	return "", ""
+}
+
+func parseRedisInfo(info string) map[string]string {
+	parsed := make(map[string]string)
+	for _, line := range strings.Split(info, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		parsed[key] = value
+	}
+	return parsed
+}
+
+func normalizeRedisError(err error) error {
+	if err == nil {
+		return nil
+	}
+
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %s", connector.ErrTimeout, err.Error())
+	}
+
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return fmt.Errorf("%w: %s", connector.ErrUnavailable, err.Error())
+	}
+
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "wrongpass"),
+		strings.Contains(msg, "noauth"),
+		strings.Contains(msg, "noperm"),
+		strings.Contains(msg, "invalid username-password pair"):
+		return fmt.Errorf("%w: %s", connector.ErrForbidden, err.Error())
+	case strings.Contains(msg, "timeout"),
+		strings.Contains(msg, "i/o timeout"):
+		return fmt.Errorf("%w: %s", connector.ErrTimeout, err.Error())
+	case strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "failed to connect"),
+		strings.Contains(msg, "connection reset"),
+		strings.Contains(msg, "dial tcp"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "network is unreachable"):
+		return fmt.Errorf("%w: %s", connector.ErrUnavailable, err.Error())
+	default:
+		return err
+	}
+}
+
+func resolveRedisAddresses(addresses []string) []string {
+	if len(addresses) == 0 {
+		return nil
+	}
+
+	seen := make(map[string]struct{}, len(addresses))
+	out := make([]string, 0, len(addresses))
+	for _, addr := range addresses {
+		addr = resolveRedisAddress(strings.TrimSpace(addr))
+		if addr == "" {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		out = append(out, addr)
+	}
+	return out
+}
+
+func resolveRedisAddress(addr string) string {
+	if addr == "" {
+		return ""
+	}
+
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+
+	return net.JoinHostPort(resolveHost(host), port)
+}
+
+func resolveHost(host string) string {
+	return resolveHostWithLookup(host, isRunningInDocker(), net.LookupHost)
+}
+
+func resolveHostWithLookup(host string, inDocker bool, lookup func(string) ([]string, error)) string {
+	if host != "localhost" && host != "127.0.0.1" {
+		return host
+	}
+	if !inDocker {
+		return host
+	}
+
+	if gateway := resolveDockerGatewayHost(lookup); gateway != "" {
+		return gateway
+	}
+
+	return "host.docker.internal"
+}
+
+func isRunningInDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
+}
+
+func resolveDockerGatewayHost(lookup func(string) ([]string, error)) string {
+	if lookup == nil {
+		return ""
+	}
+
+	addrs, err := lookup("host.docker.internal")
+	if err != nil {
+		return ""
+	}
+
+	for _, addr := range addrs {
+		ip := net.ParseIP(strings.TrimSpace(addr))
+		if ip == nil || ip.IsLoopback() {
+			continue
+		}
+		return ip.String()
+	}
+
+	return ""
+}
+
+func splitAddress(addr string) (string, string) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr, ""
+	}
+	return host, port
+}
+
+func joinHostPort(host string, port int) string {
+	if host == "" {
+		return ""
+	}
+	return net.JoinHostPort(host, strconv.Itoa(portOrDefault(port)))
+}
+
+func portOrDefault(port int) int {
+	if port > 0 {
+		return port
+	}
+	return 6379
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if trimmed := strings.TrimSpace(value); trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}

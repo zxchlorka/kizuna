@@ -1,20 +1,50 @@
-export type ObjectType = 'table' | 'view' | 'index'
+export type ConnectionType = 'postgres' | 'redis'
+export type RedisMode = 'standalone' | 'cluster' | 'sentinel'
+export interface RedisConfig {
+  mode?: RedisMode
+  address?: string
+  addresses?: string[]
+  sentinel_addrs?: string[]
+  master_name?: string
+  separator?: string
+  database?: number
+  username?: string
+  tls_enabled?: boolean
+}
+
+export type RedisObjectType =
+  | 'redis_string'
+  | 'redis_hash'
+  | 'redis_list'
+  | 'redis_set'
+  | 'redis_zset'
+  | 'redis_stream'
+
+export type ObjectType = 'table' | 'view' | 'index' | 'namespace' | RedisObjectType
 export type ObjectItemType = ObjectType | 'schema'
 
 export interface Connection {
   id: string
   name: string
-  type: string
-  host: string
-  port: number
-  database: string
-  username: string
+  type: ConnectionType
+  host?: string
+  port?: number
+  database?: string | number
+  username?: string
+  password?: string
+  mode?: RedisMode
+  separator?: string
+  tlsEnabled?: boolean
+  masterName?: string
+  clusterAddresses?: string[]
+  sentinelAddresses?: string[]
+  redis_config?: RedisConfig
   tags?: string[]
 }
 
-export interface ConnectionInput {
+export interface PostgresConnectionInput {
   name: string
-  type: string
+  type: 'postgres'
   host: string
   port: number
   database: string
@@ -22,6 +52,20 @@ export interface ConnectionInput {
   password: string
   tags: string[]
 }
+
+export interface RedisConnectionInput {
+  name: string
+  type: 'redis'
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  tags: string[]
+  redis_config: RedisConfig
+}
+
+export type ConnectionInput = PostgresConnectionInput | RedisConnectionInput
 
 export interface TestResult {
   ok: boolean
@@ -35,6 +79,9 @@ export interface ObjectItem {
   schema: string
   row_count: number
   parent_name?: string
+  path?: string
+  ttl_seconds?: number
+  meta?: Record<string, unknown>
 }
 
 export interface ObjectInfo {

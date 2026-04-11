@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -29,27 +30,29 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 	// Omit password from response
 	type connResponse struct {
-		ID       string   `json:"id"`
-		Name     string   `json:"name"`
-		Type     string   `json:"type"`
-		Host     string   `json:"host"`
-		Port     int      `json:"port"`
-		Database string   `json:"database"`
-		Username string   `json:"username"`
-		Tags     []string `json:"tags,omitempty"`
+		ID          string              `json:"id"`
+		Name        string              `json:"name"`
+		Type        string              `json:"type"`
+		Host        string              `json:"host"`
+		Port        int                 `json:"port"`
+		Database    string              `json:"database"`
+		Username    string              `json:"username"`
+		Tags        []string            `json:"tags,omitempty"`
+		RedisConfig *config.RedisConfig `json:"redis_config,omitempty"`
 	}
 
 	result := make([]connResponse, len(conns))
 	for i, c := range conns {
 		result[i] = connResponse{
-			ID:       c.ID,
-			Name:     c.Name,
-			Type:     c.Type,
-			Host:     c.Host,
-			Port:     c.Port,
-			Database: c.Database,
-			Username: c.Username,
-			Tags:     slices.Clone(c.Tags),
+			ID:          c.ID,
+			Name:        c.Name,
+			Type:        c.Type,
+			Host:        c.Host,
+			Port:        c.Port,
+			Database:    c.Database,
+			Username:    c.Username,
+			Tags:        slices.Clone(c.Tags),
+			RedisConfig: c.RedisConfig.Clone(),
 		}
 	}
 
@@ -58,14 +61,15 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name     string   `json:"name"`
-		Type     string   `json:"type"`
-		Host     string   `json:"host"`
-		Port     int      `json:"port"`
-		Database string   `json:"database"`
-		Username string   `json:"username"`
-		Tags     []string `json:"tags"`
-		Password string   `json:"password"`
+		Name        string              `json:"name"`
+		Type        string              `json:"type"`
+		Host        string              `json:"host"`
+		Port        int                 `json:"port"`
+		Database    string              `json:"database"`
+		Username    string              `json:"username"`
+		Tags        []string            `json:"tags"`
+		Password    string              `json:"password"`
+		RedisConfig *config.RedisConfig `json:"redis_config"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -104,6 +108,9 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Tags:     normalizeTags(req.Tags),
 		Password: encPassword,
 	}
+	if req.RedisConfig != nil {
+		conn.RedisConfig = req.RedisConfig.Clone()
+	}
 
 	h.cfg.AddConnection(conn)
 
@@ -114,14 +121,15 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"id":       conn.ID,
-		"name":     conn.Name,
-		"type":     conn.Type,
-		"host":     conn.Host,
-		"port":     conn.Port,
-		"database": conn.Database,
-		"username": conn.Username,
-		"tags":     conn.Tags,
+		"id":           conn.ID,
+		"name":         conn.Name,
+		"type":         conn.Type,
+		"host":         conn.Host,
+		"port":         conn.Port,
+		"database":     conn.Database,
+		"username":     conn.Username,
+		"tags":         conn.Tags,
+		"redis_config": conn.RedisConfig,
 	})
 }
 
@@ -135,14 +143,15 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name     *string   `json:"name"`
-		Type     *string   `json:"type"`
-		Host     *string   `json:"host"`
-		Port     *int      `json:"port"`
-		Database *string   `json:"database"`
-		Username *string   `json:"username"`
-		Tags     *[]string `json:"tags"`
-		Password *string   `json:"password"`
+		Name        *string             `json:"name"`
+		Type        *string             `json:"type"`
+		Host        *string             `json:"host"`
+		Port        *int                `json:"port"`
+		Database    *string             `json:"database"`
+		Username    *string             `json:"username"`
+		Tags        *[]string           `json:"tags"`
+		Password    *string             `json:"password"`
+		RedisConfig *config.RedisConfig `json:"redis_config"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -179,6 +188,9 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.Password = encrypted
 	}
+	if req.RedisConfig != nil {
+		existing.RedisConfig = req.RedisConfig.Clone()
+	}
 
 	h.cfg.UpdateConnection(id, existing)
 
@@ -192,14 +204,15 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":       existing.ID,
-		"name":     existing.Name,
-		"type":     existing.Type,
-		"host":     existing.Host,
-		"port":     existing.Port,
-		"database": existing.Database,
-		"username": existing.Username,
-		"tags":     existing.Tags,
+		"id":           existing.ID,
+		"name":         existing.Name,
+		"type":         existing.Type,
+		"host":         existing.Host,
+		"port":         existing.Port,
+		"database":     existing.Database,
+		"username":     existing.Username,
+		"tags":         existing.Tags,
+		"redis_config": existing.RedisConfig,
 	})
 }
 
@@ -224,15 +237,17 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
 
-	c, err := h.manager.Get(r.Context(), id)
+	c, err := h.manager.Get(ctx, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
 
 	start := time.Now()
-	err = c.Ping(r.Context())
+	err = c.Ping(ctx)
 	latency := time.Since(start).Milliseconds()
 
 	if err != nil {

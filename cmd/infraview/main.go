@@ -17,6 +17,7 @@ import (
 	"github.com/qsnake66/infraview/internal/config"
 	"github.com/qsnake66/infraview/internal/connector"
 	"github.com/qsnake66/infraview/internal/connector/postgres"
+	redisconnector "github.com/qsnake66/infraview/internal/connector/redis"
 	"github.com/qsnake66/infraview/internal/server"
 )
 
@@ -51,6 +52,7 @@ func main() {
 	// Set up ConnectionManager with factories
 	manager := connector.NewConnectionManager(cfg)
 	manager.RegisterFactory("postgres", postgres.NewFactory())
+	manager.RegisterFactory("redis", redisconnector.NewFactory())
 	defer manager.CloseAll()
 
 	router := api.NewRouter(cfg, manager)

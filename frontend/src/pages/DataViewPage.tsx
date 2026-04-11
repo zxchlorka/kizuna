@@ -4,11 +4,13 @@ import { Sidebar } from '@/components/Sidebar'
 import { TabBar } from '@/components/TabBar'
 import { EmptyState } from '@/components/EmptyState'
 import { ProductionBanner } from '@/components/ProductionBanner'
+import { RedisKeyView } from '@/components/RedisKeyView'
 import { useConnectionStore } from '@/stores/connections'
 import { useWorkspaceStore } from '@/stores/workspace'
 import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
 import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
+import { isRedisObjectType } from '@/lib/objectTypes'
 
 export default function DataViewPage() {
   const { id } = useParams<{ id: string }>()
@@ -44,6 +46,12 @@ export default function DataViewPage() {
                 object={activeTab.object}
                 tabId={activeTab.id}
               />
+            ) : isRedisObjectType(activeTab.objectType) || activeTab.objectType === 'namespace' ? (
+              <RedisKeyView
+                connId={activeTab.connId}
+                object={activeTab.object}
+                objectType={activeTab.objectType}
+              />
             ) : (
               <PgTableView
                 connId={activeTab.connId}
@@ -56,8 +64,12 @@ export default function DataViewPage() {
               <div className="w-full max-w-md">
                 <EmptyState
                   variant="no_tables"
-                  title="Select a table"
-                  description="Choose a table from the object tree to inspect rows, run DDL actions, and edit data."
+                  title={currentConnection?.type === 'redis' ? 'Select a Redis key' : 'Select a table'}
+                  description={
+                    currentConnection?.type === 'redis'
+                      ? 'Choose a typed Redis key from the namespace tree. Value editing will follow in the next slice.'
+                      : 'Choose a table from the object tree to inspect rows, run DDL actions, and edit data.'
+                  }
                 />
               </div>
             </div>

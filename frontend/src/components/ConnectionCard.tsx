@@ -19,6 +19,28 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
   const [health, setHealth] = useState<Health>('unknown')
   const [retesting, setRetesting] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const isRedis = connection.type === 'redis'
+  const summaryLabel = (() => {
+    if (isRedis) {
+      const host = connection.host ?? 'redis'
+      const port = connection.port ?? 6379
+      if (connection.mode === 'cluster') {
+        return `${host}:${port} / ${connection.clusterAddresses?.length ?? 0} brokers`
+      }
+      if (connection.mode === 'sentinel') {
+        return `${host}:${port} / master ${connection.masterName ?? 'mymaster'}`
+      }
+      return `${host}:${port} / db ${connection.database ?? 0}`
+    }
+
+    const host = connection.host ?? 'localhost'
+    const port = connection.port ?? 5432
+    const database = connection.database ?? ''
+    return `${host}:${port}/${database}`
+  })()
+  const accentClass = isRedis ? 'text-red-400' : 'text-blue-400'
+  const accentSoftClass = isRedis ? 'border-red-500/15 bg-red-500/5' : 'border-blue-500/15 bg-blue-500/5'
+  const accentBarClass = isRedis ? 'bg-red-500/20 group-hover:bg-red-500/50' : 'bg-blue-500/20 group-hover:bg-blue-500/50'
 
   const runTest = useCallback(async () => {
     setRetesting(true)
@@ -80,13 +102,13 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
       </div>
 
       {/* Left accent bar */}
-      <div className="absolute left-0 top-0 bottom-0 w-[2px] bg-blue-500/20 group-hover:bg-blue-500/50 transition-colors duration-200" />
+      <div className={cn('absolute left-0 top-0 bottom-0 w-[2px] transition-colors duration-200', accentBarClass)} />
 
       <div className="px-4 pt-4 pb-3 pl-5">
         <div className="flex items-start gap-3">
           {/* DB icon */}
-          <div className="mt-0.5 h-8 w-8 shrink-0 flex items-center justify-center rounded-sm border border-blue-500/15 bg-blue-500/5 group-hover:border-blue-500/30 transition-colors duration-200">
-            <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-400/80" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border transition-colors duration-200', accentSoftClass)}>
+            <svg viewBox="0 0 24 24" className={cn('h-4 w-4', accentClass)} fill="none" stroke="currentColor" strokeWidth="1.5">
               <ellipse cx="12" cy="5" rx="9" ry="3" />
               <path d="M3 5V19A9 3 0 0 0 21 19V5" />
               <path d="M3 12A9 3 0 0 0 21 12" />
@@ -97,9 +119,11 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold text-foreground font-mono leading-tight">{connection.name}</p>
             <p className="truncate text-[11px] text-muted-foreground font-mono mt-0.5">
-              {connection.host}:{connection.port}/<span className="text-muted-foreground/80">{connection.database}</span>
+              {summaryLabel}
             </p>
-            <p className="truncate text-[10px] text-muted-foreground/50 font-mono">{connection.username}</p>
+            <p className="truncate text-[10px] text-muted-foreground/50 font-mono">
+              {isRedis ? `mode: ${connection.mode ?? 'standalone'}${connection.separator ? ` / sep: ${connection.separator}` : ''}` : connection.username}
+            </p>
             {connection.tags && connection.tags.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
                 {connection.tags.map((tag) => (
@@ -163,8 +187,8 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
 
         {/* Footer: type tag + retest */}
         <div className="mt-3 flex items-center justify-between">
-          <span className="rounded-sm border border-blue-500/15 bg-blue-500/5 px-1.5 py-0.5 text-[9px] font-mono text-blue-400/60 uppercase tracking-[0.12em]">
-            {connection.type || 'postgres'}
+          <span className={cn('rounded-sm px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-[0.12em]', isRedis ? 'border border-red-500/15 bg-red-500/5 text-red-400/70' : 'border border-blue-500/15 bg-blue-500/5 text-blue-400/60')}>
+            {isRedis ? `redis${connection.mode ? ` / ${connection.mode}` : ''}` : 'postgres'}
           </span>
 
           {/* Retest button — small clickable text */}
