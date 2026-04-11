@@ -15,6 +15,7 @@ import (
 type testObjectsConnector struct {
 	objects []connector.Object
 	info    *connector.ObjectInfo
+	schema  *connector.Schema
 }
 
 func (c *testObjectsConnector) Ping(context.Context) error { return nil }
@@ -30,7 +31,7 @@ func (c *testObjectsConnector) GetObjectInfo(context.Context, string) (*connecto
 }
 
 func (c *testObjectsConnector) GetSchema(context.Context, string) (*connector.Schema, error) {
-	return nil, nil
+	return c.schema, nil
 }
 
 func (c *testObjectsConnector) GetData(context.Context, string, connector.DataOpts) (*connector.DataResult, error) {
@@ -172,5 +173,46 @@ func TestObjectsHandlerGetObjectInfo(t *testing.T) {
 	}
 	if got.Predicate == nil || *got.Predicate != predicate {
 		t.Fatalf("unexpected predicate: %#v", got.Predicate)
+	}
+}
+
+func TestObjectsHandlerGetSchemaIncludesReferencedBy(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestObjectsHandler(t, &testObjectsConnector{
+		schema: &connector.Schema{
+			Columns: []connector.ColumnMeta{
+				{Name: "id", DataType: "uuid", IsPK: true},
+			},
+			ReferencedBy: []connector.FKRef{
+				{Table: "public.people_book", Column: "book_id", RefColumn: "id"},
+			},
+		},
+	})
+
+	req := withRouteParams(httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/objects/public.books/schema", nil), map[string]string{
+		"id":   "conn-1",
+		"name": "public.books",
+	})
+	rec := httptest.NewRecorder()
+
+	handler.GetSchema(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+
+	var got connector.Schema
+	if err := json.NewDecoder(rec.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.ReferencedBy) != 1 {
+		t.Fatalf("unexpected referenced_by length: got %d", len(got.ReferencedBy))
+	}
+	if got.ReferencedBy[0].Table != "public.people_book" {
+		t.Fatalf("unexpected referenced_by table: got %q", got.ReferencedBy[0].Table)
+	}
+	if got.ReferencedBy[0].Column != "book_id" || got.ReferencedBy[0].RefColumn != "id" {
+		t.Fatalf("unexpected referenced_by payload: %#v", got.ReferencedBy[0])
 	}
 }

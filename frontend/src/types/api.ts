@@ -40,6 +40,7 @@ export interface Connection {
   sentinelAddresses?: string[]
   redis_config?: RedisConfig
   tags?: string[]
+  visible_schemas: string[] | null
 }
 
 export interface PostgresConnectionInput {
@@ -51,6 +52,7 @@ export interface PostgresConnectionInput {
   username: string
   password: string
   tags: string[]
+  visible_schemas?: string[] | null
 }
 
 export interface RedisConnectionInput {
@@ -107,8 +109,15 @@ export interface ColumnMeta {
   fk_column: string
 }
 
+export interface FKRef {
+  table: string
+  column: string
+  ref_column: string
+}
+
 export interface Schema {
   columns: ColumnMeta[]
+  referenced_by: FKRef[]
 }
 
 export type TableRow = Record<string, unknown>

@@ -7,16 +7,16 @@ import (
 )
 
 type ConnectionConfig struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Type        string       `json:"type"` // "postgres", "redis", "kafka"
-	Host        string       `json:"host"`
-	Port        int          `json:"port"`
-	Database    string       `json:"database"`
-	Username    string       `json:"username"`
-	Password    string       `json:"password"` // encrypted
-	Tags        []string     `json:"tags,omitempty"`
-	RedisConfig *RedisConfig `json:"redis_config,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Type           string   `json:"type"` // "postgres", "redis", "kafka"
+	Host           string   `json:"host"`
+	Port           int      `json:"port"`
+	Database       string   `json:"database"`
+	Username       string   `json:"username"`
+	Password       string   `json:"password"` // encrypted
+	Tags           []string `json:"tags,omitempty"`
+	VisibleSchemas []string `json:"visible_schemas"`
 }
 
 type AppConfig struct {

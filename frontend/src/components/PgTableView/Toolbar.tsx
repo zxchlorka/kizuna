@@ -1,4 +1,4 @@
-import { Check, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Check, Link2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { DDLDropdown, type TableDDLAction } from '@/components/DDL/DDLDropdown'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -19,6 +19,8 @@ interface ToolbarProps {
   onSaveAll: () => void
   onCancelAll: () => void
   onDDLAction: (action: TableDDLAction) => void
+  canOpenReferencedBy: boolean
+  onOpenReferencedBy: () => void
 }
 
 export function Toolbar({
@@ -36,6 +38,8 @@ export function Toolbar({
   onSaveAll,
   onCancelAll,
   onDDLAction,
+  canOpenReferencedBy,
+  onOpenReferencedBy,
 }: ToolbarProps) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border bg-background px-3 py-2">
@@ -67,6 +71,17 @@ export function Toolbar({
         </Button>
 
         <DDLDropdown disabled={loading} onAction={onDDLAction} />
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={onOpenReferencedBy}
+          disabled={!canOpenReferencedBy}
+          className="h-8 gap-1.5 px-2.5"
+        >
+          <Link2 className="h-3.5 w-3.5" />
+          <span>Referenced By</span>
+        </Button>
 
         {selectedCount > 0 && (
           <Button

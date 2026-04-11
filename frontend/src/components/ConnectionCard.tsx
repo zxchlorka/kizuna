@@ -1,13 +1,14 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Trash2, Pencil, RefreshCw } from 'lucide-react'
+import { Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
+import { useToastStore } from '@/stores/toast'
 import type { Connection } from '@/types/api'
 
 interface ConnectionCardProps {
   connection: Connection
-  onDelete: (id: string) => void
+  onDelete: (id: string) => Promise<void>
   onEdit: (connection: Connection) => void
 }
 
@@ -15,122 +16,156 @@ type Health = 'unknown' | 'healthy' | 'unhealthy'
 
 export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardProps) {
   const navigate = useNavigate()
-  const test = useConnectionStore((s) => s.test)
+  const test = useConnectionStore((state) => state.test)
+  const pushToast = useToastStore((state) => state.push)
   const [health, setHealth] = useState<Health>('unknown')
+  const [opening, setOpening] = useState(false)
   const [retesting, setRetesting] = useState(false)
-  const [confirmDelete, setConfirmDelete] = useState(false)
-  const isRedis = connection.type === 'redis'
-  const summaryLabel = (() => {
-    if (isRedis) {
-      const host = connection.host ?? 'redis'
-      const port = connection.port ?? 6379
-      if (connection.mode === 'cluster') {
-        return `${host}:${port} / ${connection.clusterAddresses?.length ?? 0} brokers`
-      }
-      if (connection.mode === 'sentinel') {
-        return `${host}:${port} / master ${connection.masterName ?? 'mymaster'}`
-      }
-      return `${host}:${port} / db ${connection.database ?? 0}`
-    }
+  const [deleting, setDeleting] = useState(false)
 
-    const host = connection.host ?? 'localhost'
-    const port = connection.port ?? 5432
-    const database = connection.database ?? ''
-    return `${host}:${port}/${database}`
-  })()
-  const accentClass = isRedis ? 'text-red-400' : 'text-blue-400'
-  const accentSoftClass = isRedis ? 'border-red-500/15 bg-red-500/5' : 'border-blue-500/15 bg-blue-500/5'
-  const accentBarClass = isRedis ? 'bg-red-500/20 group-hover:bg-red-500/50' : 'bg-blue-500/20 group-hover:bg-blue-500/50'
-
-  const runTest = useCallback(async () => {
+  const runTest = async () => {
     setRetesting(true)
     try {
-      const r = await test(connection.id)
-      setHealth(r.ok ? 'healthy' : 'unhealthy')
+      const result = await test(connection.id)
+      setHealth(result.ok ? 'healthy' : 'unhealthy')
+      return result
     } catch {
       setHealth('unhealthy')
+      throw new Error('Could not reach the database. Check the host, credentials, and network access.')
     } finally {
       setRetesting(false)
     }
-  }, [connection.id, test])
+  }
 
-  // Auto-test on mount
   useEffect(() => {
     let cancelled = false
+
     test(connection.id)
-      .then((r) => { if (!cancelled) setHealth(r.ok ? 'healthy' : 'unhealthy') })
-      .catch(() => { if (!cancelled) setHealth('unhealthy') })
-    return () => { cancelled = true }
+      .then((result) => {
+        if (!cancelled) {
+          setHealth(result.ok ? 'healthy' : 'unhealthy')
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHealth('unhealthy')
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
   }, [connection.id, test])
 
-  const handleDelete = (e: React.MouseEvent) => {
+  const handleOpen = async () => {
+    if (opening || deleting || retesting) {
+      return
+    }
+
+    setOpening(true)
+    try {
+      await runTest()
+      navigate(`/connections/${connection.id}`)
+    } catch (error) {
+      pushToast({
+        tone: 'error',
+        title: 'Connection unavailable',
+        message: (error as Error).message,
+      })
+    } finally {
+      setOpening(false)
+    }
+  }
+
+  const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (confirmDelete) {
-      onDelete(connection.id)
-    } else {
-      setConfirmDelete(true)
-      setTimeout(() => setConfirmDelete(false), 3000)
+    if (opening || deleting) {
+      return
+    }
+
+    if (!window.confirm(`Delete connection "${connection.name}"?`)) {
+      return
+    }
+
+    setDeleting(true)
+    try {
+      await onDelete(connection.id)
+    } catch (error) {
+      pushToast({
+        tone: 'error',
+        title: 'Delete failed',
+        message: (error as Error).message,
+      })
+    } finally {
+      setDeleting(false)
     }
   }
 
   const handleEdit = (e: React.MouseEvent) => {
     e.stopPropagation()
+    if (opening || deleting) {
+      return
+    }
     onEdit(connection)
   }
 
   const handleRetest = (e: React.MouseEvent) => {
     e.stopPropagation()
-    if (!retesting) runTest()
+    if (opening || retesting || deleting) {
+      return
+    }
+
+    void runTest().catch((error) => {
+      pushToast({
+        tone: 'error',
+        title: 'Connection test failed',
+        message: (error as Error).message,
+      })
+    })
   }
 
   return (
     <div
-      onClick={() => navigate(`/connections/${connection.id}`)}
+      onClick={() => void handleOpen()}
       className={cn(
-        'group relative overflow-visible border border-border bg-card cursor-pointer select-none',
+        'group relative cursor-pointer select-none overflow-visible border border-border bg-card',
         'transition-all duration-200',
-        'hover:border-amber-500/25 hover:-translate-y-0.5',
+        'hover:-translate-y-0.5 hover:border-amber-500/25',
         'hover:shadow-[0_4px_24px_-8px_rgba(245,158,11,0.15)]'
       )}
     >
-      {/* Amber corner brackets — on hover */}
-      <div className="pointer-events-none absolute inset-0 opacity-0 group-hover:opacity-100 transition-opacity duration-150">
+      <div className="pointer-events-none absolute inset-0 opacity-0 transition-opacity duration-150 group-hover:opacity-100">
         <div className="absolute -left-px -top-px h-2 w-2 bg-amber-500" />
         <div className="absolute -right-px -top-px h-2 w-2 bg-amber-500" />
         <div className="absolute -left-px -bottom-px h-2 w-2 bg-amber-500" />
         <div className="absolute -right-px -bottom-px h-2 w-2 bg-amber-500" />
       </div>
 
-      {/* Left accent bar */}
-      <div className={cn('absolute left-0 top-0 bottom-0 w-[2px] transition-colors duration-200', accentBarClass)} />
+      <div className="absolute bottom-0 left-0 top-0 w-[2px] bg-blue-500/20 transition-colors duration-200 group-hover:bg-blue-500/50" />
 
-      <div className="px-4 pt-4 pb-3 pl-5">
+      <div className="px-4 pb-3 pl-5 pt-4">
         <div className="flex items-start gap-3">
-          {/* DB icon */}
-          <div className={cn('mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border transition-colors duration-200', accentSoftClass)}>
-            <svg viewBox="0 0 24 24" className={cn('h-4 w-4', accentClass)} fill="none" stroke="currentColor" strokeWidth="1.5">
+          <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-blue-500/15 bg-blue-500/5 transition-colors duration-200 group-hover:border-blue-500/30">
+            <svg viewBox="0 0 24 24" className="h-4 w-4 text-blue-400/80" fill="none" stroke="currentColor" strokeWidth="1.5">
               <ellipse cx="12" cy="5" rx="9" ry="3" />
               <path d="M3 5V19A9 3 0 0 0 21 19V5" />
               <path d="M3 12A9 3 0 0 0 21 12" />
             </svg>
           </div>
 
-          {/* Info */}
           <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-foreground font-mono leading-tight">{connection.name}</p>
-            <p className="truncate text-[11px] text-muted-foreground font-mono mt-0.5">
-              {summaryLabel}
+            <p className="truncate font-mono text-sm font-semibold leading-tight text-foreground">{connection.name}</p>
+            <p className="mt-0.5 truncate font-mono text-[11px] text-muted-foreground">
+              {connection.host}:{connection.port}/<span className="text-muted-foreground/80">{connection.database}</span>
             </p>
-            <p className="truncate text-[10px] text-muted-foreground/50 font-mono">
-              {isRedis ? `mode: ${connection.mode ?? 'standalone'}${connection.separator ? ` / sep: ${connection.separator}` : ''}` : connection.username}
-            </p>
+            <p className="truncate font-mono text-[10px] text-muted-foreground/50">{connection.username}</p>
             {connection.tags && connection.tags.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1">
                 {connection.tags.map((tag) => (
                   <span
                     key={tag}
                     className={cn(
-                      'rounded-sm border px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-[0.12em]',
+                      'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em]',
                       tag === 'production'
                         ? 'border-amber-500/35 bg-amber-500/10 text-amber-500'
                         : 'border-border bg-muted/20 text-muted-foreground'
@@ -143,65 +178,61 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
             )}
           </div>
 
-          {/* Actions (visible on hover) */}
-          <div className="flex shrink-0 items-center gap-1.5 mt-0.5">
-            {/* Status dot */}
-            <div className="relative flex items-center justify-center h-4 w-4">
+          <div className="mt-0.5 flex shrink-0 items-center gap-1.5">
+            <div className="relative flex h-4 w-4 items-center justify-center">
               <span
                 className={cn(
-                  'relative z-10 h-2 w-2 rounded-full block',
+                  'relative z-10 block h-2 w-2 rounded-full',
                   health === 'healthy' && 'bg-green-500',
                   health === 'unhealthy' && 'bg-red-500',
-                  health === 'unknown' && 'bg-muted-foreground/30 animate-pulse'
+                  (health === 'unknown' || opening) && 'animate-pulse bg-muted-foreground/30'
                 )}
               />
-              {health === 'healthy' && (
-                <span className="absolute h-2 w-2 rounded-full bg-green-500 animate-glow-ping" />
+              {health === 'healthy' && !opening && (
+                <span className="absolute h-2 w-2 animate-glow-ping rounded-full bg-green-500" />
               )}
             </div>
 
-            {/* Edit */}
             <button
               onClick={handleEdit}
-              className="rounded-sm p-1 opacity-0 transition-all duration-150 group-hover:opacity-100 text-muted-foreground/60 hover:text-amber-500 hover:bg-amber-500/10"
+              disabled={opening || deleting}
+              className="rounded-sm p-1 text-muted-foreground/60 opacity-0 transition-all duration-150 group-hover:opacity-100 hover:bg-amber-500/10 hover:text-amber-500 disabled:pointer-events-none disabled:opacity-40"
               title="Edit connection"
             >
               <Pencil className="h-3 w-3" />
             </button>
 
-            {/* Delete */}
             <button
               onClick={handleDelete}
+              disabled={deleting || opening}
               className={cn(
-                'rounded-sm p-1 opacity-0 transition-all duration-150 group-hover:opacity-100',
-                confirmDelete
-                  ? 'bg-destructive text-destructive-foreground opacity-100'
-                  : 'text-muted-foreground/60 hover:text-foreground hover:bg-muted'
+                'rounded-sm p-1 opacity-0 transition-all duration-150 group-hover:opacity-100 disabled:pointer-events-none disabled:opacity-100',
+                deleting
+                  ? 'bg-muted text-muted-foreground/60'
+                  : 'text-muted-foreground/60 hover:bg-muted hover:text-foreground'
               )}
-              title={confirmDelete ? 'Click again to confirm' : 'Delete'}
+              title={deleting ? 'Deleting...' : 'Delete'}
             >
               <Trash2 className="h-3 w-3" />
             </button>
           </div>
         </div>
 
-        {/* Footer: type tag + retest */}
         <div className="mt-3 flex items-center justify-between">
-          <span className={cn('rounded-sm px-1.5 py-0.5 text-[9px] font-mono uppercase tracking-[0.12em]', isRedis ? 'border border-red-500/15 bg-red-500/5 text-red-400/70' : 'border border-blue-500/15 bg-blue-500/5 text-blue-400/60')}>
-            {isRedis ? `redis${connection.mode ? ` / ${connection.mode}` : ''}` : 'postgres'}
+          <span className="rounded-sm border border-blue-500/15 bg-blue-500/5 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-blue-400/60">
+            {connection.type || 'postgres'}
           </span>
 
-          {/* Retest button — small clickable text */}
           <button
             onClick={handleRetest}
             className={cn(
-              'flex items-center gap-1 text-[10px] font-mono text-muted-foreground/40 hover:text-muted-foreground transition-colors',
-              retesting && 'pointer-events-none'
+              'flex items-center gap-1 font-mono text-[10px] text-muted-foreground/40 transition-colors hover:text-muted-foreground',
+              (retesting || opening || deleting) && 'pointer-events-none'
             )}
             title="Re-test connection"
           >
-            <RefreshCw className={cn('h-2.5 w-2.5', retesting && 'animate-spin')} />
-            {retesting ? 'testing…' : 'test'}
+            <RefreshCw className={cn('h-2.5 w-2.5', (retesting || opening) && 'animate-spin')} />
+            {deleting ? 'deleting...' : opening ? 'opening...' : retesting ? 'testing...' : 'test'}
           </button>
         </div>
       </div>

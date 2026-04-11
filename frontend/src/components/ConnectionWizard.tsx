@@ -4,17 +4,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowLeft, CheckCircle2, Database, Loader2, X, XCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import type { Connection } from '@/types/api'
-import {
-  buildConnectionInput,
-  createConnectionForm,
-  createConnectionFormFromConnection,
-  validateConnectionForm,
-  type ConnectionFormValues,
-} from '@/lib/connectionForms'
-import { ConnectionTypeSelector } from '@/components/ConnectionWizard/ConnectionTypeSelector'
-import { PostgresConnectionForm } from '@/components/ConnectionWizard/PostgresConnectionForm'
-import { RedisConnectionForm } from '@/components/ConnectionWizard/RedisConnectionForm'
+import type { Connection, ConnectionInput } from '@/types/api'
 
 interface ConnectionWizardProps {
   open: boolean
@@ -22,18 +12,60 @@ interface ConnectionWizardProps {
   editConnection?: Connection
 }
 
+const blankForm: ConnectionInput = {
+  name: '',
+  type: 'postgres',
+  host: 'localhost',
+  port: 5432,
+  database: '',
+  username: '',
+  password: '',
+  tags: [],
+}
+
+const unchangedPasswordToken = '__keep_existing_password__'
+
+function buildConnectionTestKey(form: ConnectionInput, isEdit: boolean) {
+  const passwordKey = isEdit && form.password === '' ? unchangedPasswordToken : form.password
+
+  return JSON.stringify({
+    type: form.type,
+    host: form.host.trim(),
+    port: form.port,
+    database: form.database.trim(),
+    username: form.username.trim(),
+    password: passwordKey,
+  })
+}
+
+function buildExistingConnectionTestKey(connection: Connection) {
+  return JSON.stringify({
+    type: connection.type,
+    host: connection.host.trim(),
+    port: connection.port,
+    database: connection.database.trim(),
+    username: connection.username.trim(),
+    password: unchangedPasswordToken,
+  })
+}
+
 export function ConnectionWizard({ open, onOpenChange, editConnection }: ConnectionWizardProps) {
   const navigate = useNavigate()
   const store = useConnectionStore()
   const isEdit = !!editConnection
-
   const [step, setStep] = useState<1 | 2>(1)
-  const [form, setForm] = useState<ConnectionFormValues>(createConnectionForm())
-  const [savedId, setSavedId] = useState<string | null>(null)
+  const [form, setForm] = useState<ConnectionInput>(blankForm)
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [lastSuccessfulTestKey, setLastSuccessfulTestKey] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number; error?: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+
+  const isFormValid = !!(form.name && form.host && form.port && form.database && form.username)
+  const currentTestKey = buildConnectionTestKey(form, isEdit)
+  const baselineTestKey = editConnection ? buildExistingConnectionTestKey(editConnection) : null
+  const requiresSuccessfulTest = !isEdit || currentTestKey !== baselineTestKey
+  const canSave = isFormValid && !testing && !saving && (!requiresSuccessfulTest || lastSuccessfulTestKey === currentTestKey)
 
   useEffect(() => {
     if (!open) {
@@ -42,78 +74,71 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
 
     setTesting(false)
     setSaving(false)
+    setLastSuccessfulTestKey(null)
     setTestResult(null)
     setError(null)
 
     if (editConnection) {
       setStep(2)
-      setSavedId(editConnection.id)
-      setForm(createConnectionFormFromConnection(editConnection))
+      setForm({
+        name: editConnection.name,
+        type: editConnection.type,
+        host: editConnection.host,
+        port: editConnection.port,
+        database: editConnection.database,
+        username: editConnection.username,
+        password: '',
+        tags: editConnection.tags ?? [],
+      })
       return
     }
 
     setStep(1)
-    setSavedId(null)
-    setForm(createConnectionForm())
+    setForm(blankForm)
   }, [editConnection, open])
 
-  const validationError = validateConnectionForm(form, isEdit || savedId !== null)
+  const updateField = <K extends keyof ConnectionInput>(key: K, value: ConnectionInput[K]) => {
+    setForm((prev) => ({ ...prev, [key]: value }))
 
-  const updateForm = (patch: Partial<ConnectionFormValues>) => {
-    setForm((prev) => ({ ...prev, ...patch }))
-    setTestResult(null)
+    if (key === 'type' || key === 'host' || key === 'port' || key === 'database' || key === 'username' || key === 'password') {
+      setTestResult(null)
+    }
+
     setError(null)
   }
 
-  const handleTypeSelect = (type: ConnectionFormValues['type']) => {
-    setForm((prev) => ({
-      ...createConnectionForm(type),
-      name: prev.name,
-      tagsText: prev.tagsText,
-    }))
-    setStep(2)
-  }
-
   const persist = async (): Promise<string> => {
-    const payload = buildConnectionInput(form)
-
-    if (isEdit && savedId) {
-      const updatePayload: Partial<typeof payload> = { ...payload }
-      if (typeof updatePayload.password === 'string' && updatePayload.password.trim() === '') {
-        delete updatePayload.password
+    if (isEdit && editConnection) {
+      const payload: Partial<ConnectionInput> = { ...form }
+      if (!payload.password) {
+        delete payload.password
       }
-      await store.update(savedId, updatePayload)
-      return savedId
+      await store.update(editConnection.id, payload)
+      return editConnection.id
     }
 
-    if (savedId) {
-      const updatePayload: Partial<typeof payload> = { ...payload }
-      if (typeof updatePayload.password === 'string' && updatePayload.password.trim() === '') {
-        delete updatePayload.password
-      }
-      await store.update(savedId, updatePayload)
-      return savedId
-    }
-
-    const conn = await store.create(payload)
-    setSavedId(conn.id)
-    return conn.id
+    const connection = await store.create(form)
+    return connection.id
   }
 
   const handleTest = async () => {
-    if (validationError) {
-      setError(validationError)
+    if (!isFormValid) {
       return
     }
 
     setTesting(true)
     setTestResult(null)
     setError(null)
+
     try {
-      const id = await persist()
-      const result = await store.test(id)
+      const result = await store.testConfig({
+        ...(editConnection ? { id: editConnection.id } : {}),
+        ...form,
+      })
       setTestResult(result)
+      setLastSuccessfulTestKey(currentTestKey)
     } catch (e) {
+      setLastSuccessfulTestKey(null)
       setError((e as Error).message)
     } finally {
       setTesting(false)
@@ -121,13 +146,18 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
   }
 
   const handleSave = async () => {
-    if (validationError) {
-      setError(validationError)
+    if (!isFormValid) {
+      return
+    }
+
+    if (requiresSuccessfulTest && lastSuccessfulTestKey !== currentTestKey) {
+      setError(isEdit ? 'Run a successful connection test before saving updated access settings.' : 'Run a successful connection test before saving.')
       return
     }
 
     setSaving(true)
     setError(null)
+
     try {
       const id = await persist()
       onOpenChange(false)
@@ -141,7 +171,12 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
     }
   }
 
-  const hasFeedback = testing || testResult !== null || error !== null
+  const inputCls = cn(
+    'w-full rounded-sm border border-input bg-background px-3 py-2 text-sm font-mono outline-none',
+    'placeholder:text-muted-foreground/30',
+    'focus:border-amber-500/60 focus:ring-0 transition-colors duration-150'
+  )
+  const labelCls = 'mb-1 block text-[10px] font-medium text-muted-foreground uppercase tracking-[0.12em]'
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -149,7 +184,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-fade-in" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed inset-0 z-50 m-auto h-fit max-h-[calc(100vh-2rem)] w-full max-w-2xl overflow-y-auto rounded-sm border border-border bg-background shadow-2xl data-[state=open]:animate-fade-in"
+          className="fixed inset-0 z-50 m-auto h-fit max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-sm border border-border bg-background shadow-2xl data-[state=open]:animate-fade-in"
         >
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <Dialog.Title className="font-mono text-sm font-bold">
@@ -163,122 +198,231 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
             </Dialog.Close>
           </div>
 
-          {step === 1 && !isEdit && (
-            <div className="px-6 py-5">
-              <ConnectionTypeSelector selectedType={form.type} onSelectType={handleTypeSelect} />
+          {step === 1 && (
+            <div className="space-y-4 px-6 py-5">
+              <p className="text-xs text-muted-foreground">Select connection type</p>
+              <div className="grid grid-cols-3 gap-3">
+                <button
+                  onClick={() => {
+                    updateField('type', 'postgres')
+                    setStep(2)
+                  }}
+                  className="group relative flex flex-col items-center gap-2 rounded-sm border-2 border-amber-500/50 bg-amber-500/5 p-4 transition-colors hover:bg-amber-500/10"
+                >
+                  <Database className="h-7 w-7 text-blue-400" />
+                  <span className="font-mono text-xs font-medium">PostgreSQL</span>
+                  <div className="absolute -left-px -top-px h-2 w-2 bg-amber-500" />
+                  <div className="absolute -right-px -top-px h-2 w-2 bg-amber-500" />
+                  <div className="absolute -left-px -bottom-px h-2 w-2 bg-amber-500" />
+                  <div className="absolute -right-px -bottom-px h-2 w-2 bg-amber-500" />
+                </button>
+                <div className="flex cursor-not-allowed select-none flex-col items-center gap-2 rounded-sm border border-border p-4 opacity-35">
+                  <Database className="h-7 w-7 text-red-400" />
+                  <span className="font-mono text-xs font-medium">Redis</span>
+                  <span className="text-[10px] text-muted-foreground">v0.2</span>
+                </div>
+                <div className="flex cursor-not-allowed select-none flex-col items-center gap-2 rounded-sm border border-border p-4 opacity-35">
+                  <Database className="h-7 w-7 text-orange-400" />
+                  <span className="font-mono text-xs font-medium">Kafka</span>
+                  <span className="text-[10px] text-muted-foreground">v0.3</span>
+                </div>
+              </div>
             </div>
           )}
 
           {step === 2 && (
-            <div className="px-6 py-5">
-              <div className="mb-4 flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                <Database className="h-3.5 w-3.5" />
-                {form.type === 'redis' ? 'Redis connection details' : 'PostgreSQL connection details'}
+            <div className="space-y-4 px-6 py-5">
+              <div>
+                <label className={labelCls}>Name</label>
+                <input
+                  type="text"
+                  value={form.name}
+                  onChange={(e) => updateField('name', e.target.value)}
+                  placeholder="My Database"
+                  className={inputCls}
+                  autoFocus
+                />
               </div>
 
-              {form.type === 'postgres' ? (
-                <PostgresConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
-              ) : (
-                <RedisConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className={labelCls}>Host</label>
+                  <input
+                    type="text"
+                    value={form.host}
+                    onChange={(e) => updateField('host', e.target.value)}
+                    placeholder="localhost"
+                    className={inputCls}
+                  />
+                </div>
+                <div className="w-24">
+                  <label className={labelCls}>Port</label>
+                  <input
+                    type="number"
+                    value={form.port}
+                    onChange={(e) => updateField('port', parseInt(e.target.value, 10) || 0)}
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>Database</label>
+                <input
+                  type="text"
+                  value={form.database}
+                  onChange={(e) => updateField('database', e.target.value)}
+                  placeholder="mydb"
+                  className={inputCls}
+                />
+              </div>
+
+              <div className="flex gap-3">
+                <div className="flex-1">
+                  <label className={labelCls}>Username</label>
+                  <input
+                    type="text"
+                    value={form.username}
+                    onChange={(e) => updateField('username', e.target.value)}
+                    placeholder="postgres"
+                    className={inputCls}
+                  />
+                </div>
+                <div className="flex-1">
+                  <label className={labelCls}>
+                    Password
+                    {isEdit && <span className="ml-1 normal-case opacity-50">(blank = keep)</span>}
+                  </label>
+                  <input
+                    type="password"
+                    value={form.password}
+                    onChange={(e) => updateField('password', e.target.value)}
+                    placeholder={isEdit ? '••••••••' : ''}
+                    className={inputCls}
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className={labelCls}>Tags</label>
+                <input
+                  type="text"
+                  value={form.tags.join(', ')}
+                  onChange={(e) =>
+                    updateField(
+                      'tags',
+                      e.target.value
+                        .split(',')
+                        .map((tag) => tag.trim())
+                        .filter(Boolean)
+                    )
+                  }
+                  placeholder="production, reporting"
+                  className={inputCls}
+                />
+                <p className="mt-1 text-[10px] text-muted-foreground">Use explicit tags like `production` to enable safety banners.</p>
+              </div>
+
+              {(testing || testResult || error) && (
+                <div
+                  className={cn(
+                    'flex items-center gap-2 rounded-sm border px-3 py-2.5 text-xs font-mono',
+                    testResult?.ok && 'border-green-500/30 bg-green-500/5 text-green-500',
+                    ((testResult && !testResult.ok) || error) && 'border-red-500/30 bg-red-500/5 text-red-400',
+                    testing && 'border-border bg-muted/30 text-muted-foreground'
+                  )}
+                >
+                  {testing && (
+                    <>
+                      <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                      Testing connection...
+                    </>
+                  )}
+                  {testResult?.ok && (
+                    <>
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
+                      Connected - {testResult.latency_ms}ms
+                    </>
+                  )}
+                  {testResult && !testResult.ok && (
+                    <>
+                      <XCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{testResult.error}</span>
+                    </>
+                  )}
+                  {!testResult && error && (
+                    <>
+                      <XCircle className="h-3.5 w-3.5 shrink-0" />
+                      <span className="truncate">{error}</span>
+                    </>
+                  )}
+                </div>
               )}
 
-              <div className="mt-4">
-                {hasFeedback && (
-                  <div
-                    className={cn(
-                      'flex items-center gap-2 rounded-sm border px-3 py-2.5 text-xs font-mono',
-                      testResult?.ok && 'border-green-500/30 bg-green-500/5 text-green-500',
-                      (testResult && !testResult.ok) || error ? 'border-red-500/30 bg-red-500/5 text-red-400' : '',
-                      testing && 'border-border bg-muted/30 text-muted-foreground'
-                    )}
-                  >
-                    {testing && (
-                      <>
-                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
-                        Testing connection...
-                      </>
-                    )}
-                    {testResult?.ok && (
-                      <>
-                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                        Connected - {testResult.latency_ms}ms
-                      </>
-                    )}
-                    {testResult && !testResult.ok && (
-                      <>
-                        <XCircle className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{testResult.error}</span>
-                      </>
-                    )}
-                    {!testResult && error && (
-                      <>
-                        <XCircle className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{error}</span>
-                      </>
-                    )}
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center justify-between">
+                  {!isEdit ? (
+                    <button
+                      onClick={() => setStep(1)}
+                      className="flex items-center gap-1 rounded-sm px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      <ArrowLeft className="h-3.5 w-3.5" />
+                      Back
+                    </button>
+                  ) : (
+                    <div />
+                  )}
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={handleTest}
+                      disabled={!isFormValid || testing || saving}
+                      className={cn(
+                        'rounded-sm border px-3 py-2 font-mono text-xs transition-colors',
+                        isFormValid && !testing && !saving
+                          ? 'border-amber-500/40 bg-amber-500/8 text-amber-500 hover:border-amber-500/70 hover:bg-amber-500/15'
+                          : 'cursor-not-allowed border-border text-muted-foreground/40'
+                      )}
+                    >
+                      {testing ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Testing...
+                        </span>
+                      ) : (
+                        'Test'
+                      )}
+                    </button>
+
+                    <button
+                      onClick={handleSave}
+                      disabled={!canSave}
+                      className={cn(
+                        'rounded-sm px-4 py-2 font-mono text-xs font-medium transition-colors',
+                        canSave
+                          ? 'bg-primary text-primary-foreground hover:bg-primary/90'
+                          : 'cursor-not-allowed bg-muted text-muted-foreground/40'
+                      )}
+                    >
+                      {saving ? (
+                        <span className="flex items-center gap-1.5">
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                          Saving...
+                        </span>
+                      ) : isEdit ? (
+                        'Save Changes'
+                      ) : (
+                        'Save'
+                      )}
+                    </button>
                   </div>
-                )}
-
-                {!hasFeedback && validationError && (
-                  <p className="mt-2 text-[11px] text-muted-foreground">{validationError}</p>
-                )}
-              </div>
-
-              <div className="flex items-center justify-between pt-5">
-                {!isEdit ? (
-                  <button
-                    type="button"
-                    onClick={() => setStep(1)}
-                    className="flex items-center gap-1 rounded-sm px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted"
-                  >
-                    <ArrowLeft className="h-3.5 w-3.5" />
-                    Back
-                  </button>
-                ) : (
-                  <div />
-                )}
-
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleTest}
-                    disabled={Boolean(validationError) || testing || saving}
-                    className={cn(
-                      'rounded-sm border px-3 py-2 font-mono text-xs transition-colors',
-                      !validationError && !testing && !saving
-                        ? 'border-amber-500/40 bg-amber-500/8 text-amber-500 hover:border-amber-500/70 hover:bg-amber-500/15'
-                        : 'cursor-not-allowed border-border text-muted-foreground/40'
-                    )}
-                  >
-                    {testing ? (
-                      <span className="flex items-center gap-1.5">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Testing...
-                      </span>
-                    ) : (
-                      'Test'
-                    )}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleSave}
-                    disabled={Boolean(validationError) || testing || saving}
-                    className={cn(
-                      'rounded-sm px-4 py-2 font-mono text-xs font-medium transition-colors',
-                      !validationError && !testing && !saving
-                        ? 'bg-primary text-primary-foreground hover:bg-primary/90'
-                        : 'cursor-not-allowed bg-muted text-muted-foreground/40'
-                    )}
-                  >
-                    {saving ? (
-                      <span className="flex items-center gap-1.5">
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                        Saving...
-                      </span>
-                    ) : isEdit ? 'Save Changes' : 'Save'}
-                  </button>
                 </div>
+
+                {!canSave && isFormValid && !testing && !saving && requiresSuccessfulTest && (
+                  <p className="text-right font-mono text-[10px] text-muted-foreground">
+                    {isEdit ? 'Re-test the updated connection before saving.' : 'Successful test required before saving a new connection.'}
+                  </p>
+                )}
               </div>
             </div>
           )}
