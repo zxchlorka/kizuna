@@ -33,6 +33,7 @@ interface TabData {
   objectInfo: ObjectInfo | null
   objectInfoLoading: boolean
   error: string | null
+  meta: Record<string, unknown> | null
   opts: DataOpts
   draftUpdates: Record<string, DraftUpdate>
   draftDeletes: Record<string, DraftDelete>
@@ -77,6 +78,7 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       objectInfo: null,
       objectInfoLoading: false,
       error: null,
+      meta: null,
       opts: { ...DEFAULT_OPTS },
       draftUpdates: {},
       draftDeletes: {},
@@ -142,6 +144,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
               ...tab,
               columns: data.columns,
               referencedBy: data.referenced_by ?? [],
+              meta: data.meta ?? tab.meta,
               error: null,
             },
           },
@@ -215,6 +218,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
               rows: normalizedRows,
               total: result.total ?? 0,
               loading: false,
+              meta: result.meta ?? tab.meta,
               error: null,
             },
           },

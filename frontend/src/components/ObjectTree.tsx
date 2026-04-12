@@ -313,7 +313,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       <div key={objectKey}>
         <button
           type="button"
-          onClick={() => openTab(connId, objectKey, item.type as ObjectType)}
+      onClick={() => openTab(connId, objectKey, item.type as ObjectType)}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
         >
           {getIcon(item.type)}
@@ -409,9 +409,9 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
 
     return (
       <button
-        key={objectKey}
+        key={`${item.type}:${objectKey}`}
         type="button"
-        onClick={() => openTab(connId, objectKey, item.type as ObjectType)}
+        onClick={() => openTab(connId, objectKey, item.type as ObjectType, { ttlSeconds: item.ttl_seconds })}
         className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted ${nested ? 'pl-3' : ''}`}
         title={objectKey}
       >
@@ -446,7 +446,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     const nodeLoading = expanded && !treeItems[buildTreeKey(connId, nodePath)] && treeLoading
 
     return (
-      <div key={nodePath}>
+      <div key={`namespace:${nodePath}`}>
         <button
           type="button"
           onClick={() => handleNodeClick(nodePath)}

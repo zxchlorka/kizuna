@@ -27,6 +27,7 @@ export interface DataTableProps {
   editMode: boolean
   draftDeletes: Set<string>
   canSelectRows: boolean
+  showFilters?: boolean
   getRowKey: (row: TableRow, rowIndex: number) => string
   onSortChange: (col: string, dir: 'asc' | 'desc' | null) => void
   onFilterChange: (column: string, nextState: ColumnFilterState) => void
@@ -130,6 +131,7 @@ export function DataTable({
   editMode,
   draftDeletes,
   canSelectRows,
+  showFilters = true,
   getRowKey,
   onSortChange,
   onFilterChange,
@@ -289,57 +291,59 @@ export function DataTable({
               </tr>
             ))}
 
-            <tr className="border-b border-border bg-muted/55">
-              {table.getLeafHeaders().map((header) => (
-                <th
-                  key={`filter-${header.id}`}
-                  className="h-8 border-r border-border px-1 py-0 align-middle last:border-r-0"
-                  style={{ width: header.getSize() }}
-                >
-                  {header.column.id === '__select__'
-                    ? null
-                    : (() => {
-                        const columnId = header.column.id
-                        const meta = columnMetaByName.get(columnId)
-                        if (!meta) return null
+            {showFilters && (
+              <tr className="border-b border-border bg-muted/55">
+                {table.getLeafHeaders().map((header) => (
+                  <th
+                    key={`filter-${header.id}`}
+                    className="h-8 border-r border-border px-1 py-0 align-middle last:border-r-0"
+                    style={{ width: header.getSize() }}
+                  >
+                    {header.column.id === '__select__'
+                      ? null
+                      : (() => {
+                          const columnId = header.column.id
+                          const meta = columnMetaByName.get(columnId)
+                          if (!meta) return null
 
-                        const category = getTypeCategory(meta.data_type)
-                        const ops = FILTER_OPS_BY_CATEGORY[category]
-                        const defaultOp = DEFAULT_OP_BY_CATEGORY[category]
-                        const saved = filterState[columnId]
-                        const opValid = saved && ops.some((op) => op.value === saved.op)
-                        const state = opValid ? saved : { op: defaultOp, value: '' }
-                        const isNullOp = state.op === 'is_null' || state.op === 'is_not_null'
+                          const category = getTypeCategory(meta.data_type)
+                          const ops = FILTER_OPS_BY_CATEGORY[category]
+                          const defaultOp = DEFAULT_OP_BY_CATEGORY[category]
+                          const saved = filterState[columnId]
+                          const opValid = saved && ops.some((op) => op.value === saved.op)
+                          const state = opValid ? saved : { op: defaultOp, value: '' }
+                          const isNullOp = state.op === 'is_null' || state.op === 'is_not_null'
 
-                        return (
-                          <div className="flex items-center gap-0.5">
-                            <select
-                              value={state.op}
-                              onChange={(e) => onFilterChange(columnId, { ...state, op: e.target.value as FilterExpr['op'] })}
-                              className="h-6 w-[52px] shrink-0 rounded border border-border bg-background px-1 text-[11px] text-foreground outline-none ring-ring/20 focus:ring-2"
-                              title="Filter operator"
-                            >
-                              {ops.map((op) => (
-                                <option key={op.value} value={op.value}>
-                                  {op.label}
-                                </option>
-                              ))}
-                            </select>
-                            {!isNullOp && (
-                              <input
-                                type="text"
-                                placeholder="filter..."
-                                value={state.value}
-                                onChange={(e) => onFilterChange(columnId, { ...state, value: e.target.value })}
-                                className="h-6 w-full min-w-0 rounded border border-border bg-background px-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none ring-ring/20 focus:ring-2"
-                              />
-                            )}
-                          </div>
-                        )
-                      })()}
-                </th>
-              ))}
-            </tr>
+                          return (
+                            <div className="flex items-center gap-0.5">
+                              <select
+                                value={state.op}
+                                onChange={(e) => onFilterChange(columnId, { ...state, op: e.target.value as FilterExpr['op'] })}
+                                className="h-6 w-[52px] shrink-0 rounded border border-border bg-background px-1 text-[11px] text-foreground outline-none ring-ring/20 focus:ring-2"
+                                title="Filter operator"
+                              >
+                                {ops.map((op) => (
+                                  <option key={op.value} value={op.value}>
+                                    {op.label}
+                                  </option>
+                                ))}
+                              </select>
+                              {!isNullOp && (
+                                <input
+                                  type="text"
+                                  placeholder="filter..."
+                                  value={state.value}
+                                  onChange={(e) => onFilterChange(columnId, { ...state, value: e.target.value })}
+                                  className="h-6 w-full min-w-0 rounded border border-border bg-background px-1.5 text-xs text-foreground placeholder:text-muted-foreground/60 outline-none ring-ring/20 focus:ring-2"
+                                />
+                              )}
+                            </div>
+                          )
+                        })()}
+                  </th>
+                ))}
+              </tr>
+            )}
           </thead>
 
           <tbody className="relative" style={useVirtualization ? { height: `${totalVirtualSize}px` } : undefined}>

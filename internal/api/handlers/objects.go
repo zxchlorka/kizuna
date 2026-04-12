@@ -3,6 +3,7 @@ package handlers
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,7 +45,11 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 
 func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	name := chi.URLParam(r, "name")
+	name, err := url.PathUnescape(chi.URLParam(r, "name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid object name")
+		return
+	}
 
 	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
@@ -64,7 +69,11 @@ func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 
 func (h *ObjectsHandler) GetObjectInfo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	name := chi.URLParam(r, "name")
+	name, err := url.PathUnescape(chi.URLParam(r, "name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid object name")
+		return
+	}
 
 	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {

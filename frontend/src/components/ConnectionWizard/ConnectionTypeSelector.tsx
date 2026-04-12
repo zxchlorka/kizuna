@@ -1,4 +1,5 @@
-import { Database, Server, type LucideIcon } from 'lucide-react'
+import { Database, Server } from 'lucide-react'
+import { ConnectionTypeIcon } from '@/components/ConnectionTypeIcon'
 import { cn } from '@/lib/utils'
 import type { ConnectionType } from '@/types/api'
 
@@ -11,22 +12,16 @@ const options: Array<{
   type: ConnectionType
   title: string
   description: string
-  icon: LucideIcon
-  accentClass: string
 }> = [
   {
     type: 'postgres',
     title: 'PostgreSQL',
     description: 'Relational schema browser with tables, views, and indexes.',
-    icon: Database,
-    accentClass: 'text-blue-500',
   },
   {
     type: 'redis',
     title: 'Redis',
     description: 'Standalone, cluster, and sentinel connection modes.',
-    icon: Database,
-    accentClass: 'text-red-500',
   },
 ]
 
@@ -37,7 +32,6 @@ export function ConnectionTypeSelector({ selectedType, onSelectType }: Connectio
       <div className="grid gap-3 sm:grid-cols-2">
         {options.map((option) => {
           const active = option.type === selectedType
-          const Icon = option.icon
 
           return (
             <button
@@ -52,8 +46,13 @@ export function ConnectionTypeSelector({ selectedType, onSelectType }: Connectio
               )}
             >
               <div className="space-y-3">
-                <div className={cn('flex h-10 w-10 items-center justify-center rounded-sm border', active ? 'border-amber-500/30 bg-amber-500/10' : 'border-border bg-muted/20')}>
-                  <Icon className={cn('h-5 w-5', option.accentClass)} />
+                <div
+                  className={cn(
+                    'flex h-10 w-10 items-center justify-center rounded-sm border',
+                    active ? 'border-amber-500/30 bg-amber-500/10' : 'border-border bg-muted/20'
+                  )}
+                >
+                  <ConnectionTypeIcon type={option.type} className="h-5 w-5" />
                 </div>
                 <div>
                   <div className="font-mono text-sm font-semibold text-foreground">{option.title}</div>

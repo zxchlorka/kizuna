@@ -30,11 +30,14 @@ type ConnInfo struct {
 }
 
 type Object struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Schema     string `json:"schema"`
-	RowCount   int64  `json:"row_count"`
-	ParentName string `json:"parent_name,omitempty"`
+	Name       string         `json:"name"`
+	Type       string         `json:"type"`
+	Schema     string         `json:"schema"`
+	RowCount   int64          `json:"row_count"`
+	ParentName string         `json:"parent_name,omitempty"`
+	Path       string         `json:"path,omitempty"`
+	TTLSeconds *int64         `json:"ttl_seconds,omitempty"`
+	Meta       map[string]any `json:"meta,omitempty"`
 }
 
 type ObjectInfo struct {
@@ -50,8 +53,10 @@ type ObjectInfo struct {
 }
 
 type Schema struct {
-	Columns      []ColumnMeta `json:"columns"`
-	ReferencedBy []FKRef      `json:"referenced_by,omitempty"`
+	ObjectType   string         `json:"object_type,omitempty"`
+	Columns      []ColumnMeta   `json:"columns"`
+	ReferencedBy []FKRef        `json:"referenced_by,omitempty"`
+	Meta         map[string]any `json:"meta,omitempty"`
 }
 
 type FKRef struct {
@@ -69,6 +74,7 @@ type ColumnMeta struct {
 	IsFK     bool    `json:"is_fk"`
 	FKTable  string  `json:"fk_table,omitempty"`
 	FKColumn string  `json:"fk_column,omitempty"`
+	Editable bool    `json:"editable,omitempty"`
 }
 
 type DataOpts struct {
@@ -90,6 +96,7 @@ type DataResult struct {
 	Rows    []map[string]any `json:"rows"`
 	Total   int64            `json:"total"`
 	HasMore bool             `json:"has_more"`
+	Meta    map[string]any   `json:"meta,omitempty"`
 }
 
 type MutateOp struct {

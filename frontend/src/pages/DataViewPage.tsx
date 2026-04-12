@@ -33,7 +33,7 @@ export default function DataViewPage() {
     <div className="flex h-screen bg-background">
       <Sidebar connId={id} />
 
-        <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex flex-1 flex-col overflow-hidden">
         <ProductionBanner visible={Boolean(currentConnection?.tags?.includes('production'))} />
         <TabBar connId={id} />
 
@@ -50,8 +50,10 @@ export default function DataViewPage() {
             ) : isRedisObjectType(activeTab.objectType) || activeTab.objectType === 'namespace' ? (
               <RedisKeyView
                 connId={activeTab.connId}
+                tabId={activeTab.id}
                 object={activeTab.object}
                 objectType={activeTab.objectType}
+                ttlSeconds={activeTab.ttlSeconds ?? null}
               />
             ) : (
               <PgTableView

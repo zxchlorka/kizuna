@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/qsnake66/infraview/internal/config"
 	"github.com/qsnake66/infraview/internal/connector"
@@ -20,12 +21,50 @@ type redisClient interface {
 	Ping(ctx context.Context) *goredis.StatusCmd
 	Info(ctx context.Context, sections ...string) *goredis.StringCmd
 	Close() error
+	Type(ctx context.Context, key string) *goredis.StatusCmd
+	TTL(ctx context.Context, key string) *goredis.DurationCmd
+	Get(ctx context.Context, key string) *goredis.StringCmd
+	Set(ctx context.Context, key string, value any, expiration time.Duration) *goredis.StatusCmd
+	Del(ctx context.Context, keys ...string) *goredis.IntCmd
+	Scan(ctx context.Context, cursor uint64, match string, count int64) *goredis.ScanCmd
+	Exists(ctx context.Context, keys ...string) *goredis.IntCmd
+	Rename(ctx context.Context, key, newKey string) *goredis.StatusCmd
+	Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd
+	Persist(ctx context.Context, key string) *goredis.BoolCmd
+	HGetAll(ctx context.Context, key string) *goredis.MapStringStringCmd
+	HLen(ctx context.Context, key string) *goredis.IntCmd
+	HSet(ctx context.Context, key string, values ...any) *goredis.IntCmd
+	HDel(ctx context.Context, key string, fields ...string) *goredis.IntCmd
+	LLen(ctx context.Context, key string) *goredis.IntCmd
+	LRange(ctx context.Context, key string, start, stop int64) *goredis.StringSliceCmd
+	LSet(ctx context.Context, key string, index int64, value any) *goredis.StatusCmd
+	LPush(ctx context.Context, key string, values ...any) *goredis.IntCmd
+	RPush(ctx context.Context, key string, values ...any) *goredis.IntCmd
+	LRem(ctx context.Context, key string, count int64, value any) *goredis.IntCmd
+	SCard(ctx context.Context, key string) *goredis.IntCmd
+	SScan(ctx context.Context, key string, cursor uint64, match string, count int64) *goredis.ScanCmd
+	SAdd(ctx context.Context, key string, members ...any) *goredis.IntCmd
+	SRem(ctx context.Context, key string, members ...any) *goredis.IntCmd
+	ZCard(ctx context.Context, key string) *goredis.IntCmd
+	ZRangeWithScores(ctx context.Context, key string, start, stop int64) *goredis.ZSliceCmd
+	ZRevRangeWithScores(ctx context.Context, key string, start, stop int64) *goredis.ZSliceCmd
+	ZAdd(ctx context.Context, key string, members ...goredis.Z) *goredis.IntCmd
+	ZRem(ctx context.Context, key string, members ...any) *goredis.IntCmd
+	XRangeN(ctx context.Context, stream, start, stop string, count int64) *goredis.XMessageSliceCmd
+	XLen(ctx context.Context, key string) *goredis.IntCmd
 }
 
+type redisScanClient interface {
+	Scan(ctx context.Context, cursor uint64, match string, count int64) *goredis.ScanCmd
+}
+
+type redisClusterMasterScanner func(ctx context.Context, fn func(ctx context.Context, client redisScanClient) error) error
+
 type RedisConnector struct {
-	client redisClient
-	config config.ConnectionConfig
-	redis  redisSettings
+	client               redisClient
+	clusterMasterScanner redisClusterMasterScanner
+	config               config.ConnectionConfig
+	redis                redisSettings
 }
 
 type redisSettings struct {
@@ -52,15 +91,16 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 		return nil, fmt.Errorf("failed to decrypt password: %w", err)
 	}
 
-	client, err := newRedisClient(settings, password)
+	client, clusterMasterScanner, err := newRedisClient(settings, password)
 	if err != nil {
 		return nil, err
 	}
 
 	conn := &RedisConnector{
-		client: client,
-		config: cfg,
-		redis:  settings,
+		client:               client,
+		clusterMasterScanner: clusterMasterScanner,
+		config:               cfg,
+		redis:                settings,
 	}
 
 	if err := conn.Ping(ctx); err != nil {
@@ -78,32 +118,17 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 	return conn, nil
 }
 
-func newRedisConnector(client redisClient, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
+func newRedisConnector(client redisClient, clusterMasterScanner redisClusterMasterScanner, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
 	return &RedisConnector{
-		client: client,
-		config: cfg,
-		redis:  settings,
+		client:               client,
+		clusterMasterScanner: clusterMasterScanner,
+		config:               cfg,
+		redis:                settings,
 	}
 }
 
 func (c *RedisConnector) Ping(ctx context.Context) error {
 	return normalizeRedisError(c.client.Ping(ctx).Err())
-}
-
-func (c *RedisConnector) ListObjects(context.Context, string) ([]connector.Object, error) {
-	return nil, unsupportedRedisOperation("list objects")
-}
-
-func (c *RedisConnector) GetObjectInfo(context.Context, string) (*connector.ObjectInfo, error) {
-	return nil, unsupportedRedisOperation("get object info")
-}
-
-func (c *RedisConnector) GetSchema(context.Context, string) (*connector.Schema, error) {
-	return nil, unsupportedRedisOperation("get schema")
-}
-
-func (c *RedisConnector) GetData(context.Context, string, connector.DataOpts) (*connector.DataResult, error) {
-	return nil, unsupportedRedisOperation("get data")
 }
 
 func (c *RedisConnector) Execute(context.Context, string) (*connector.ExecResult, error) {
@@ -126,16 +151,8 @@ func (c *RedisConnector) Completions(context.Context, connector.CompletionReques
 	return nil, unsupportedRedisOperation("completions")
 }
 
-func (c *RedisConnector) Mutate(context.Context, connector.MutateOp) (*connector.MutateResult, error) {
-	return nil, unsupportedRedisOperation("mutate")
-}
-
 func (c *RedisConnector) MutateBulk(context.Context, connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
 	return nil, unsupportedRedisOperation("bulk mutate")
-}
-
-func (c *RedisConnector) DDL(context.Context, connector.DDLOp) error {
-	return unsupportedRedisOperation("ddl")
 }
 
 func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, error) {
@@ -262,7 +279,7 @@ func unsupportedRedisOperation(name string) error {
 	return fmt.Errorf("%w: redis %s is not implemented yet", connector.ErrBadRequest, name)
 }
 
-func newRedisClient(settings redisSettings, password string) (redisClient, error) {
+func newRedisClient(settings redisSettings, password string) (redisClient, redisClusterMasterScanner, error) {
 	switch settings.mode {
 	case config.RedisModeStandalone:
 		options := &goredis.Options{
@@ -275,7 +292,7 @@ func newRedisClient(settings redisSettings, password string) (redisClient, error
 			ReadTimeout:  0,
 			WriteTimeout: 0,
 		}
-		return goredis.NewClient(options), nil
+		return goredis.NewClient(options), nil, nil
 	case config.RedisModeCluster:
 		options := &goredis.ClusterOptions{
 			Addrs:        settings.addresses,
@@ -286,7 +303,13 @@ func newRedisClient(settings redisSettings, password string) (redisClient, error
 			ReadTimeout:  0,
 			WriteTimeout: 0,
 		}
-		return goredis.NewClusterClient(options), nil
+		clusterClient := goredis.NewClusterClient(options)
+		clusterMasterScanner := func(ctx context.Context, fn func(ctx context.Context, client redisScanClient) error) error {
+			return clusterClient.ForEachMaster(ctx, func(ctx context.Context, client *goredis.Client) error {
+				return fn(ctx, client)
+			})
+		}
+		return clusterClient, clusterMasterScanner, nil
 	case config.RedisModeSentinel:
 		options := &goredis.FailoverOptions{
 			MasterName:       settings.masterName,
@@ -301,9 +324,9 @@ func newRedisClient(settings redisSettings, password string) (redisClient, error
 			ReadTimeout:      0,
 			WriteTimeout:     0,
 		}
-		return goredis.NewFailoverClient(options), nil
+		return goredis.NewFailoverClient(options), nil, nil
 	default:
-		return nil, fmt.Errorf("unsupported redis mode %q", settings.mode)
+		return nil, nil, fmt.Errorf("unsupported redis mode %q", settings.mode)
 	}
 }
 
@@ -354,6 +377,10 @@ func normalizeRedisError(err error) error {
 		return nil
 	}
 
+	if errors.Is(err, goredis.Nil) {
+		return fmt.Errorf("%w: %s", connector.ErrRelationNotFound, err.Error())
+	}
+
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
 		return fmt.Errorf("%w: %s", connector.ErrTimeout, err.Error())
 	}
@@ -370,6 +397,8 @@ func normalizeRedisError(err error) error {
 		strings.Contains(msg, "noperm"),
 		strings.Contains(msg, "invalid username-password pair"):
 		return fmt.Errorf("%w: %s", connector.ErrForbidden, err.Error())
+	case strings.Contains(msg, "wrongtype"):
+		return fmt.Errorf("%w: %s", connector.ErrBadRequest, err.Error())
 	case strings.Contains(msg, "timeout"),
 		strings.Contains(msg, "i/o timeout"):
 		return fmt.Errorf("%w: %s", connector.ErrTimeout, err.Error())

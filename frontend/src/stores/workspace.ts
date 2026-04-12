@@ -25,6 +25,7 @@ export interface ObjectTab {
   object: string
   label: string
   objectType: ObjectType
+  ttlSeconds?: number | null
   initialFilters?: FilterExpr[]
   navigationTrail?: NavigationTrailItem[]
 }
@@ -64,7 +65,7 @@ interface WorkspaceStore {
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   hydrateVisibleSchemas: (connId: string, visibleSchemas: string[] | null | undefined) => void
   setVisibleSchemas: (connId: string, visibleSchemas: string[] | null) => void
-  openTab: (connId: string, object: string, objectType?: ObjectType) => void
+  openTab: (connId: string, object: string, objectType?: ObjectType, options?: { ttlSeconds?: number | null }) => void
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType?: ObjectType) => void
   clearObjectTabFilterState: (tabId: string) => void
   goBackFromTab: (tabId: string) => void
@@ -77,8 +78,12 @@ function buildFilterSignature(filters: FilterExpr[]): string {
   return JSON.stringify(normalizeFilters(filters))
 }
 
-function buildFilteredTabID(connId: string, object: string, filters: FilterExpr[]): string {
-  return `${connId}:${object}:filtered:${buildFilterSignature(filters)}`
+function buildObjectTabID(connId: string, object: string, objectType: ObjectType): string {
+  return `${connId}:${objectType}:${object}`
+}
+
+function buildFilteredTabID(connId: string, object: string, objectType: ObjectType, filters: FilterExpr[]): string {
+  return `${buildObjectTabID(connId, object, objectType)}:filtered:${buildFilterSignature(filters)}`
 }
 
 function buildFilterLabel(filters: FilterExpr[]): string {
@@ -221,8 +226,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }))
   },
 
-  openTab: (connId: string, object: string, objectType: ObjectType = 'table') => {
-    const id = `${connId}:${object}`
+  openTab: (connId: string, object: string, objectType: ObjectType = 'table', options?: { ttlSeconds?: number | null }) => {
+    const id = buildObjectTabID(connId, object, objectType)
     const { tabs } = get()
     const existing = tabs.find((t) => t.id === id)
     if (existing) {
@@ -237,6 +242,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       object,
       label,
       objectType,
+      ttlSeconds: options?.ttlSeconds ?? null,
       navigationTrail: [{ tabId: id, label: object }],
     }
     set({ tabs: [...tabs, tab], activeTabId: id })
@@ -251,7 +257,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     )
 
     const existing = tabs.find((tab) => {
-      if (tab.kind !== 'object' || tab.connId !== connId || tab.object !== object) {
+      if (tab.kind !== 'object' || tab.connId !== connId || tab.object !== object || tab.objectType !== objectType) {
         return false
       }
       const activeFilters = dataTabs[tab.id]?.opts.filters ?? tab.initialFilters ?? []
@@ -274,7 +280,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return
     }
 
-    const id = buildFilteredTabID(connId, object, filters)
+    const id = buildFilteredTabID(connId, object, objectType, filters)
     const baseTrail = activeObjectTab?.navigationTrail?.length
       ? activeObjectTab.navigationTrail
       : activeObjectTab

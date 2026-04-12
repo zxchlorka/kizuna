@@ -107,6 +107,7 @@ export interface ColumnMeta {
   is_fk: boolean
   fk_table: string
   fk_column: string
+  editable?: boolean
 }
 
 export interface FKRef {
@@ -116,8 +117,10 @@ export interface FKRef {
 }
 
 export interface Schema {
+  object_type?: ObjectType
   columns: ColumnMeta[]
   referenced_by: FKRef[]
+  meta?: Record<string, unknown>
 }
 
 export type TableRow = Record<string, unknown>
@@ -127,6 +130,7 @@ export interface DataResult {
   rows: TableRow[]
   total: number
   has_more: boolean
+  meta?: Record<string, unknown>
 }
 
 export interface ExecResult {

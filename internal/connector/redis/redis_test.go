@@ -3,7 +3,9 @@ package redis
 import (
 	"context"
 	"errors"
+	"strconv"
 	"testing"
+	"time"
 
 	"github.com/qsnake66/infraview/internal/config"
 	"github.com/qsnake66/infraview/internal/connector"
@@ -11,10 +13,33 @@ import (
 )
 
 type fakeRedisClient struct {
-	pingCmd  *goredis.StatusCmd
-	infoCmd  *goredis.StringCmd
-	closeErr error
-	closed   bool
+	pingCmd    *goredis.StatusCmd
+	infoCmd    *goredis.StringCmd
+	closeErr   error
+	closed     bool
+	scanClient redisScanClient
+}
+
+type fakeScanClient struct {
+	scanPages map[string][][]string
+}
+
+func (f *fakeScanClient) Scan(ctx context.Context, cursor uint64, pattern string, count int64) *goredis.ScanCmd {
+	if err := ctx.Err(); err != nil {
+		return goredis.NewScanCmdResult(nil, 0, err)
+	}
+
+	pages := f.scanPages[pattern]
+	if int(cursor) >= len(pages) {
+		return goredis.NewScanCmdResult(nil, 0, nil)
+	}
+
+	nextCursor := uint64(0)
+	if int(cursor)+1 < len(pages) {
+		nextCursor = cursor + 1
+	}
+
+	return goredis.NewScanCmdResult(pages[cursor], nextCursor, nil)
 }
 
 func (f *fakeRedisClient) Ping(context.Context) *goredis.StatusCmd {
@@ -28,6 +53,133 @@ func (f *fakeRedisClient) Info(context.Context, ...string) *goredis.StringCmd {
 func (f *fakeRedisClient) Close() error {
 	f.closed = true
 	return f.closeErr
+}
+
+func (f *fakeRedisClient) Type(context.Context, string) *goredis.StatusCmd {
+	return goredis.NewStatusResult("string", nil)
+}
+
+func (f *fakeRedisClient) TTL(context.Context, string) *goredis.DurationCmd {
+	return goredis.NewDurationResult(-1*time.Second, nil)
+}
+
+func (f *fakeRedisClient) Get(context.Context, string) *goredis.StringCmd {
+	return goredis.NewStringResult("", nil)
+}
+
+func (f *fakeRedisClient) Set(context.Context, string, any, time.Duration) *goredis.StatusCmd {
+	return goredis.NewStatusResult("OK", nil)
+}
+
+func (f *fakeRedisClient) Del(context.Context, ...string) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) Scan(ctx context.Context, cursor uint64, pattern string, count int64) *goredis.ScanCmd {
+	if f.scanClient != nil {
+		return f.scanClient.Scan(ctx, cursor, pattern, count)
+	}
+	return goredis.NewScanCmdResult(nil, 0, nil)
+}
+
+func (f *fakeRedisClient) Exists(context.Context, ...string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) Rename(context.Context, string, string) *goredis.StatusCmd {
+	return goredis.NewStatusResult("OK", nil)
+}
+
+func (f *fakeRedisClient) Expire(context.Context, string, time.Duration) *goredis.BoolCmd {
+	return goredis.NewBoolResult(true, nil)
+}
+
+func (f *fakeRedisClient) Persist(context.Context, string) *goredis.BoolCmd {
+	return goredis.NewBoolResult(true, nil)
+}
+
+func (f *fakeRedisClient) HGetAll(context.Context, string) *goredis.MapStringStringCmd {
+	return goredis.NewMapStringStringResult(nil, nil)
+}
+
+func (f *fakeRedisClient) HLen(context.Context, string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) HSet(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) HDel(context.Context, string, ...string) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) LLen(context.Context, string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) LRange(context.Context, string, int64, int64) *goredis.StringSliceCmd {
+	return goredis.NewStringSliceResult(nil, nil)
+}
+
+func (f *fakeRedisClient) LSet(context.Context, string, int64, any) *goredis.StatusCmd {
+	return goredis.NewStatusResult("OK", nil)
+}
+
+func (f *fakeRedisClient) LPush(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) RPush(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) LRem(context.Context, string, int64, any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) SCard(context.Context, string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) SScan(context.Context, string, uint64, string, int64) *goredis.ScanCmd {
+	return goredis.NewScanCmdResult(nil, 0, nil)
+}
+
+func (f *fakeRedisClient) SAdd(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) SRem(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) ZCard(context.Context, string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) ZRangeWithScores(context.Context, string, int64, int64) *goredis.ZSliceCmd {
+	return goredis.NewZSliceCmdResult(nil, nil)
+}
+
+func (f *fakeRedisClient) ZRevRangeWithScores(context.Context, string, int64, int64) *goredis.ZSliceCmd {
+	return goredis.NewZSliceCmdResult(nil, nil)
+}
+
+func (f *fakeRedisClient) ZAdd(context.Context, string, ...goredis.Z) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) ZRem(context.Context, string, ...any) *goredis.IntCmd {
+	return goredis.NewIntResult(1, nil)
+}
+
+func (f *fakeRedisClient) XRangeN(context.Context, string, string, string, int64) *goredis.XMessageSliceCmd {
+	return goredis.NewXMessageSliceCmdResult(nil, nil)
+}
+
+func (f *fakeRedisClient) XLen(context.Context, string) *goredis.IntCmd {
+	return goredis.NewIntResult(0, nil)
 }
 
 func TestResolveRedisSettings(t *testing.T) {
@@ -151,7 +303,7 @@ role:master
 `, nil),
 	}
 
-	conn := newRedisConnector(fake, config.ConnectionConfig{Host: "cache.example", Port: 6379}, redisSettings{
+	conn := newRedisConnector(fake, nil, config.ConnectionConfig{Host: "cache.example", Port: 6379}, redisSettings{
 		mode:      config.RedisModeStandalone,
 		address:   "cache.example:6379",
 		separator: ":",
@@ -247,17 +399,217 @@ func TestNewRedisClientBuildsAllModes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			client, err := newRedisClient(tc.settings, "secret")
+			client, clusterMasterScanner, err := newRedisClient(tc.settings, "secret")
 			if err != nil {
 				t.Fatalf("new redis client: %v", err)
 			}
 			if client == nil {
 				t.Fatalf("expected client")
 			}
+			if tc.settings.mode == config.RedisModeCluster && clusterMasterScanner == nil {
+				t.Fatalf("expected cluster master scanner for cluster mode")
+			}
+			if tc.settings.mode != config.RedisModeCluster && clusterMasterScanner != nil {
+				t.Fatalf("expected no cluster master scanner for mode %q", tc.settings.mode)
+			}
 			if err := client.Close(); err != nil {
 				t.Fatalf("close client: %v", err)
 			}
 		})
+	}
+}
+
+func TestRedisListObjectsStandaloneAndSentinelUseSingleScan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		mode config.RedisMode
+	}{
+		{name: "standalone", mode: config.RedisModeStandalone},
+		{name: "sentinel", mode: config.RedisModeSentinel},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			conn := newRedisConnector(&fakeRedisClient{
+				scanClient: &fakeScanClient{
+					scanPages: map[string][][]string{
+						"*": {{"c:10", "w:1", "w:2"}},
+					},
+				},
+			}, nil, config.ConnectionConfig{}, redisSettings{
+				mode:      tc.mode,
+				separator: ":",
+			})
+
+			objects, err := conn.ListObjects(context.Background(), "")
+			if err != nil {
+				t.Fatalf("list objects: %v", err)
+			}
+
+			got := map[string]int64{}
+			for _, object := range objects {
+				got[object.Name] = object.RowCount
+			}
+
+			if got["c"] != 1 || got["w"] != 2 {
+				t.Fatalf("unexpected root objects: %#v", got)
+			}
+		})
+	}
+}
+
+func TestRedisListObjectsClusterAggregatesAllMasters(t *testing.T) {
+	t.Parallel()
+
+	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
+		clients := []redisScanClient{
+			&fakeScanClient{scanPages: map[string][][]string{"*": {{"c:10", "w:1", "w:2"}}}},
+			&fakeScanClient{scanPages: map[string][][]string{"*": {{"d:1", "h:100", "w:3"}}}},
+		}
+		for _, client := range clients {
+			if err := fn(ctx, client); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeCluster,
+		separator: ":",
+	})
+
+	objects, err := conn.ListObjects(context.Background(), "")
+	if err != nil {
+		t.Fatalf("list objects: %v", err)
+	}
+
+	got := map[string]int64{}
+	for _, object := range objects {
+		got[object.Name] = object.RowCount
+	}
+
+	if got["c"] != 1 || got["d"] != 1 || got["h"] != 1 || got["w"] != 3 {
+		t.Fatalf("unexpected aggregated root objects: %#v", got)
+	}
+}
+
+func TestRedisListObjectsClusterAggregatesNamespaceChildren(t *testing.T) {
+	t.Parallel()
+
+	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
+		clients := []redisScanClient{
+			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
+			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:3"}}}},
+		}
+		for _, client := range clients {
+			if err := fn(ctx, client); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeCluster,
+		separator: ":",
+	})
+
+	objects, err := conn.ListObjects(context.Background(), "w")
+	if err != nil {
+		t.Fatalf("list namespace objects: %v", err)
+	}
+
+	got := make([]string, 0, len(objects))
+	for _, object := range objects {
+		got = append(got, object.Name)
+	}
+
+	want := []string{"1", "2", "3"}
+	if len(got) != len(want) {
+		t.Fatalf("unexpected namespace object count: got %v want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("unexpected namespace object order: got %v want %v", got, want)
+		}
+	}
+}
+
+func TestRedisListObjectsClusterDeduplicatesKeys(t *testing.T) {
+	t.Parallel()
+
+	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
+		clients := []redisScanClient{
+			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
+			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2", "w:3"}}}},
+		}
+		for _, client := range clients {
+			if err := fn(ctx, client); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeCluster,
+		separator: ":",
+	})
+
+	objects, err := conn.ListObjects(context.Background(), "w")
+	if err != nil {
+		t.Fatalf("list namespace objects: %v", err)
+	}
+
+	if len(objects) != 3 {
+		t.Fatalf("expected deduplicated keys, got %d objects", len(objects))
+	}
+}
+
+func TestRedisScanKeysClusterAppliesGlobalTruncation(t *testing.T) {
+	t.Parallel()
+
+	makeKeys := func(prefix string, count int) []string {
+		keys := make([]string, 0, count)
+		for i := 0; i < count; i++ {
+			keys = append(keys, prefix+":"+strconv.Itoa(i))
+		}
+		return keys
+	}
+
+	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
+		clients := []redisScanClient{
+			&fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("a", 6000)}}},
+			&fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("b", 6001)}}},
+		}
+		for _, client := range clients {
+			if err := fn(ctx, client); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeCluster,
+		separator: ":",
+	})
+
+	keys, truncated, err := conn.scanKeys(context.Background(), "")
+	if err != nil {
+		t.Fatalf("scan keys: %v", err)
+	}
+	if !truncated {
+		t.Fatalf("expected truncated result")
+	}
+	if len(keys) != maxScanKeys {
+		t.Fatalf("unexpected key count: got %d want %d", len(keys), maxScanKeys)
 	}
 }
 
