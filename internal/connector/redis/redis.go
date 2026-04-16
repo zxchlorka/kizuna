@@ -25,6 +25,7 @@ type redisClient interface {
 	TTL(ctx context.Context, key string) *goredis.DurationCmd
 	Get(ctx context.Context, key string) *goredis.StringCmd
 	Set(ctx context.Context, key string, value any, expiration time.Duration) *goredis.StatusCmd
+	SetArgs(ctx context.Context, key string, value any, a goredis.SetArgs) *goredis.StatusCmd
 	Del(ctx context.Context, keys ...string) *goredis.IntCmd
 	Scan(ctx context.Context, cursor uint64, match string, count int64) *goredis.ScanCmd
 	Exists(ctx context.Context, keys ...string) *goredis.IntCmd

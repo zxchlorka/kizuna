@@ -16,11 +16,12 @@ import (
 
 type testHealthConnector struct {
 	pingCount int
+	pingErr   error
 }
 
 func (c *testHealthConnector) Ping(context.Context) error {
 	c.pingCount++
-	return nil
+	return c.pingErr
 }
 
 func (c *testHealthConnector) GetInfo(context.Context) (*connector.ConnInfo, error) { return nil, nil }
@@ -180,7 +181,7 @@ func TestConnectionsHandlerUpdateVisibleSchemas(t *testing.T) {
 	})
 }
 
-func TestConnectionsHandlerTestDoesNotPingAfterAcquire(t *testing.T) {
+func TestConnectionsHandlerTestPingsConnector(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -217,8 +218,50 @@ func TestConnectionsHandlerTestDoesNotPingAfterAcquire(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d", rec.Code)
 	}
-	if fake.pingCount != 0 {
-		t.Fatalf("expected no handler ping after acquire, got %d", fake.pingCount)
+	if fake.pingCount != 1 {
+		t.Fatalf("expected handler ping after acquire, got %d", fake.pingCount)
+	}
+}
+
+func TestConnectionsHandlerTestReturnsPingError(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := &config.AppConfig{
+		Connections: []config.ConnectionConfig{
+			{
+				ID:       "conn-1",
+				Name:     "Main",
+				Type:     "postgres",
+				Host:     "localhost",
+				Port:     5432,
+				Database: "app",
+				Username: "postgres",
+			},
+		},
+		EncryptionKey: "test-key",
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	manager := connector.NewConnectionManager(cfg)
+	fake := &testHealthConnector{pingErr: connector.ErrUnavailable}
+	manager.RegisterFactory("postgres", func(context.Context, config.ConnectionConfig, string) (connector.Connector, error) {
+		return fake, nil
+	})
+	handler := NewConnectionsHandler(cfg, manager)
+
+	req := withRouteParams(httptest.NewRequest(http.MethodPost, "/api/connections/conn-1/test", nil), map[string]string{"id": "conn-1"})
+	rec := httptest.NewRecorder()
+
+	handler.Test(rec, req)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+	if fake.pingCount != 1 {
+		t.Fatalf("expected exactly one ping attempt, got %d", fake.pingCount)
 	}
 }
 

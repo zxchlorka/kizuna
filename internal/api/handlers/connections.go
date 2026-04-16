@@ -293,12 +293,20 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	start := time.Now()
 
-	_, cancel, err := getConnector(r.Context(), h.manager, id)
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}
 	defer cancel()
+
+	pingCtx, pingCancel := context.WithTimeout(r.Context(), connectionAcquireTimeout)
+	defer pingCancel()
+
+	if err := c.Ping(pingCtx); err != nil {
+		writeConnectorError(w, err)
+		return
+	}
 
 	latency := time.Since(start).Milliseconds()
 	connCfg, _ := h.cfg.GetConnection(id)

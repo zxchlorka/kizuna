@@ -13,11 +13,19 @@ import (
 )
 
 type fakeRedisClient struct {
-	pingCmd    *goredis.StatusCmd
-	infoCmd    *goredis.StringCmd
-	closeErr   error
-	closed     bool
-	scanClient redisScanClient
+	pingCmd           *goredis.StatusCmd
+	infoCmd           *goredis.StringCmd
+	closeErr          error
+	closed            bool
+	scanClient        redisScanClient
+	typeValue         string
+	ttlValue          time.Duration
+	setCalls          int
+	setArgsCalls      int
+	expireCalls       int
+	lastSetExpiration time.Duration
+	lastExpireTTL     time.Duration
+	lastSetArgs       *goredis.SetArgs
 }
 
 type fakeScanClient struct {
@@ -56,18 +64,33 @@ func (f *fakeRedisClient) Close() error {
 }
 
 func (f *fakeRedisClient) Type(context.Context, string) *goredis.StatusCmd {
-	return goredis.NewStatusResult("string", nil)
+	if f.typeValue == "" {
+		return goredis.NewStatusResult("string", nil)
+	}
+	return goredis.NewStatusResult(f.typeValue, nil)
 }
 
 func (f *fakeRedisClient) TTL(context.Context, string) *goredis.DurationCmd {
-	return goredis.NewDurationResult(-1*time.Second, nil)
+	if f.ttlValue == 0 {
+		return goredis.NewDurationResult(-1*time.Second, nil)
+	}
+	return goredis.NewDurationResult(f.ttlValue, nil)
 }
 
 func (f *fakeRedisClient) Get(context.Context, string) *goredis.StringCmd {
 	return goredis.NewStringResult("", nil)
 }
 
-func (f *fakeRedisClient) Set(context.Context, string, any, time.Duration) *goredis.StatusCmd {
+func (f *fakeRedisClient) Set(_ context.Context, _ string, _ any, expiration time.Duration) *goredis.StatusCmd {
+	f.setCalls++
+	f.lastSetExpiration = expiration
+	return goredis.NewStatusResult("OK", nil)
+}
+
+func (f *fakeRedisClient) SetArgs(_ context.Context, _ string, _ any, a goredis.SetArgs) *goredis.StatusCmd {
+	f.setArgsCalls++
+	args := a
+	f.lastSetArgs = &args
 	return goredis.NewStatusResult("OK", nil)
 }
 
@@ -90,7 +113,9 @@ func (f *fakeRedisClient) Rename(context.Context, string, string) *goredis.Statu
 	return goredis.NewStatusResult("OK", nil)
 }
 
-func (f *fakeRedisClient) Expire(context.Context, string, time.Duration) *goredis.BoolCmd {
+func (f *fakeRedisClient) Expire(_ context.Context, _ string, expiration time.Duration) *goredis.BoolCmd {
+	f.expireCalls++
+	f.lastExpireTTL = expiration
 	return goredis.NewBoolResult(true, nil)
 }
 
@@ -674,5 +699,100 @@ func TestResolveHostWithLookup(t *testing.T) {
 				t.Fatalf("resolveHostWithLookup(%q) = %q, want %q", tc.host, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRedisMutateStringUpdatePreservesTTLByDefault(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRedisClient{ttlValue: 45 * time.Second}
+	conn := newRedisConnector(fake, nil, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeStandalone,
+		address:   "cache.example:6379",
+		separator: ":",
+	})
+
+	result, err := conn.Mutate(context.Background(), connector.MutateOp{
+		Type:   "update",
+		Object: "cache:key",
+		Data:   map[string]any{"value": "updated"},
+	})
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if result.RowsAffected != 1 {
+		t.Fatalf("unexpected rows affected: %d", result.RowsAffected)
+	}
+	if fake.setArgsCalls != 1 {
+		t.Fatalf("expected SetArgs to preserve TTL, got %d calls", fake.setArgsCalls)
+	}
+	if fake.lastSetArgs == nil || !fake.lastSetArgs.KeepTTL {
+		t.Fatalf("expected KeepTTL=true, got %#v", fake.lastSetArgs)
+	}
+	if fake.setCalls != 0 {
+		t.Fatalf("expected plain Set to be skipped, got %d calls", fake.setCalls)
+	}
+	if fake.expireCalls != 0 {
+		t.Fatalf("expected no explicit TTL rewrite, got %d expire calls", fake.expireCalls)
+	}
+}
+
+func TestRedisMutateStringUpdateAppliesExplicitTTL(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeRedisClient{}
+	conn := newRedisConnector(fake, nil, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeStandalone,
+		address:   "cache.example:6379",
+		separator: ":",
+	})
+
+	result, err := conn.Mutate(context.Background(), connector.MutateOp{
+		Type:   "update",
+		Object: "cache:key",
+		Data: map[string]any{
+			"value": "updated",
+			"ttl":   int64(60),
+		},
+	})
+	if err != nil {
+		t.Fatalf("mutate: %v", err)
+	}
+	if result.RowsAffected != 1 {
+		t.Fatalf("unexpected rows affected: %d", result.RowsAffected)
+	}
+	if fake.setCalls != 1 {
+		t.Fatalf("expected plain Set for explicit TTL override, got %d calls", fake.setCalls)
+	}
+	if fake.lastSetExpiration != 0 {
+		t.Fatalf("expected Set without expiration before applyTTL, got %v", fake.lastSetExpiration)
+	}
+	if fake.setArgsCalls != 0 {
+		t.Fatalf("expected SetArgs to be skipped, got %d calls", fake.setArgsCalls)
+	}
+	if fake.expireCalls != 1 {
+		t.Fatalf("expected explicit Expire call, got %d", fake.expireCalls)
+	}
+	if fake.lastExpireTTL != 60*time.Second {
+		t.Fatalf("unexpected expire ttl: %v", fake.lastExpireTTL)
+	}
+}
+
+func TestRedisMutateStringUpdateRejectsEmptyPayload(t *testing.T) {
+	t.Parallel()
+
+	conn := newRedisConnector(&fakeRedisClient{}, nil, config.ConnectionConfig{}, redisSettings{
+		mode:      config.RedisModeStandalone,
+		address:   "cache.example:6379",
+		separator: ":",
+	})
+
+	_, err := conn.Mutate(context.Background(), connector.MutateOp{
+		Type:   "update",
+		Object: "cache:key",
+		Data:   map[string]any{},
+	})
+	if !errors.Is(err, connector.ErrBadRequest) {
+		t.Fatalf("expected bad request, got %v", err)
 	}
 }
