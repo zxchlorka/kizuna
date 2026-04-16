@@ -26,6 +26,7 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { normalizeVisibleSchemasSelection } from '@/lib/objectTreeVisibleSchemas'
 import { getObjectTypeLabel, isRedisNamespace } from '@/lib/objectTypes'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
@@ -51,18 +52,6 @@ function equalSchemaLists(left: string[] | null, right: string[] | null) {
   if (left === right) return true
   if (left === null || right === null) return false
   return left.length === right.length && left.every((value, index) => value === right[index])
-}
-
-function normalizeVisibleSchemas(availableSchemas: string[], selectedSchemas: string[] | null): string[] | null {
-  if (selectedSchemas === null) {
-    return null
-  }
-
-  const available = new Set(availableSchemas)
-  const prunedSelection = selectedSchemas.filter((schema) => available.has(schema))
-  const selectedSet = new Set(prunedSelection)
-  const appendedNewSchemas = availableSchemas.filter((schema) => !selectedSet.has(schema))
-  return [...prunedSelection, ...appendedNewSchemas]
 }
 
 function groupSchemaChildren(items: ObjectItem[], showTables: boolean): SchemaChildGroup {
@@ -207,7 +196,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
   const persistedVisibleSchemas = currentConnection?.visible_schemas ?? null
   const visibleSchemaSelection = visibleSchemasByConnection[connId] ?? persistedVisibleSchemas
   const normalizedVisibleSchemas = useMemo(
-    () => normalizeVisibleSchemas(availableSchemas, visibleSchemaSelection),
+    () => normalizeVisibleSchemasSelection(availableSchemas, visibleSchemaSelection),
     [availableSchemas, visibleSchemaSelection]
   )
   const visibleSchemaSet = useMemo(

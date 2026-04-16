@@ -191,7 +191,14 @@ func (c *RedisConnector) updateKey(ctx context.Context, keyType string, op conne
 			}
 			return 0, nil
 		}
-		if err := c.client.Set(ctx, op.Object, redisStringValue(op.Data["value"]), 0).Err(); err != nil {
+		value := redisStringValue(op.Data["value"])
+		if _, ttlSpecified := op.Data["ttl"]; ttlSpecified {
+			if err := c.client.Set(ctx, op.Object, value, 0).Err(); err != nil {
+				return 0, normalizeRedisError(err)
+			}
+			return 1, nil
+		}
+		if err := c.client.SetArgs(ctx, op.Object, value, goredis.SetArgs{KeepTTL: true}).Err(); err != nil {
 			return 0, normalizeRedisError(err)
 		}
 		return 1, nil
