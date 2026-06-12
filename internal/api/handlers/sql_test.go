@@ -212,6 +212,25 @@ func TestSQLHandlerCompletionsRejectsInvalidContext(t *testing.T) {
 	}
 }
 
+func TestSQLHandlerCompletionsAcceptsRedisContexts(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestSQLHandler(t, &testSQLConnector{
+		completions: []connector.CompletionItem{{Label: "HGETALL", Type: "command"}},
+	})
+	req := withSQLRouteParams(
+		httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/completions?context=command&prefix=HG", nil),
+		map[string]string{"id": "conn-1"},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.Completions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+}
+
 func TestSQLHandlerAnalyzeRequiresQuery(t *testing.T) {
 	t.Parallel()
 

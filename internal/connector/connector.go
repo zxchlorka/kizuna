@@ -137,6 +137,11 @@ type BulkMutateOp struct {
 	Schema     string     `json:"schema"`
 	Object     string     `json:"object"`
 	Operations []MutateOp `json:"operations"`
+	Pattern    string     `json:"pattern,omitempty"`
+	Preview    bool       `json:"preview,omitempty"`
+	Execute    bool       `json:"execute,omitempty"`
+	ConfirmAll bool       `json:"confirm_all,omitempty"`
+	BatchSize  int        `json:"batch_size,omitempty"`
 }
 
 type BulkMutateResult struct {

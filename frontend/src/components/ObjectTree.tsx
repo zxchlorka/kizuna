@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
+  Braces,
   CircleDot,
   Database,
   Eye,
@@ -157,9 +158,11 @@ function getIcon(type: string, expanded?: boolean) {
       return <ListOrdered className="h-4 w-4 text-amber-500" />
     case 'redis_stream':
       return <Activity className="h-4 w-4 text-orange-500" />
+    case 'redis_json':
+      return <Braces className="h-4 w-4 text-cyan-500" />
     default:
       return <Table2 className="h-4 w-4 text-muted-foreground" />
-    }
+  }
 }
 
 export function ObjectTree({ connId }: ObjectTreeProps) {

@@ -100,6 +100,15 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 			{Name: "id", DataType: "text"},
 			{Name: "timestamp", DataType: "timestamp"},
 		}
+	case "json":
+		meta["is_json_module"] = true
+		columns = []connector.ColumnMeta{
+			{Name: "path", DataType: "text"},
+			{Name: "value", DataType: "json", Editable: true},
+			{Name: "type", DataType: "text"},
+			{Name: "depth", DataType: "integer"},
+			{Name: "parent_path", DataType: "text"},
+		}
 	default:
 		return nil, fmt.Errorf("%w: unsupported redis type %q", connector.ErrBadRequest, keyType)
 	}

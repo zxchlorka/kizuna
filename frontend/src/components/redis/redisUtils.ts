@@ -7,6 +7,7 @@ const REDIS_TYPE_LABELS: Record<string, string> = {
   redis_set: 'Set',
   redis_zset: 'Sorted Set',
   redis_stream: 'Stream',
+  redis_json: 'JSON',
   namespace: 'Namespace',
 }
 
@@ -17,6 +18,7 @@ const REDIS_TYPE_CLASSES: Record<string, string> = {
   redis_set: 'border-violet-500/20 bg-violet-500/10 text-violet-600 dark:text-violet-400',
   redis_zset: 'border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400',
   redis_stream: 'border-orange-500/20 bg-orange-500/10 text-orange-600 dark:text-orange-400',
+  redis_json: 'border-cyan-500/20 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400',
   namespace: 'border-red-500/20 bg-red-500/10 text-red-600 dark:text-red-400',
   default: 'border-border bg-muted/40 text-muted-foreground',
 }
@@ -156,7 +158,8 @@ export function normalizeRedisObjectType(type: ObjectType | string | undefined):
     type === 'redis_list' ||
     type === 'redis_set' ||
     type === 'redis_zset' ||
-    type === 'redis_stream'
+    type === 'redis_stream' ||
+    type === 'redis_json'
   ) {
     return type
   }

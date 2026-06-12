@@ -19,6 +19,7 @@ export type RedisObjectType =
   | 'redis_set'
   | 'redis_zset'
   | 'redis_stream'
+  | 'redis_json'
 
 export type ObjectType = 'table' | 'view' | 'index' | 'namespace' | RedisObjectType
 export type ObjectItemType = ObjectType | 'schema'
@@ -182,7 +183,7 @@ export interface ExplainResult {
 
 export interface CompletionItem {
   label: string
-  type: 'table' | 'column' | 'function' | 'keyword'
+  type: 'table' | 'column' | 'function' | 'keyword' | 'command' | 'key'
   detail?: string
 }
 
@@ -227,6 +228,11 @@ export interface BulkMutateOp {
   schema: string
   object: string
   operations: MutateOp[]
+  pattern?: string
+  preview?: boolean
+  execute?: boolean
+  confirm_all?: boolean
+  batch_size?: number
 }
 
 export interface BulkMutateResult {

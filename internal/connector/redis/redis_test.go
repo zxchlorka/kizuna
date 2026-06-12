@@ -26,6 +26,15 @@ type fakeRedisClient struct {
 	lastSetExpiration time.Duration
 	lastExpireTTL     time.Duration
 	lastSetArgs       *goredis.SetArgs
+	doResult          any
+	doErr             error
+	xInfoGroups       []goredis.XInfoGroup
+	pipelineCmders    []goredis.Cmder
+	pipelineErr       error
+	delResult         int64
+	delCalls          [][]string
+	xRangeMessages    []goredis.XMessage
+	xRevRangeMessages []goredis.XMessage
 }
 
 type fakeScanClient struct {
@@ -70,6 +79,14 @@ func (f *fakeRedisClient) Type(context.Context, string) *goredis.StatusCmd {
 	return goredis.NewStatusResult(f.typeValue, nil)
 }
 
+func (f *fakeRedisClient) Do(context.Context, ...any) *goredis.Cmd {
+	return goredis.NewCmdResult(f.doResult, f.doErr)
+}
+
+func (f *fakeRedisClient) Pipelined(_ context.Context, fn func(goredis.Pipeliner) error) ([]goredis.Cmder, error) {
+	return f.pipelineCmders, f.pipelineErr
+}
+
 func (f *fakeRedisClient) TTL(context.Context, string) *goredis.DurationCmd {
 	if f.ttlValue == 0 {
 		return goredis.NewDurationResult(-1*time.Second, nil)
@@ -94,8 +111,12 @@ func (f *fakeRedisClient) SetArgs(_ context.Context, _ string, _ any, a goredis.
 	return goredis.NewStatusResult("OK", nil)
 }
 
-func (f *fakeRedisClient) Del(context.Context, ...string) *goredis.IntCmd {
-	return goredis.NewIntResult(1, nil)
+func (f *fakeRedisClient) Del(_ context.Context, keys ...string) *goredis.IntCmd {
+	f.delCalls = append(f.delCalls, append([]string(nil), keys...))
+	if f.delResult > 0 {
+		return goredis.NewIntResult(f.delResult, nil)
+	}
+	return goredis.NewIntResult(int64(len(keys)), nil)
 }
 
 func (f *fakeRedisClient) Scan(ctx context.Context, cursor uint64, pattern string, count int64) *goredis.ScanCmd {
@@ -200,11 +221,21 @@ func (f *fakeRedisClient) ZRem(context.Context, string, ...any) *goredis.IntCmd 
 }
 
 func (f *fakeRedisClient) XRangeN(context.Context, string, string, string, int64) *goredis.XMessageSliceCmd {
-	return goredis.NewXMessageSliceCmdResult(nil, nil)
+	return goredis.NewXMessageSliceCmdResult(f.xRangeMessages, nil)
+}
+
+func (f *fakeRedisClient) XRevRangeN(context.Context, string, string, string, int64) *goredis.XMessageSliceCmd {
+	return goredis.NewXMessageSliceCmdResult(f.xRevRangeMessages, nil)
 }
 
 func (f *fakeRedisClient) XLen(context.Context, string) *goredis.IntCmd {
 	return goredis.NewIntResult(0, nil)
+}
+
+func (f *fakeRedisClient) XInfoGroups(context.Context, string) *goredis.XInfoGroupsCmd {
+	cmd := goredis.NewXInfoGroupsCmd(context.Background(), "stream")
+	cmd.SetVal(f.xInfoGroups)
+	return cmd
 }
 
 func TestResolveRedisSettings(t *testing.T) {

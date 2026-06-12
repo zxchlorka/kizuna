@@ -6,10 +6,12 @@ import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { DeleteKeyDialog } from '@/components/redis/DeleteKeyDialog'
 import { SetTTLDialog } from '@/components/redis/SetTTLDialog'
 import { HashEditor } from '@/components/redis/editors/HashEditor'
+import { JsonEditor } from '@/components/redis/editors/JsonEditor'
 import { ListEditor } from '@/components/redis/editors/ListEditor'
 import { SetEditor } from '@/components/redis/editors/SetEditor'
 import { SortedSetEditor } from '@/components/redis/editors/SortedSetEditor'
 import { StringEditor } from '@/components/redis/editors/StringEditor'
+import { StreamViewer } from '@/components/redis/editors/StreamViewer'
 import {
   formatRedisTTL,
   getRedisObjectTypeLabel,
@@ -98,6 +100,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         data: payload.data,
       }, tabId)
       await fetchSchema(connId, object, tabId)
+      await fetchData(connId, object, tabId)
       await refreshTree(connId)
     } catch (mutationError) {
       pushToast({
@@ -180,33 +183,38 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
     if (normalizedType === 'redis_stream') {
       return (
-        <div className="rounded-sm border border-border bg-card p-4">
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Stream entries</div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="min-w-full divide-y divide-border text-sm">
-              <thead className="bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                <tr>
-                  {columns.map((column) => (
-                    <th key={column.name} className="px-4 py-3 font-medium">
-                      {column.name}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/70">
-                {rows.map((row, index) => (
-                  <tr key={`stream-${index}`}>
-                    {columns.map((column) => (
-                      <td key={column.name} className="px-4 py-3 font-mono text-xs text-foreground">
-                        {stringifyRedisValue(row[column.name])}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
+        <StreamViewer
+          columns={columns}
+          rows={rows}
+          meta={meta}
+          loading={loading}
+          onLoadOlder={() => {
+            const firstId = typeof meta.first_id === 'string' ? meta.first_id : ''
+            setOpts(tabId, {
+              offset: 0,
+              filters: firstId ? [{ column: 'before_id', op: 'eq', value: firstId }] : [],
+            })
+            void fetchData(connId, object, tabId)
+          }}
+          onLoadNewer={() => {
+            const lastId = typeof meta.last_id === 'string' ? meta.last_id : ''
+            setOpts(tabId, {
+              offset: 0,
+              filters: lastId ? [{ column: 'after_id', op: 'eq', value: lastId }] : [],
+            })
+            void fetchData(connId, object, tabId)
+          }}
+        />
+      )
+    }
+
+    if (normalizedType === 'redis_json') {
+      return (
+        <JsonEditor
+          rows={rows}
+          saving={saving}
+          onSave={(path, value) => runMutation({ type: 'update', where: { path }, data: { value } })}
+        />
       )
     }
 

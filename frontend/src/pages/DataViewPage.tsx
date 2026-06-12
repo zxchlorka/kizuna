@@ -10,6 +10,7 @@ import { useWorkspaceStore } from '@/stores/workspace'
 import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
 import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
+import { RedisCli } from '@/components/redis/RedisCli/RedisCli'
 import { isRedisObjectType } from '@/lib/objectTypes'
 
 export default function DataViewPage() {
@@ -41,6 +42,8 @@ export default function DataViewPage() {
           {activeTab ? (
             activeTab.kind === 'sql' ? (
               <SqlConsole tabId={activeTab.id} connId={activeTab.connId} />
+            ) : activeTab.kind === 'redis-cli' ? (
+              <RedisCli tabId={activeTab.id} connId={activeTab.connId} />
             ) : activeTab.objectType === 'index' ? (
               <IndexInspectorView
                 connId={activeTab.connId}

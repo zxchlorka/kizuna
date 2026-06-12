@@ -7,6 +7,7 @@ export const redisObjectTypes: RedisObjectType[] = [
   'redis_set',
   'redis_zset',
   'redis_stream',
+  'redis_json',
 ]
 
 export function isRedisObjectType(type: ObjectType | string | undefined): type is RedisObjectType {
@@ -39,6 +40,8 @@ export function getObjectTypeLabel(type: ObjectType | string | undefined): strin
       return 'zset'
     case 'redis_stream':
       return 'stream'
+    case 'redis_json':
+      return 'json'
     default:
       return type ?? 'object'
   }
@@ -47,4 +50,3 @@ export function getObjectTypeLabel(type: ObjectType | string | undefined): strin
 export function getRedisObjectTypeDisplay(type: RedisObjectType): string {
   return getObjectTypeLabel(type)
 }
-

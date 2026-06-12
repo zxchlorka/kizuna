@@ -1,4 +1,4 @@
-import { Activity, CircleDot, Database, Eye, Folder, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, X, Zap } from 'lucide-react'
+import { Activity, Braces, CircleDot, Database, Eye, Folder, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
@@ -10,9 +10,12 @@ interface TabBarProps {
   connId: string
 }
 
-function tabIcon(kind: 'sql' | ObjectType) {
+function tabIcon(kind: 'sql' | 'redis-cli' | ObjectType) {
   if (kind === 'sql') {
     return <SquareTerminal className="h-3.5 w-3.5 text-amber-500" />
+  }
+  if (kind === 'redis-cli') {
+    return <TerminalSquare className="h-3.5 w-3.5 text-cyan-500" />
   }
   if (kind === 'namespace') {
     return <Folder className="h-3.5 w-3.5 text-amber-500" />
@@ -31,6 +34,8 @@ function tabIcon(kind: 'sql' | ObjectType) {
         return <ListOrdered className="h-3.5 w-3.5 text-amber-500" />
       case 'redis_stream':
         return <Activity className="h-3.5 w-3.5 text-orange-500" />
+      case 'redis_json':
+        return <Braces className="h-3.5 w-3.5 text-cyan-500" />
       default:
         return <Database className="h-3.5 w-3.5 text-red-500" />
     }
@@ -45,9 +50,9 @@ function tabIcon(kind: 'sql' | ObjectType) {
 }
 
 export function TabBar({ connId }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab } = useWorkspaceStore()
+  const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab, openRedisCliTab } = useWorkspaceStore()
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
-  const sqlDisabled = connection?.type === 'redis'
+  const isRedis = connection?.type === 'redis'
   const visibleTabs = tabs.filter((tab) => tab.connId === connId)
 
   return (
@@ -64,7 +69,7 @@ export function TabBar({ connId }: TabBarProps) {
                 : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
             )}
           >
-            {tabIcon(tab.kind === 'sql' ? 'sql' : tab.objectType)}
+            {tabIcon(tab.kind === 'sql' ? 'sql' : tab.kind === 'redis-cli' ? 'redis-cli' : tab.objectType)}
             <span className="max-w-[140px] truncate">{tab.label}</span>
             <button
               onClick={(e) => {
@@ -78,18 +83,31 @@ export function TabBar({ connId }: TabBarProps) {
           </div>
         ))}
       </div>
-      <Button
-        type="button"
-        size="sm"
-        variant="outline"
-        className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
-        onClick={() => openSqlTab(connId)}
-        disabled={sqlDisabled}
-        title={sqlDisabled ? 'SQL console is not available for Redis connections yet.' : 'Open a new SQL console tab'}
-      >
-        <Plus className="h-3.5 w-3.5" />
-        New SQL
-      </Button>
+      {isRedis ? (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
+          onClick={() => openRedisCliTab(connId)}
+          title="Open a new Redis CLI tab"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          New CLI
+        </Button>
+      ) : (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
+          onClick={() => openSqlTab(connId)}
+          title="Open a new SQL console tab"
+        >
+          <Plus className="h-3.5 w-3.5" />
+          New SQL
+        </Button>
+      )}
     </div>
   )
 }

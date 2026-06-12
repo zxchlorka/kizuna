@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
+import { BulkActions } from '@/components/redis/BulkActions'
 import { SchemaFilterButton } from '@/components/Sidebar/SchemaFilterButton'
 import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
 import { Button } from '@/components/ui/button'
@@ -179,9 +180,12 @@ export function Sidebar({ connId }: SidebarProps) {
                   <SlidersHorizontal className="h-3.5 w-3.5" />
                   Redis Tree
                 </div>
-                <Button type="button" size="sm" variant="outline" className="h-7 px-2 font-mono text-[10px]" onClick={() => setCreateKeyOpen(true)}>
-                  New Key
-                </Button>
+                <div className="flex items-center gap-2">
+                  <BulkActions connId={connId} />
+                  <Button type="button" size="sm" variant="outline" className="h-7 px-2 font-mono text-[10px]" onClick={() => setCreateKeyOpen(true)}>
+                    New Key
+                  </Button>
+                </div>
               </div>
             </div>
           ) : (

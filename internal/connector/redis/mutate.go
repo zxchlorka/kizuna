@@ -236,6 +236,8 @@ func (c *RedisConnector) updateKey(ctx context.Context, keyType string, op conne
 			return 0, normalizeRedisError(err)
 		}
 		return 1, nil
+	case "json":
+		return c.updateJSONPath(ctx, op.Object, op)
 	default:
 		if len(op.Data) > 0 {
 			return 0, fmt.Errorf("%w: update is not supported for redis type %q", connector.ErrBadRequest, keyType)

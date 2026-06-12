@@ -17,7 +17,7 @@ import { cn } from '@/lib/utils'
 import type { RedisObjectType } from '@/types/api'
 import { formatRedisTTL, getRedisObjectTypeLabel, toNumberOrNull } from '@/components/redis/redisUtils'
 
-type CreateableRedisObjectType = Exclude<RedisObjectType, 'redis_stream'>
+type CreateableRedisObjectType = Exclude<RedisObjectType, 'redis_stream' | 'redis_json'>
 
 interface CreateKeyDialogProps {
   open: boolean

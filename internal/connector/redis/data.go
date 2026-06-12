@@ -3,6 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -37,6 +38,8 @@ func (c *RedisConnector) GetData(ctx context.Context, object string, opts connec
 		return c.getZSetData(ctx, object, ttl, opts)
 	case "stream":
 		return c.getStreamData(ctx, object, ttl, opts)
+	case "json":
+		return c.getJSONData(ctx, object, ttl, opts)
 	default:
 		return nil, unsupportedRedisOperation("get data for " + keyType)
 	}
@@ -218,15 +221,33 @@ func (c *RedisConnector) getStreamData(ctx context.Context, key string, ttl int6
 		return nil, normalizeRedisError(err)
 	}
 
-	values, err := c.client.XRangeN(ctx, key, "-", "+", int64(opts.Offset+opts.Limit)).Result()
-	if err != nil {
-		return nil, normalizeRedisError(err)
+	afterID := redisFilterValue(opts.Filters, "after_id")
+	beforeID := redisFilterValue(opts.Filters, "before_id")
+	if afterID != "" && beforeID != "" {
+		return nil, fmt.Errorf("%w: after_id and before_id cannot be combined", connector.ErrBadRequest)
 	}
 
-	start := minInt(opts.Offset, len(values))
-	entries := values[start:]
-	if len(entries) > opts.Limit {
-		entries = entries[:opts.Limit]
+	var entries []goredis.XMessage
+	var hasOlder bool
+	var hasNewer bool
+	fetchLimit := int64(opts.Limit + 1)
+	switch {
+	case afterID != "":
+		entries, err = c.client.XRangeN(ctx, key, "("+afterID, "+", fetchLimit).Result()
+		entries, hasNewer = trimStreamEntries(entries, opts.Limit)
+		hasOlder = len(entries) > 0
+	case beforeID != "":
+		entries, err = c.client.XRevRangeN(ctx, key, "("+beforeID, "-", fetchLimit).Result()
+		entries, hasOlder = trimStreamEntries(entries, opts.Limit)
+		reverseXMessages(entries)
+		hasNewer = len(entries) > 0
+	default:
+		entries, err = c.client.XRevRangeN(ctx, key, "+", "-", fetchLimit).Result()
+		entries, hasOlder = trimStreamEntries(entries, opts.Limit)
+		reverseXMessages(entries)
+	}
+	if err != nil {
+		return nil, normalizeRedisError(err)
 	}
 
 	fieldSet := make(map[string]struct{})
@@ -263,7 +284,31 @@ func (c *RedisConnector) getStreamData(ctx context.Context, key string, ttl int6
 
 	meta := redisMeta("stream", ttl)
 	meta["length"] = total
+	meta["consumer_groups"] = 0
+	groups, err := c.client.XInfoGroups(ctx, key).Result()
+	if err == nil {
+		meta["consumer_groups"] = len(groups)
+	}
+	if len(entries) > 0 {
+		meta["first_id"] = entries[0].ID
+		meta["last_id"] = entries[len(entries)-1].ID
+		meta["has_older"] = hasOlder
+		meta["has_newer"] = hasNewer
+	}
 	return redisDataResult(columns, rows, total, meta, opts.Offset), nil
+}
+
+func trimStreamEntries(entries []goredis.XMessage, limit int) ([]goredis.XMessage, bool) {
+	if len(entries) <= limit {
+		return entries, false
+	}
+	return entries[:limit], true
+}
+
+func reverseXMessages(values []goredis.XMessage) {
+	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+		values[left], values[right] = values[right], values[left]
+	}
 }
 
 func (c *RedisConnector) scanSetMembers(ctx context.Context, key string) ([]string, error) {

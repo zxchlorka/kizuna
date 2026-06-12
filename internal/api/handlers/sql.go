@@ -185,9 +185,9 @@ func (h *SQLHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		Table:   r.URL.Query().Get("table"),
 	}
 	switch req.Context {
-	case "table", "column", "function", "keyword", "":
+	case "table", "column", "function", "keyword", "command", "key", "":
 	default:
-		writeError(w, http.StatusBadRequest, "context must be one of table, column, function, keyword")
+		writeError(w, http.StatusBadRequest, "context must be one of table, column, function, keyword, command, key")
 		return
 	}
 

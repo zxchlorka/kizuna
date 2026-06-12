@@ -22,6 +22,8 @@ type redisClient interface {
 	Info(ctx context.Context, sections ...string) *goredis.StringCmd
 	Close() error
 	Type(ctx context.Context, key string) *goredis.StatusCmd
+	Do(ctx context.Context, args ...any) *goredis.Cmd
+	Pipelined(ctx context.Context, fn func(goredis.Pipeliner) error) ([]goredis.Cmder, error)
 	TTL(ctx context.Context, key string) *goredis.DurationCmd
 	Get(ctx context.Context, key string) *goredis.StringCmd
 	Set(ctx context.Context, key string, value any, expiration time.Duration) *goredis.StatusCmd
@@ -52,7 +54,9 @@ type redisClient interface {
 	ZAdd(ctx context.Context, key string, members ...goredis.Z) *goredis.IntCmd
 	ZRem(ctx context.Context, key string, members ...any) *goredis.IntCmd
 	XRangeN(ctx context.Context, stream, start, stop string, count int64) *goredis.XMessageSliceCmd
+	XRevRangeN(ctx context.Context, stream, start, stop string, count int64) *goredis.XMessageSliceCmd
 	XLen(ctx context.Context, key string) *goredis.IntCmd
+	XInfoGroups(ctx context.Context, key string) *goredis.XInfoGroupsCmd
 }
 
 type redisScanClient interface {
@@ -132,12 +136,12 @@ func (c *RedisConnector) Ping(ctx context.Context) error {
 	return normalizeRedisError(c.client.Ping(ctx).Err())
 }
 
-func (c *RedisConnector) Execute(context.Context, string) (*connector.ExecResult, error) {
-	return nil, unsupportedRedisOperation("execute")
+func (c *RedisConnector) Execute(ctx context.Context, command string) (*connector.ExecResult, error) {
+	return c.executeCommand(ctx, command)
 }
 
-func (c *RedisConnector) ExecuteBatch(context.Context, []string) ([]connector.ExecResult, error) {
-	return nil, unsupportedRedisOperation("execute batch")
+func (c *RedisConnector) ExecuteBatch(ctx context.Context, commands []string) ([]connector.ExecResult, error) {
+	return c.executePipeline(ctx, commands)
 }
 
 func (c *RedisConnector) Explain(context.Context, string) (*connector.ExplainResult, error) {
@@ -148,12 +152,12 @@ func (c *RedisConnector) Analyze(context.Context, string) (*connector.ExplainRes
 	return nil, unsupportedRedisOperation("analyze")
 }
 
-func (c *RedisConnector) Completions(context.Context, connector.CompletionRequest) ([]connector.CompletionItem, error) {
-	return nil, unsupportedRedisOperation("completions")
+func (c *RedisConnector) Completions(ctx context.Context, req connector.CompletionRequest) ([]connector.CompletionItem, error) {
+	return c.redisCompletions(ctx, req)
 }
 
-func (c *RedisConnector) MutateBulk(context.Context, connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
-	return nil, unsupportedRedisOperation("bulk mutate")
+func (c *RedisConnector) MutateBulk(ctx context.Context, op connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
+	return c.mutateBulk(ctx, op)
 }
 
 func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, error) {

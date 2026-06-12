@@ -25,12 +25,22 @@ func redisTypeOrNotFound(ctx context.Context, c *RedisConnector, key string) (st
 		return "", normalizeRedisError(err)
 	}
 
-	keyType = strings.ToLower(strings.TrimSpace(keyType))
+	keyType = normalizeRedisServerType(keyType)
 	if keyType == "" || keyType == "none" {
 		return "", fmt.Errorf("%w: key %q not found", connector.ErrRelationNotFound, key)
 	}
 
 	return keyType, nil
+}
+
+func normalizeRedisServerType(keyType string) string {
+	keyType = strings.ToLower(strings.TrimSpace(keyType))
+	switch keyType {
+	case "rejson-rl", "json":
+		return "json"
+	default:
+		return keyType
+	}
 }
 
 func redisTTLSeconds(ctx context.Context, c *RedisConnector, key string) (int64, error) {
@@ -112,6 +122,8 @@ func redisObjectTypeName(keyType string) string {
 		return "redis_zset"
 	case "stream":
 		return "redis_stream"
+	case "json":
+		return "redis_json"
 	default:
 		return keyType
 	}
@@ -407,6 +419,31 @@ func redisRenameFromData(data map[string]any) (string, bool) {
 func redisCreateType(data map[string]any) string {
 	createType := strings.ToLower(strings.TrimSpace(redisStringValue(data["type"])))
 	return strings.TrimPrefix(createType, "redis_")
+}
+
+func redisStringSlice(values []any) []string {
+	items := make([]string, 0, len(values))
+	for _, value := range values {
+		items = append(items, redisStringValue(value))
+	}
+	return items
+}
+
+func redisFilterValue(filters []connector.FilterExpr, name string) string {
+	for _, filter := range filters {
+		if strings.EqualFold(strings.TrimSpace(filter.Column), name) {
+			return strings.TrimSpace(filter.Value)
+		}
+	}
+	return ""
+}
+
+func redisEncodeJSONValue(value any) (string, error) {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("%w: invalid json value: %v", connector.ErrBadRequest, err)
+	}
+	return string(encoded), nil
 }
 
 func streamTimestampFromID(id string) time.Time {

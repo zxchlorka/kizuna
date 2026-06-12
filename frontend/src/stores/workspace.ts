@@ -37,7 +37,14 @@ export interface SqlTab {
   label: string
 }
 
-export type WorkspaceTab = ObjectTab | SqlTab
+export interface RedisCliTab {
+  kind: 'redis-cli'
+  id: string
+  connId: string
+  label: string
+}
+
+export type WorkspaceTab = ObjectTab | SqlTab | RedisCliTab
 
 export interface TreeVisibility {
   showTables: boolean
@@ -70,6 +77,7 @@ interface WorkspaceStore {
   clearObjectTabFilterState: (tabId: string) => void
   goBackFromTab: (tabId: string) => void
   openSqlTab: (connId: string) => void
+  openRedisCliTab: (connId: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
 }
@@ -365,6 +373,25 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       id,
       connId,
       label: sequence === 1 ? 'SQL Console' : `SQL Console ${sequence}`,
+    }
+    set({ tabs: [...tabs, tab], activeTabId: id })
+  },
+
+  openRedisCliTab: (connId: string) => {
+    const { tabs } = get()
+    const existingIDs = new Set(tabs.map((tab) => tab.id))
+    let sequence = 1
+    let id = `${connId}:redis-cli:${sequence}`
+    while (existingIDs.has(id)) {
+      sequence += 1
+      id = `${connId}:redis-cli:${sequence}`
+    }
+
+    const tab: RedisCliTab = {
+      kind: 'redis-cli',
+      id,
+      connId,
+      label: sequence === 1 ? 'Redis CLI' : `Redis CLI ${sequence}`,
     }
     set({ tabs: [...tabs, tab], activeTabId: id })
   },

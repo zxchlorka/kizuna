@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { CompletionItem } from '@/types/api'
 
-type CompletionContext = 'table' | 'column' | 'function' | 'keyword'
+type CompletionContext = 'table' | 'column' | 'function' | 'keyword' | 'command' | 'key'
 
 interface CompletionRequest {
   prefix: string
