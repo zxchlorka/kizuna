@@ -67,9 +67,17 @@ func (c *RedisConnector) getStringData(ctx context.Context, key string, ttl int6
 }
 
 func (c *RedisConnector) getHashData(ctx context.Context, key string, ttl int64, opts connector.DataOpts) (*connector.DataResult, error) {
-	values, err := c.client.HGetAll(ctx, key).Result()
+	total, err := c.client.HLen(ctx, key).Result()
 	if err != nil {
 		return nil, normalizeRedisError(err)
+	}
+
+	// HSCAN with a cap instead of HGETALL: a multi-million-field hash must not
+	// be shipped (and held in memory) wholesale.
+	match := redisContainsPattern(opts.Filters, "field")
+	values, truncated, err := c.scanHashFields(ctx, key, match)
+	if err != nil {
+		return nil, err
 	}
 
 	fields := make([]string, 0, len(values))
@@ -89,7 +97,10 @@ func (c *RedisConnector) getHashData(ctx context.Context, key string, ttl int64,
 	}
 
 	meta := redisMeta("hash", ttl)
-	meta["length"] = len(fields)
+	meta["length"] = total
+	if truncated {
+		meta["truncated"] = true
+	}
 	return redisDataResult(
 		[]connector.ColumnMeta{
 			{Name: "field", DataType: "text"},
@@ -100,6 +111,30 @@ func (c *RedisConnector) getHashData(ctx context.Context, key string, ttl int64,
 		meta,
 		opts.Offset,
 	), nil
+}
+
+func (c *RedisConnector) scanHashFields(ctx context.Context, key, match string) (map[string]string, bool, error) {
+	values := make(map[string]string)
+	var cursor uint64
+	deadline := time.Now().Add(pageTimeBudget)
+
+	for {
+		batch, next, err := c.client.HScan(ctx, key, cursor, match, scanBatchCount).Result()
+		if err != nil {
+			return nil, false, normalizeRedisError(err)
+		}
+		for i := 0; i+1 < len(batch); i += 2 {
+			values[batch[i]] = batch[i+1]
+		}
+
+		cursor = next
+		if cursor == 0 {
+			return values, false, nil
+		}
+		if len(values) >= maxScanKeys || time.Now().After(deadline) {
+			return values, true, nil
+		}
+	}
 }
 
 func (c *RedisConnector) getListData(ctx context.Context, key string, ttl int64, opts connector.DataOpts) (*connector.DataResult, error) {
@@ -141,7 +176,8 @@ func (c *RedisConnector) getSetData(ctx context.Context, key string, ttl int64, 
 		return nil, normalizeRedisError(err)
 	}
 
-	members, err := c.scanSetMembers(ctx, key)
+	match := redisContainsPattern(opts.Filters, "member")
+	members, truncated, err := c.scanSetMembers(ctx, key, match)
 	if err != nil {
 		return nil, err
 	}
@@ -157,6 +193,9 @@ func (c *RedisConnector) getSetData(ctx context.Context, key string, ttl int64, 
 
 	meta := redisMeta("set", ttl)
 	meta["length"] = total
+	if truncated {
+		meta["truncated"] = true
+	}
 	return redisDataResult(
 		[]connector.ColumnMeta{{Name: "member", DataType: "text", Editable: true}},
 		rows,
@@ -311,21 +350,26 @@ func reverseXMessages(values []goredis.XMessage) {
 	}
 }
 
-func (c *RedisConnector) scanSetMembers(ctx context.Context, key string) ([]string, error) {
+func (c *RedisConnector) scanSetMembers(ctx context.Context, key, match string) ([]string, bool, error) {
 	members := make([]string, 0, 128)
 	var cursor uint64
+	deadline := time.Now().Add(pageTimeBudget)
+
 	for {
-		batch, nextCursor, err := c.client.SScan(ctx, key, cursor, "", 1000).Result()
+		batch, nextCursor, err := c.client.SScan(ctx, key, cursor, match, scanBatchCount).Result()
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, false, normalizeRedisError(err)
 		}
 		members = append(members, batch...)
+
 		cursor = nextCursor
-		if cursor == 0 || len(members) >= maxScanKeys {
-			break
+		if cursor == 0 {
+			return members, false, nil
+		}
+		if len(members) >= maxScanKeys || time.Now().After(deadline) {
+			return members, true, nil
 		}
 	}
-	return members, nil
 }
 
 func applyStringFilters(values []string, filters []connector.FilterExpr) []string {

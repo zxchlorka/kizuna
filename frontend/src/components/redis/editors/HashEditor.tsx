@@ -7,12 +7,13 @@ import type { TableRow } from '@/types/api'
 interface HashEditorProps {
   rows: TableRow[]
   saving: boolean
+  readOnly?: boolean
   onUpdate: (field: string, value: string) => Promise<void> | void
   onDelete: (field: string) => Promise<void> | void
   onInsert: (field: string, value: string) => Promise<void> | void
 }
 
-export function HashEditor({ rows, saving, onUpdate, onDelete, onInsert }: HashEditorProps) {
+export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete, onInsert }: HashEditorProps) {
   const [editingField, setEditingField] = useState<string | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const [newField, setNewField] = useState('')
@@ -23,23 +24,27 @@ export function HashEditor({ rows, saving, onUpdate, onDelete, onInsert }: HashE
       <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Hash fields</div>
-          <div className="mt-1 text-sm text-muted-foreground">Double-click a value to edit it inline.</div>
+          <div className="mt-1 text-sm text-muted-foreground">
+            {readOnly ? 'Read-only connection.' : 'Double-click a value to edit it inline.'}
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Input value={newField} onChange={(event) => setNewField(event.target.value)} placeholder="field" className="h-8 w-36 font-mono text-xs" />
-          <Input value={newValue} onChange={(event) => setNewValue(event.target.value)} placeholder="value" className="h-8 w-48 font-mono text-xs" />
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 gap-1.5"
-            disabled={saving || newField.trim() === ''}
-            onClick={() => void onInsert(newField.trim(), newValue)}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add field
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            <Input value={newField} onChange={(event) => setNewField(event.target.value)} placeholder="field" className="h-8 w-36 font-mono text-xs" />
+            <Input value={newValue} onChange={(event) => setNewValue(event.target.value)} placeholder="value" className="h-8 w-48 font-mono text-xs" />
+            <Button
+              type="button"
+              size="sm"
+              className="h-8 gap-1.5"
+              disabled={saving || newField.trim() === ''}
+              onClick={() => void onInsert(newField.trim(), newValue)}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Add field
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -62,6 +67,9 @@ export function HashEditor({ rows, saving, onUpdate, onDelete, onInsert }: HashE
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
+                      if (readOnly) {
+                        return
+                      }
                       setEditingField(field)
                       setDraftValue(value)
                     }}
@@ -73,21 +81,25 @@ export function HashEditor({ rows, saving, onUpdate, onDelete, onInsert }: HashE
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      {editing ? (
-                        <>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(field, draftValue)} disabled={saving}>
-                            <Save className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingField(null)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
-                      ) : null}
-                      <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(field)} disabled={saving}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+                    {readOnly ? (
+                      <div className="text-right text-[10px] uppercase tracking-[0.12em] text-muted-foreground">—</div>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        {editing ? (
+                          <>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(field, draftValue)} disabled={saving}>
+                              <Save className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingField(null)}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(field)} disabled={saving}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

@@ -1,11 +1,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Eye, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
+import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
 import { SchemaFilterButton } from '@/components/Sidebar/SchemaFilterButton'
 import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
 import { Button } from '@/components/ui/button'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { fetchWithTimeout } from '@/lib/http'
 import { cn } from '@/lib/utils'
 import { ObjectTree } from '@/components/ObjectTree'
@@ -35,13 +36,42 @@ export function Sidebar({ connId }: SidebarProps) {
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
+  const selectedNode = useWorkspaceStore((state) => state.selectedNodeByConnection[connId] ?? '')
+  const setSelectedNode = useWorkspaceStore((state) => state.setSelectedNode)
+  const [clusterNodes, setClusterNodes] = useState<string[]>([])
 
   const currentConnection = connections.find((connection) => connection.id === connId)
   const isRedisConnection = currentConnection?.type === 'redis'
+  const isKafkaConnection = currentConnection?.type === 'kafka'
+  const isClusterConnection = isRedisConnection && currentConnection?.mode === 'cluster'
+  const readOnly = currentConnection?.read_only ?? false
 
   useEffect(() => {
     hydrateVisibleSchemas(connId, currentConnection?.visible_schemas)
   }, [connId, currentConnection?.visible_schemas, hydrateVisibleSchemas])
+
+  useEffect(() => {
+    if (!isClusterConnection) {
+      setClusterNodes([])
+      return
+    }
+    let cancelled = false
+    fetchWithTimeout(`/api/connections/${connId}/info`)
+      .then((res) => (res.ok ? res.json() : Promise.reject(new Error('failed to load connection info'))))
+      .then((info: { extra?: { cluster_masters?: string[] } }) => {
+        if (!cancelled) {
+          setClusterNodes(info.extra?.cluster_masters ?? [])
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setClusterNodes([])
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [connId, isClusterConnection])
 
   const hiddenSchemaCount = useMemo(() => {
     if (visibleSchemas === null) {
@@ -180,12 +210,47 @@ export function Sidebar({ connId }: SidebarProps) {
                   <SlidersHorizontal className="h-3.5 w-3.5" />
                   Redis Tree
                 </div>
-                <div className="flex items-center gap-2">
-                  <BulkActions connId={connId} />
-                  <Button type="button" size="sm" variant="outline" className="h-7 px-2 font-mono text-[10px]" onClick={() => setCreateKeyOpen(true)}>
-                    New Key
-                  </Button>
+                {readOnly ? (
+                  <span className="inline-flex items-center gap-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
+                    <Lock className="h-3 w-3" />
+                    Read-only
+                  </span>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <BulkActions connId={connId} />
+                    <Button type="button" size="sm" variant="outline" className="h-7 px-2 font-mono text-[10px]" onClick={() => setCreateKeyOpen(true)}>
+                      New Key
+                    </Button>
+                  </div>
+                )}
+              </div>
+              {isClusterConnection && clusterNodes.length > 0 && (
+                <div className="mt-2 flex items-center gap-2">
+                  <span className="shrink-0 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Node</span>
+                  <Select
+                    value={selectedNode || '__all__'}
+                    onValueChange={(value) => void setSelectedNode(connId, value === '__all__' ? '' : value)}
+                  >
+                    <SelectTrigger className="h-7 flex-1 font-mono text-[11px]">
+                      <SelectValue placeholder="All masters" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__all__">All masters</SelectItem>
+                      {clusterNodes.map((node) => (
+                        <SelectItem key={node} value={node} className="font-mono text-[11px]">
+                          {node}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
+              )}
+            </div>
+          ) : isKafkaConnection ? (
+            <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
+              <div className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                <SlidersHorizontal className="h-3.5 w-3.5" />
+                Kafka Topics
               </div>
             </div>
           ) : (

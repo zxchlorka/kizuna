@@ -35,6 +35,8 @@ type fakeRedisClient struct {
 	delCalls          [][]string
 	xRangeMessages    []goredis.XMessage
 	xRevRangeMessages []goredis.XMessage
+	hscanPairs        []string
+	hlenResult        int64
 }
 
 type fakeScanClient struct {
@@ -83,8 +85,59 @@ func (f *fakeRedisClient) Do(context.Context, ...any) *goredis.Cmd {
 	return goredis.NewCmdResult(f.doResult, f.doErr)
 }
 
+// fakePipeliner answers Type/TTL pipeline calls from the parent fake client so
+// the batched leaf-describe path works in tests. Other Pipeliner methods panic
+// via the embedded nil interface.
+type fakePipeliner struct {
+	goredis.Pipeliner
+	client *fakeRedisClient
+	cmds   []goredis.Cmder
+}
+
+func (p *fakePipeliner) Type(ctx context.Context, key string) *goredis.StatusCmd {
+	cmd := p.client.Type(ctx, key)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
+func (p *fakePipeliner) TTL(ctx context.Context, key string) *goredis.DurationCmd {
+	cmd := p.client.TTL(ctx, key)
+	p.cmds = append(p.cmds, cmd)
+	return cmd
+}
+
 func (f *fakeRedisClient) Pipelined(_ context.Context, fn func(goredis.Pipeliner) error) ([]goredis.Cmder, error) {
-	return f.pipelineCmders, f.pipelineErr
+	if f.pipelineCmders != nil || f.pipelineErr != nil {
+		return f.pipelineCmders, f.pipelineErr
+	}
+	pipe := &fakePipeliner{client: f}
+	if err := fn(pipe); err != nil {
+		return nil, err
+	}
+	return pipe.cmds, nil
+}
+
+type fakeClusterTopology struct {
+	masters []string
+	clients map[string]redisScanClient
+	closed  bool
+}
+
+func (t *fakeClusterTopology) Masters(context.Context) ([]string, error) {
+	return t.masters, nil
+}
+
+func (t *fakeClusterTopology) NodeScanClient(addr string) (redisScanClient, error) {
+	client, ok := t.clients[addr]
+	if !ok {
+		return nil, errors.New("unknown node " + addr)
+	}
+	return client, nil
+}
+
+func (t *fakeClusterTopology) Close() error {
+	t.closed = true
+	return nil
 }
 
 func (f *fakeRedisClient) TTL(context.Context, string) *goredis.DurationCmd {
@@ -148,8 +201,12 @@ func (f *fakeRedisClient) HGetAll(context.Context, string) *goredis.MapStringStr
 	return goredis.NewMapStringStringResult(nil, nil)
 }
 
+func (f *fakeRedisClient) HScan(context.Context, string, uint64, string, int64) *goredis.ScanCmd {
+	return goredis.NewScanCmdResult(f.hscanPairs, 0, nil)
+}
+
 func (f *fakeRedisClient) HLen(context.Context, string) *goredis.IntCmd {
-	return goredis.NewIntResult(0, nil)
+	return goredis.NewIntResult(f.hlenResult, nil)
 }
 
 func (f *fakeRedisClient) HSet(context.Context, string, ...any) *goredis.IntCmd {
@@ -455,18 +512,18 @@ func TestNewRedisClientBuildsAllModes(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			client, clusterMasterScanner, err := newRedisClient(tc.settings, "secret")
+			client, topology, err := newRedisClient(tc.settings, "secret")
 			if err != nil {
 				t.Fatalf("new redis client: %v", err)
 			}
 			if client == nil {
 				t.Fatalf("expected client")
 			}
-			if tc.settings.mode == config.RedisModeCluster && clusterMasterScanner == nil {
-				t.Fatalf("expected cluster master scanner for cluster mode")
+			if tc.settings.mode == config.RedisModeCluster && topology == nil {
+				t.Fatalf("expected cluster topology for cluster mode")
 			}
-			if tc.settings.mode != config.RedisModeCluster && clusterMasterScanner != nil {
-				t.Fatalf("expected no cluster master scanner for mode %q", tc.settings.mode)
+			if tc.settings.mode != config.RedisModeCluster && topology != nil {
+				t.Fatalf("expected no cluster topology for mode %q", tc.settings.mode)
 			}
 			if err := client.Close(); err != nil {
 				t.Fatalf("close client: %v", err)
@@ -522,20 +579,15 @@ func TestRedisListObjectsStandaloneAndSentinelUseSingleScan(t *testing.T) {
 func TestRedisListObjectsClusterAggregatesAllMasters(t *testing.T) {
 	t.Parallel()
 
-	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
-		clients := []redisScanClient{
-			&fakeScanClient{scanPages: map[string][][]string{"*": {{"c:10", "w:1", "w:2"}}}},
-			&fakeScanClient{scanPages: map[string][][]string{"*": {{"d:1", "h:100", "w:3"}}}},
-		}
-		for _, client := range clients {
-			if err := fn(ctx, client); err != nil {
-				return err
-			}
-		}
-		return nil
+	topology := &fakeClusterTopology{
+		masters: []string{"node-a:7000", "node-b:7001"},
+		clients: map[string]redisScanClient{
+			"node-a:7000": &fakeScanClient{scanPages: map[string][][]string{"*": {{"c:10", "w:1", "w:2"}}}},
+			"node-b:7001": &fakeScanClient{scanPages: map[string][][]string{"*": {{"d:1", "h:100", "w:3"}}}},
+		},
 	}
 
-	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+	conn := newRedisConnector(&fakeRedisClient{}, topology, config.ConnectionConfig{}, redisSettings{
 		mode:      config.RedisModeCluster,
 		separator: ":",
 	})
@@ -558,20 +610,15 @@ func TestRedisListObjectsClusterAggregatesAllMasters(t *testing.T) {
 func TestRedisListObjectsClusterAggregatesNamespaceChildren(t *testing.T) {
 	t.Parallel()
 
-	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
-		clients := []redisScanClient{
-			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
-			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:3"}}}},
-		}
-		for _, client := range clients {
-			if err := fn(ctx, client); err != nil {
-				return err
-			}
-		}
-		return nil
+	topology := &fakeClusterTopology{
+		masters: []string{"node-a:7000", "node-b:7001"},
+		clients: map[string]redisScanClient{
+			"node-a:7000": &fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
+			"node-b:7001": &fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:3"}}}},
+		},
 	}
 
-	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+	conn := newRedisConnector(&fakeRedisClient{}, topology, config.ConnectionConfig{}, redisSettings{
 		mode:      config.RedisModeCluster,
 		separator: ":",
 	})
@@ -600,20 +647,15 @@ func TestRedisListObjectsClusterAggregatesNamespaceChildren(t *testing.T) {
 func TestRedisListObjectsClusterDeduplicatesKeys(t *testing.T) {
 	t.Parallel()
 
-	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
-		clients := []redisScanClient{
-			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
-			&fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2", "w:3"}}}},
-		}
-		for _, client := range clients {
-			if err := fn(ctx, client); err != nil {
-				return err
-			}
-		}
-		return nil
+	topology := &fakeClusterTopology{
+		masters: []string{"node-a:7000", "node-b:7001"},
+		clients: map[string]redisScanClient{
+			"node-a:7000": &fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2"}}}},
+			"node-b:7001": &fakeScanClient{scanPages: map[string][][]string{"w:*": {{"w:1", "w:2", "w:3"}}}},
+		},
 	}
 
-	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+	conn := newRedisConnector(&fakeRedisClient{}, topology, config.ConnectionConfig{}, redisSettings{
 		mode:      config.RedisModeCluster,
 		separator: ":",
 	})
@@ -628,7 +670,7 @@ func TestRedisListObjectsClusterDeduplicatesKeys(t *testing.T) {
 	}
 }
 
-func TestRedisScanKeysClusterAppliesGlobalTruncation(t *testing.T) {
+func TestRedisListObjectsClusterAppliesGlobalTruncation(t *testing.T) {
 	t.Parallel()
 
 	makeKeys := func(prefix string, count int) []string {
@@ -639,33 +681,33 @@ func TestRedisScanKeysClusterAppliesGlobalTruncation(t *testing.T) {
 		return keys
 	}
 
-	clusterMasterScanner := func(ctx context.Context, fn func(context.Context, redisScanClient) error) error {
-		clients := []redisScanClient{
-			&fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("a", 6000)}}},
-			&fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("b", 6001)}}},
-		}
-		for _, client := range clients {
-			if err := fn(ctx, client); err != nil {
-				return err
-			}
-		}
-		return nil
+	topology := &fakeClusterTopology{
+		masters: []string{"node-a:7000", "node-b:7001"},
+		clients: map[string]redisScanClient{
+			"node-a:7000": &fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("a", 6000)}}},
+			"node-b:7001": &fakeScanClient{scanPages: map[string][][]string{"*": {makeKeys("b", 6001)}}},
+		},
 	}
 
-	conn := newRedisConnector(&fakeRedisClient{}, clusterMasterScanner, config.ConnectionConfig{}, redisSettings{
+	conn := newRedisConnector(&fakeRedisClient{}, topology, config.ConnectionConfig{}, redisSettings{
 		mode:      config.RedisModeCluster,
 		separator: ":",
 	})
 
-	keys, truncated, err := conn.scanKeys(context.Background(), "")
+	objects, err := conn.ListObjects(context.Background(), "")
 	if err != nil {
-		t.Fatalf("scan keys: %v", err)
+		t.Fatalf("list objects: %v", err)
 	}
-	if !truncated {
-		t.Fatalf("expected truncated result")
+
+	var total int64
+	for _, object := range objects {
+		total += object.RowCount
+		if object.Meta["truncated"] != true {
+			t.Fatalf("expected truncated meta on %q, got %#v", object.Name, object.Meta)
+		}
 	}
-	if len(keys) != maxScanKeys {
-		t.Fatalf("unexpected key count: got %d want %d", len(keys), maxScanKeys)
+	if total != int64(maxScanKeys) {
+		t.Fatalf("unexpected total key count: got %d want %d", total, maxScanKeys)
 	}
 }
 

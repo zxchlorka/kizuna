@@ -1,10 +1,9 @@
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef } from 'react'
-import { autocompletion, completionKeymap, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
+import { autocompletion, completionKeymap, completionStatus, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap, insertNewline } from '@codemirror/commands'
-import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
-import { EditorView, drawSelection, highlightActiveLine, keymap } from '@codemirror/view'
+import { Compartment, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
+import { EditorView, drawSelection, highlightActiveLine, keymap, tooltips } from '@codemirror/view'
 import { basicSetup } from 'codemirror'
-import { useTheme } from 'next-themes'
 import { useAutocomplete } from '@/hooks/useAutocomplete'
 import type { CompletionItem } from '@/types/api'
 
@@ -22,29 +21,81 @@ interface RedisCliInputProps {
 }
 
 function buildTheme(dark: boolean): Extension {
+  // All colors reference the app's theme tokens so the console stays cohesive
+  // with the rest of the interface (near-black surface, amber accent).
   return EditorView.theme(
     {
       '&': {
         height: '100%',
         fontSize: '13px',
         backgroundColor: 'transparent',
+        color: 'hsl(var(--foreground))',
       },
       '.cm-scroller': {
         fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        lineHeight: '1.6',
       },
       '.cm-content': {
-        padding: '10px 12px',
-        caretColor: dark ? '#f8fafc' : '#0f172a',
+        padding: '8px 4px',
+        caretColor: 'hsl(var(--accent))',
+      },
+      '.cm-cursor, .cm-dropCursor': {
+        borderLeftColor: 'hsl(var(--accent))',
+        borderLeftWidth: '2px',
       },
       '.cm-line': {
-        paddingLeft: '6px',
+        paddingLeft: '2px',
       },
-      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground': {
-        backgroundColor: dark ? 'rgba(56, 189, 248, 0.26)' : 'rgba(14, 165, 233, 0.18)',
+      // A command prompt reads cleaner without a line-number / fold gutter.
+      '.cm-gutters': {
+        display: 'none',
       },
+      '&.cm-focused': {
+        outline: 'none',
+      },
+      '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': {
+        backgroundColor: 'hsl(var(--accent) / 0.22)',
+      },
+      '.cm-activeLine': {
+        backgroundColor: 'transparent',
+      },
+      // The popup is parented to <body>, outside the .dark console, so it uses
+      // the console's fixed dark palette explicitly (near-black + amber) rather
+      // than inherited theme tokens.
       '.cm-tooltip': {
-        border: dark ? '1px solid rgba(30, 41, 59, 1)' : '1px solid rgba(203, 213, 225, 0.9)',
-        backgroundColor: dark ? '#020617' : '#ffffff',
+        border: '1px solid hsl(216 18% 20%)',
+        backgroundColor: 'hsl(216 24% 10%)',
+        color: 'hsl(210 20% 90%)',
+        borderRadius: '8px',
+        overflow: 'hidden',
+        boxShadow: '0 18px 48px -16px rgba(0, 0, 0, 0.7)',
+      },
+      '.cm-tooltip.cm-completionInfo': {
+        padding: '8px 10px',
+        maxWidth: '24rem',
+      },
+      '.cm-tooltip-autocomplete > ul': {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+        fontSize: '12px',
+        maxHeight: '18rem',
+      },
+      '.cm-tooltip-autocomplete > ul > li': {
+        padding: '5px 12px',
+        color: 'hsl(210 20% 82%)',
+        lineHeight: '1.5',
+      },
+      '.cm-tooltip-autocomplete > ul > li[aria-selected]': {
+        backgroundColor: 'hsl(38 92% 50% / 0.16)',
+        color: 'hsl(210 20% 96%)',
+      },
+      '.cm-completionLabel': {
+        fontWeight: '600',
+        color: 'hsl(38 92% 62%)',
+      },
+      '.cm-completionDetail': {
+        marginLeft: '0.75rem',
+        color: 'hsl(215 15% 55%)',
+        fontStyle: 'normal',
       },
     },
     { dark }
@@ -112,7 +163,6 @@ export const RedisCliInput = forwardRef<RedisCliInputHandle, RedisCliInputProps>
   const requestCompletionsRef = useRef(requestCompletions)
   const themeCompartment = useMemo(() => new Compartment(), [])
   const autocompleteCompartment = useMemo(() => new Compartment(), [])
-  const { resolvedTheme } = useTheme()
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -128,6 +178,9 @@ export const RedisCliInput = forwardRef<RedisCliInputHandle, RedisCliInputProps>
     },
   }))
 
+  // The editor must be created exactly once per mount: recreating it on value/theme
+  // changes destroys focus and the completion popup mid-typing. Value sync and theme
+  // changes are handled by the dedicated effects below.
   useEffect(() => {
     if (!rootRef.current || viewRef.current) {
       return
@@ -139,63 +192,79 @@ export const RedisCliInput = forwardRef<RedisCliInputHandle, RedisCliInputProps>
       history(),
       drawSelection(),
       highlightActiveLine(),
-      keymap.of([
-        {
-          key: 'Enter',
-          run: () => {
-            onRunRef.current()
-            return true
-          },
-        },
-        {
-          key: 'Shift-Enter',
-          run: insertNewline,
-        },
-        {
-          key: 'ArrowUp',
-          run: (view) => {
-            if (view.state.doc.lines === 1) {
-              onHistoryNavigateRef.current('previous')
+      // Prec.highest beats basicSetup's defaultKeymap, where plain Enter is
+      // bound to insertNewline. While the completion popup is open, Enter and
+      // the arrows fall through to the completion keymap instead.
+      Prec.highest(
+        keymap.of([
+          {
+            key: 'Enter',
+            run: (view) => {
+              if (completionStatus(view.state) === 'active') {
+                return false
+              }
+              onRunRef.current()
               return true
-            }
-            return false
+            },
           },
-        },
-        {
-          key: 'ArrowDown',
-          run: (view) => {
-            if (view.state.doc.lines === 1) {
-              onHistoryNavigateRef.current('next')
+          {
+            key: 'Shift-Enter',
+            run: insertNewline,
+          },
+          {
+            key: 'ArrowUp',
+            run: (view) => {
+              if (completionStatus(view.state) === 'active') {
+                return false
+              }
+              if (view.state.doc.lines === 1) {
+                onHistoryNavigateRef.current('previous')
+                return true
+              }
+              return false
+            },
+          },
+          {
+            key: 'ArrowDown',
+            run: (view) => {
+              if (completionStatus(view.state) === 'active') {
+                return false
+              }
+              if (view.state.doc.lines === 1) {
+                onHistoryNavigateRef.current('next')
+                return true
+              }
+              return false
+            },
+          },
+          {
+            key: 'Ctrl-l',
+            run: () => {
+              onClearRef.current()
               return true
-            }
-            return false
+            },
           },
-        },
-        {
-          key: 'Ctrl-l',
-          run: () => {
-            onClearRef.current()
-            return true
+          {
+            key: 'Mod-l',
+            run: () => {
+              onClearRef.current()
+              return true
+            },
           },
-        },
-        {
-          key: 'Mod-l',
-          run: () => {
-            onClearRef.current()
-            return true
-          },
-        },
-        ...defaultKeymap,
-        ...historyKeymap,
-        ...completionKeymap,
-      ]),
+        ])
+      ),
+      keymap.of([...defaultKeymap, ...historyKeymap, ...completionKeymap]),
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           onChangeRef.current(update.state.doc.toString())
         }
       }),
-      themeCompartment.of(buildTheme(resolvedTheme === 'dark')),
-      autocompleteCompartment.of(autocompletion({ override: [completionSource], activateOnTyping: true })),
+      // Render the completion popup in a fixed layer on <body> so it is never
+      // clipped by the input's overflow-hidden container (which previously cut
+      // the list down to a single visible row).
+      tooltips({ position: 'fixed', parent: document.body }),
+      themeCompartment.of(buildTheme(true)),
+      autocompleteCompartment.of(autocompletion({ override: [completionSource], activateOnTyping: true, maxRenderedOptions: 50 })),
     ]
 
     const state = EditorState.create({ doc: value, extensions })
@@ -207,7 +276,8 @@ export const RedisCliInput = forwardRef<RedisCliInputHandle, RedisCliInputProps>
       view.destroy()
       viewRef.current = null
     }
-  }, [autocompleteCompartment, resolvedTheme, themeCompartment, value])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: value/theme are applied via the sync effects below
+  }, [])
 
   useEffect(() => {
     const view = viewRef.current
@@ -231,14 +301,15 @@ export const RedisCliInput = forwardRef<RedisCliInputHandle, RedisCliInputProps>
     }
     view.dispatch({
       effects: [
-        themeCompartment.reconfigure(buildTheme(resolvedTheme === 'dark')),
+        themeCompartment.reconfigure(buildTheme(true)),
         autocompleteCompartment.reconfigure(autocompletion({
           override: [(context: CompletionContext) => createRedisCompletionResult(context, requestCompletionsRef.current)],
           activateOnTyping: true,
+          maxRenderedOptions: 50,
         })),
       ],
     })
-  }, [autocompleteCompartment, resolvedTheme, themeCompartment])
+  }, [autocompleteCompartment, themeCompartment])
 
-  return <div ref={rootRef} className="min-h-[74px] flex-1 overflow-hidden rounded-sm border border-border/70 bg-background/50" />
+  return <div ref={rootRef} className="min-h-[40px] flex-1 overflow-hidden bg-transparent" />
 })

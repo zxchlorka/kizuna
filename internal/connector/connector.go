@@ -40,6 +40,57 @@ type Object struct {
 	Meta       map[string]any `json:"meta,omitempty"`
 }
 
+// ObjectPageOpts selects one page of an incremental object listing.
+// Cursor is an opaque token from a previous page ("" = first page).
+// Node optionally pins the listing to a single cluster node.
+type ObjectPageOpts struct {
+	Path   string
+	Cursor string
+	Node   string
+}
+
+type ObjectPage struct {
+	Objects    []Object `json:"objects"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Truncated  bool     `json:"truncated"`
+}
+
+// PagedObjectLister is an optional capability for connectors whose keyspace is
+// too large to list in one shot (e.g. Redis). Connectors that implement it get
+// cursor-based tree loading; others keep the plain ListObjects contract.
+type PagedObjectLister interface {
+	ListObjectsPage(ctx context.Context, opts ObjectPageOpts) (*ObjectPage, error)
+}
+
+// KafkaProduceMessage is one already-expanded message to publish. Loop/multi
+// template expansion happens client-side; the backend just publishes the batch.
+type KafkaProduceMessage struct {
+	Key     string            `json:"key,omitempty"`
+	Value   string            `json:"value"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// KafkaProduceRequest publishes a batch to one topic. Partition pins all
+// messages to a single partition; nil uses the default key-hash partitioner.
+type KafkaProduceRequest struct {
+	Topic     string                `json:"topic"`
+	Partition *int32                `json:"partition,omitempty"`
+	Messages  []KafkaProduceMessage `json:"messages"`
+}
+
+type KafkaProduceResult struct {
+	Produced   int            `json:"produced"`
+	Failed     int            `json:"failed"`
+	Errors     []string       `json:"errors,omitempty"`
+	Partitions map[string]int `json:"partitions,omitempty"`
+}
+
+// KafkaProducer is an optional capability for connectors that can publish
+// messages (Kafka). The API exposes it via POST /produce.
+type KafkaProducer interface {
+	Produce(ctx context.Context, req KafkaProduceRequest) (*KafkaProduceResult, error)
+}
+
 type ObjectInfo struct {
 	Name       string   `json:"name"`
 	Schema     string   `json:"schema"`

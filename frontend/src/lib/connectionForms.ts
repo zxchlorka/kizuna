@@ -2,6 +2,8 @@ import type {
   Connection,
   ConnectionInput,
   ConnectionType,
+  KafkaConfig,
+  KafkaConnectionInput,
   PostgresConnectionInput,
   RedisConfig,
   RedisConnectionInput,
@@ -23,6 +25,9 @@ export interface ConnectionFormValues {
   clusterAddressesText: string
   sentinelMasterName: string
   sentinelAddressesText: string
+  kafkaBrokersText: string
+  kafkaSaslMechanism: string
+  readOnly: boolean
 }
 
 const postgresDefaults: ConnectionFormValues = {
@@ -40,6 +45,9 @@ const postgresDefaults: ConnectionFormValues = {
   clusterAddressesText: '',
   sentinelMasterName: '',
   sentinelAddressesText: '',
+  kafkaBrokersText: '',
+  kafkaSaslMechanism: '',
+  readOnly: false,
 }
 
 const redisDefaults: ConnectionFormValues = {
@@ -49,6 +57,15 @@ const redisDefaults: ConnectionFormValues = {
   database: '0',
   mode: 'standalone',
   separator: ':',
+}
+
+const kafkaDefaults: ConnectionFormValues = {
+  ...postgresDefaults,
+  type: 'kafka',
+  host: '',
+  port: '9092',
+  database: '',
+  kafkaBrokersText: 'localhost:9092',
 }
 
 function normalizeTags(value: string): string[] {
@@ -92,7 +109,13 @@ function entrypointFromAddresses(addresses: string[]): { host: string; port: num
 }
 
 export function createConnectionForm(type: ConnectionType = 'postgres'): ConnectionFormValues {
-  return type === 'redis' ? { ...redisDefaults } : { ...postgresDefaults }
+  if (type === 'redis') {
+    return { ...redisDefaults }
+  }
+  if (type === 'kafka') {
+    return { ...kafkaDefaults }
+  }
+  return { ...postgresDefaults }
 }
 
 export function createConnectionFormFromConnection(connection?: Connection): ConnectionFormValues {
@@ -124,6 +147,13 @@ export function createConnectionFormFromConnection(connection?: Connection): Con
     clusterAddressesText: connection.clusterAddresses?.join('\n') ?? redisConfig?.addresses?.join('\n') ?? '',
     sentinelMasterName: connection.masterName ?? redisConfig?.master_name ?? '',
     sentinelAddressesText: connection.sentinelAddresses?.join('\n') ?? redisConfig?.sentinel_addrs?.join('\n') ?? '',
+    kafkaBrokersText: connection.kafka_config?.brokers?.join('\n') ?? '',
+    kafkaSaslMechanism: connection.kafka_config?.sasl_mechanism ?? '',
+    readOnly: connection.read_only ?? false,
+  }
+
+  if (connection.type === 'kafka') {
+    base.tlsEnabled = connection.kafka_config?.tls_enabled ?? false
   }
 
   return base
@@ -173,9 +203,35 @@ export function buildConnectionInput(form: ConnectionFormValues): ConnectionInpu
       username: form.username.trim(),
       password: form.password,
       tags,
+      read_only: form.readOnly,
       redis_config: redisConfig,
     }
     return redisInput
+  }
+
+  if (form.type === 'kafka') {
+    const brokers = normalizeAddresses(form.kafkaBrokersText)
+    const entrypoint = entrypointFromAddresses(brokers)
+
+    const kafkaConfig: KafkaConfig = {
+      brokers,
+      sasl_mechanism: form.kafkaSaslMechanism,
+      tls_enabled: form.tlsEnabled,
+    }
+
+    const kafkaInput: KafkaConnectionInput = {
+      name: form.name.trim(),
+      type: 'kafka',
+      host: entrypoint.host,
+      port: entrypoint.port,
+      database: '',
+      username: form.username.trim(),
+      password: form.password,
+      tags,
+      read_only: form.readOnly,
+      kafka_config: kafkaConfig,
+    }
+    return kafkaInput
   }
 
   const postgresInput: PostgresConnectionInput = {
@@ -187,6 +243,7 @@ export function buildConnectionInput(form: ConnectionFormValues): ConnectionInpu
     username: form.username.trim(),
     password: form.password,
     tags,
+    read_only: form.readOnly,
   }
   return postgresInput
 }
@@ -208,6 +265,19 @@ export function validateConnectionForm(form: ConnectionFormValues, allowBlankPas
     }
     if (!form.username.trim()) {
       return 'Username is required.'
+    }
+    return null
+  }
+
+  if (form.type === 'kafka') {
+    if (normalizeAddresses(form.kafkaBrokersText).length === 0) {
+      return 'Add at least one broker address.'
+    }
+    if (form.kafkaSaslMechanism && !form.username.trim()) {
+      return 'SASL authentication requires a username.'
+    }
+    if (!allowBlankPassword && form.kafkaSaslMechanism && !form.password.trim()) {
+      return 'SASL authentication requires a password.'
     }
     return null
   }

@@ -188,3 +188,36 @@ func (h *DataHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusCreated, result)
 }
+
+// Produce publishes a batch of messages to a Kafka topic. Loop/multi template
+// expansion happens client-side; this endpoint receives the expanded batch.
+func (h *DataHandler) Produce(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var req connector.KafkaProduceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	producer, ok := conn.(connector.KafkaProducer)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "producing is not supported for this connection")
+		return
+	}
+
+	result, err := producer.Produce(r.Context(), req)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}

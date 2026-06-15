@@ -26,12 +26,13 @@ export default function ConnectionListPage() {
   const [mounted, setMounted] = useState(false)
   const searchType = searchParams.get('type')
   const selectedType: ConnectionTypeFilter =
-    searchType === 'postgres' || searchType === 'redis' ? searchType : 'all'
+    searchType === 'postgres' || searchType === 'redis' || searchType === 'kafka' ? searchType : 'all'
 
   const counts = {
     all: connections.length,
     postgres: connections.filter((connection) => connection.type === 'postgres').length,
     redis: connections.filter((connection) => connection.type === 'redis').length,
+    kafka: connections.filter((connection) => connection.type === 'kafka').length,
   }
 
   const visibleConnections =

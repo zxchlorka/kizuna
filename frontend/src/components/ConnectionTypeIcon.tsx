@@ -7,6 +7,26 @@ interface ConnectionTypeIconProps {
 }
 
 export function ConnectionTypeIcon({ type, className }: ConnectionTypeIconProps) {
+  if (type === 'kafka') {
+    return (
+      <svg
+        viewBox="0 0 24 24"
+        className={cn('text-orange-400', className)}
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        <circle cx="6" cy="12" r="2.5" />
+        <circle cx="17" cy="5.5" r="2.5" />
+        <circle cx="17" cy="18.5" r="2.5" />
+        <path d="M8.2 10.8 14.8 6.9" />
+        <path d="M8.2 13.2 14.8 17.1" />
+      </svg>
+    )
+  }
+
   if (type === 'redis') {
     return (
       <svg

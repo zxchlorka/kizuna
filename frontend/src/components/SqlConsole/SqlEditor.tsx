@@ -336,6 +336,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       viewRef.current?.destroy()
       viewRef.current = null
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only: value/theme are applied via the sync effects below
   }, [
     autocompleteCompartment,
     themeCompartment,

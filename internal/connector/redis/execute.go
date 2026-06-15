@@ -13,11 +13,58 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
+const (
+	maxCommandCompletions = 50
+	maxExecResultRows     = 1000
+	executeTimeout        = 15 * time.Second
+)
+
+// Commands that hijack the connection (streaming or pub/sub) cannot work over the
+// request/response CLI and would leave the pooled connection unusable.
+var blockedRedisCommands = map[string]struct{}{
+	"MONITOR":    {},
+	"SUBSCRIBE":  {},
+	"PSUBSCRIBE": {},
+	"SSUBSCRIBE": {},
+}
+
+func rejectBlockedRedisCommand(args []string) error {
+	if len(args) == 0 {
+		return nil
+	}
+	name := strings.ToUpper(args[0])
+	if _, ok := blockedRedisCommands[name]; ok {
+		return fmt.Errorf("%w: %s is not supported in the CLI: it would hold the connection open. Use a dedicated redis-cli session instead", connector.ErrBadRequest, name)
+	}
+	return nil
+}
+
+// rejectReadOnlyRedisCommand blocks any command that is not on the read-only
+// allowlist when the connection is read-only (fail-closed).
+func (c *RedisConnector) rejectReadOnlyRedisCommand(args []string) error {
+	if !c.config.ReadOnly || len(args) == 0 {
+		return nil
+	}
+	if !isRedisReadOnlyCommand(args[0]) {
+		return fmt.Errorf("%w: %s is blocked on a read-only connection", connector.ErrReadOnly, strings.ToUpper(args[0]))
+	}
+	return nil
+}
+
 func (c *RedisConnector) executeCommand(ctx context.Context, command string) (*connector.ExecResult, error) {
 	args, err := parseRedisCommand(command)
 	if err != nil {
 		return nil, err
 	}
+	if err := rejectBlockedRedisCommand(args); err != nil {
+		return nil, err
+	}
+	if err := c.rejectReadOnlyRedisCommand(args); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, executeTimeout)
+	defer cancel()
 
 	startedAt := time.Now()
 	cmd := c.client.Do(ctx, anySlice(args)...)
@@ -41,12 +88,21 @@ func (c *RedisConnector) executePipeline(ctx context.Context, commands []string)
 		if err != nil {
 			return nil, err
 		}
+		if err := rejectBlockedRedisCommand(args); err != nil {
+			return nil, err
+		}
+		if err := c.rejectReadOnlyRedisCommand(args); err != nil {
+			return nil, err
+		}
 		parsedCommands = append(parsedCommands, args)
 		trimmedCommands = append(trimmedCommands, trimmed)
 	}
 	if len(parsedCommands) == 0 {
 		return nil, fmt.Errorf("%w: commands are required", connector.ErrBadRequest)
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, executeTimeout)
+	defer cancel()
 
 	startedAt := time.Now()
 	cmders, pipelineErr := c.client.Pipelined(ctx, func(pipe goredis.Pipeliner) error {
@@ -86,7 +142,7 @@ func (c *RedisConnector) redisCompletions(ctx context.Context, req connector.Com
 	switch req.Context {
 	case "", "command":
 		prefix := strings.ToUpper(strings.TrimSpace(req.Prefix))
-		items := make([]connector.CompletionItem, 0, 20)
+		items := make([]connector.CompletionItem, 0, maxCommandCompletions)
 		for _, name := range redisCommandNames {
 			if prefix != "" && !strings.HasPrefix(name, prefix) {
 				continue
@@ -97,7 +153,7 @@ func (c *RedisConnector) redisCompletions(ctx context.Context, req connector.Com
 				Type:   "command",
 				Detail: fmt.Sprintf("%s — %s", command.Syntax, command.Description),
 			})
-			if len(items) >= 20 {
+			if len(items) >= maxCommandCompletions {
 				break
 			}
 		}
@@ -266,6 +322,11 @@ func (c *RedisConnector) formatExecResult(command string, args []string, value a
 		result.Columns = []string{"field", "value"}
 		result.ColumnTypes = []string{"string", "mixed"}
 		result.Rows = makeMapRows(typed)
+	case map[any]any:
+		// RESP3 map reply (go-redis v9 default) — e.g. HGETALL, CONFIG GET, XINFO.
+		result.Columns = []string{"field", "value"}
+		result.ColumnTypes = []string{"string", "mixed"}
+		result.Rows = makeAnyKeyMapRows(typed)
 	case map[string]string:
 		result.Columns = []string{"field", "value"}
 		result.ColumnTypes = []string{"string", "string"}
@@ -285,8 +346,64 @@ func (c *RedisConnector) formatExecResult(command string, args []string, value a
 		result.Rows = [][]any{{typed}}
 	}
 
+	if len(result.Rows) > maxExecResultRows {
+		result.Rows = result.Rows[:maxExecResultRows]
+		result.Truncated = true
+		result.AppliedLimit = maxExecResultRows
+	}
+
+	// Final safety pass: coerce every cell into a JSON-encodable value so an
+	// exotic RESP3 reply can never produce an empty 200 (json.Marshal failure).
+	for i := range result.Rows {
+		for j := range result.Rows[i] {
+			result.Rows[i][j] = jsonSafeValue(result.Rows[i][j])
+		}
+	}
+
 	result.RowsReturned = len(result.Rows)
 	return result, nil
+}
+
+// makeAnyKeyMapRows renders a RESP3 map reply as sorted field/value rows.
+func makeAnyKeyMapRows(values map[any]any) [][]any {
+	type pair struct {
+		key   string
+		value any
+	}
+	pairs := make([]pair, 0, len(values))
+	for key, value := range values {
+		pairs = append(pairs, pair{key: fmt.Sprint(key), value: jsonSafeValue(value)})
+	}
+	sort.Slice(pairs, func(i, j int) bool { return pairs[i].key < pairs[j].key })
+
+	rows := make([][]any, 0, len(pairs))
+	for _, p := range pairs {
+		rows = append(rows, []any{p.key, p.value})
+	}
+	return rows
+}
+
+// jsonSafeValue recursively converts values that json.Marshal cannot handle
+// (RESP3 maps keyed by any, raw bytes) into encodable equivalents.
+func jsonSafeValue(value any) any {
+	switch typed := value.(type) {
+	case map[any]any:
+		out := make(map[string]any, len(typed))
+		for key, inner := range typed {
+			out[fmt.Sprint(key)] = jsonSafeValue(inner)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, inner := range typed {
+			out[i] = jsonSafeValue(inner)
+		}
+		return out
+	case []byte:
+		return string(typed)
+	default:
+		return value
+	}
 }
 
 func anySlice(values []string) []any {

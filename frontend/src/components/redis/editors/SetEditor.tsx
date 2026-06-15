@@ -7,11 +7,12 @@ import type { TableRow } from '@/types/api'
 interface SetEditorProps {
   rows: TableRow[]
   saving: boolean
+  readOnly?: boolean
   onInsert: (member: string) => Promise<void> | void
   onDelete: (member: string) => Promise<void> | void
 }
 
-export function SetEditor({ rows, saving, onInsert, onDelete }: SetEditorProps) {
+export function SetEditor({ rows, saving, readOnly = false, onInsert, onDelete }: SetEditorProps) {
   const [search, setSearch] = useState('')
   const [newMember, setNewMember] = useState('')
 
@@ -34,11 +35,15 @@ export function SetEditor({ rows, saving, onInsert, onDelete }: SetEditorProps) 
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
             <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search members" className="h-8 w-48 pl-8 font-mono text-xs" />
           </div>
-          <Input value={newMember} onChange={(event) => setNewMember(event.target.value)} placeholder="new member" className="h-8 w-48 font-mono text-xs" />
-          <Button type="button" size="sm" className="h-8 gap-1.5" disabled={saving || newMember.trim() === ''} onClick={() => void onInsert(newMember.trim())}>
-            <Plus className="h-3.5 w-3.5" />
-            Add
-          </Button>
+          {!readOnly && (
+            <>
+              <Input value={newMember} onChange={(event) => setNewMember(event.target.value)} placeholder="new member" className="h-8 w-48 font-mono text-xs" />
+              <Button type="button" size="sm" className="h-8 gap-1.5" disabled={saving || newMember.trim() === ''} onClick={() => void onInsert(newMember.trim())}>
+                <Plus className="h-3.5 w-3.5" />
+                Add
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -48,9 +53,11 @@ export function SetEditor({ rows, saving, onInsert, onDelete }: SetEditorProps) 
           return (
             <div key={member} className="flex items-center gap-2 rounded-sm border border-border bg-background px-3 py-2">
               <div className="min-w-0 flex-1 font-mono text-xs text-foreground">{member}</div>
-              <Button type="button" size="icon" variant="outline" className="h-7 w-7 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>
-                <Trash2 className="h-3.5 w-3.5" />
-              </Button>
+              {!readOnly && (
+                <Button type="button" size="icon" variant="outline" className="h-7 w-7 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              )}
             </div>
           )
         })}

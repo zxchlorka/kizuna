@@ -7,6 +7,9 @@ services:
       - infraview-data:/data
     environment:
       CONFIG_PATH: /data/config.json
+    networks:
+      - default
+      - kafka
 
   infraview-debug:
     build:
@@ -47,3 +50,11 @@ services:
 volumes:
   infraview-data:
   pgdata:
+
+networks:
+  default:
+  # External network of the Kafka stack so InfraView can resolve the broker
+  # hostname (e.g. "kafka:9092"). Points at the Kafka compose project's network.
+  kafka:
+    external: true
+    name: dmp-profile_default

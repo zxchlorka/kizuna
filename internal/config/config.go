@@ -18,7 +18,9 @@ type ConnectionConfig struct {
 	Password       string       `json:"password"` // encrypted
 	Tags           []string     `json:"tags,omitempty"`
 	VisibleSchemas []string     `json:"visible_schemas"`
+	ReadOnly       bool         `json:"read_only,omitempty"`
 	RedisConfig    *RedisConfig `json:"redis_config,omitempty"`
+	KafkaConfig    *KafkaConfig `json:"kafka_config,omitempty"`
 }
 
 type AppConfig struct {
@@ -51,6 +53,7 @@ func cloneConnection(conn ConnectionConfig) ConnectionConfig {
 	clone.Tags = slices.Clone(conn.Tags)
 	clone.VisibleSchemas = slices.Clone(conn.VisibleSchemas)
 	clone.RedisConfig = conn.RedisConfig.Clone()
+	clone.KafkaConfig = conn.KafkaConfig.Clone()
 	return clone
 }
 

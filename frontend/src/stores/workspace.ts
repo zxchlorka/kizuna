@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { fetchWithTimeout } from '@/lib/http'
 import { normalizeFilters, filtersEqual } from '@/lib/table'
+import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
-import type { FilterExpr, ObjectItem, ObjectType } from '@/types/api'
+import type { FilterExpr, ObjectItem, ObjectPageResponse, ObjectType } from '@/types/api'
 
 export interface NavigationTrailItem {
   tabId: string
@@ -59,14 +60,19 @@ interface WorkspaceStore {
   activeTabId: string | null
   navigationHistory: NavigationEntry[]
   treeItems: Record<string, ObjectItem[]>
+  treeCursors: Record<string, string>
+  treeLoadingMore: Record<string, boolean>
   treeLoading: boolean
   treeErrorsByConnection: Record<string, string | null>
   expandedSchemas: Set<string>
   treeVisibility: TreeVisibility
   visibleSchemasByConnection: Record<string, string[] | null>
   availableSchemasByConnection: Record<string, string[]>
+  selectedNodeByConnection: Record<string, string>
 
   fetchTree: (connId: string, path?: string) => Promise<void>
+  fetchMoreTree: (connId: string, path?: string) => Promise<void>
+  setSelectedNode: (connId: string, node: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (connId: string, schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
@@ -109,11 +115,59 @@ function parseTreeKey(key: string): { connId: string; path: string } {
   return { connId, path }
 }
 
+function isRedisConnection(connId: string): boolean {
+  return useConnectionStore.getState().connections.find((connection) => connection.id === connId)?.type === 'redis'
+}
+
+function buildObjectsQuery(connId: string, path: string, opts: { paged: boolean; cursor?: string; node?: string }): string {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  if (opts.paged) {
+    params.set('paged', '1')
+    if (opts.cursor) params.set('cursor', opts.cursor)
+    if (opts.node) params.set('node', opts.node)
+  }
+  const query = params.toString()
+  return `/api/connections/${connId}/objects${query ? `?${query}` : ''}`
+}
+
+// Pages of a Redis scan arrive incrementally: namespace counts accumulate
+// across pages while leaf keys are deduplicated by their full path.
+function mergeObjectItems(existing: ObjectItem[], incoming: ObjectItem[]): ObjectItem[] {
+  const namespaces = new Map<string, ObjectItem>()
+  const leaves = new Map<string, ObjectItem>()
+
+  const add = (item: ObjectItem) => {
+    if (item.type === 'namespace') {
+      const current = namespaces.get(item.name)
+      if (current) {
+        namespaces.set(item.name, { ...current, row_count: current.row_count + item.row_count })
+      } else {
+        namespaces.set(item.name, item)
+      }
+      return
+    }
+    const key = `${item.type}:${item.path ?? item.name}`
+    if (!leaves.has(key)) {
+      leaves.set(key, item)
+    }
+  }
+
+  existing.forEach(add)
+  incoming.forEach(add)
+
+  const sortedNamespaces = Array.from(namespaces.values()).sort((a, b) => a.name.localeCompare(b.name))
+  const sortedLeaves = Array.from(leaves.values()).sort((a, b) => a.name.localeCompare(b.name))
+  return [...sortedNamespaces, ...sortedLeaves]
+}
+
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
   navigationHistory: [],
   treeItems: {},
+  treeCursors: {},
+  treeLoadingMore: {},
   treeLoading: false,
   treeErrorsByConnection: {},
   expandedSchemas: new Set(),
@@ -124,17 +178,30 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
   visibleSchemasByConnection: {},
   availableSchemasByConnection: {},
+  selectedNodeByConnection: {},
 
   fetchTree: async (connId: string, path?: string) => {
     set({ treeLoading: true })
+    const paged = isRedisConnection(connId)
+    const key = buildTreeKey(connId, path || '')
     try {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ''
-      const res = await fetchWithTimeout(`/api/connections/${connId}/objects${query}`)
+      const node = get().selectedNodeByConnection[connId]
+      const res = await fetchWithTimeout(buildObjectsQuery(connId, path || '', { paged, node }))
       if (!res.ok) throw new Error('Failed to fetch objects')
-      const items: ObjectItem[] = await res.json()
-      const key = buildTreeKey(connId, path || '')
+
+      let items: ObjectItem[]
+      let nextCursor = ''
+      if (paged) {
+        const page = (await res.json()) as ObjectPageResponse
+        items = page.objects ?? []
+        nextCursor = page.next_cursor ?? ''
+      } else {
+        items = await res.json()
+      }
+
       set((state) => ({
         treeItems: { ...state.treeItems, [key]: items },
+        treeCursors: { ...state.treeCursors, [key]: nextCursor },
         treeErrorsByConnection: {
           ...state.treeErrorsByConnection,
           [connId]: null,
@@ -160,6 +227,53 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }
   },
 
+  fetchMoreTree: async (connId: string, path?: string) => {
+    const key = buildTreeKey(connId, path || '')
+    const cursor = get().treeCursors[key]
+    if (!cursor || get().treeLoadingMore[key]) {
+      return
+    }
+
+    set((state) => ({ treeLoadingMore: { ...state.treeLoadingMore, [key]: true } }))
+    try {
+      const node = get().selectedNodeByConnection[connId]
+      const res = await fetchWithTimeout(buildObjectsQuery(connId, path || '', { paged: true, cursor, node }))
+      if (!res.ok) throw new Error('Failed to fetch more objects')
+      const page = (await res.json()) as ObjectPageResponse
+
+      set((state) => ({
+        treeItems: {
+          ...state.treeItems,
+          [key]: mergeObjectItems(state.treeItems[key] ?? [], page.objects ?? []),
+        },
+        treeCursors: { ...state.treeCursors, [key]: page.next_cursor ?? '' },
+        treeLoadingMore: { ...state.treeLoadingMore, [key]: false },
+        treeErrorsByConnection: {
+          ...state.treeErrorsByConnection,
+          [connId]: null,
+        },
+      }))
+    } catch (error) {
+      set((state) => ({
+        treeLoadingMore: { ...state.treeLoadingMore, [key]: false },
+        treeErrorsByConnection: {
+          ...state.treeErrorsByConnection,
+          [connId]: (error as Error).message,
+        },
+      }))
+    }
+  },
+
+  setSelectedNode: async (connId: string, node: string) => {
+    set((state) => ({
+      selectedNodeByConnection: {
+        ...state.selectedNodeByConnection,
+        [connId]: node,
+      },
+    }))
+    await get().refreshTree(connId)
+  },
+
   refreshTree: async (connId: string) => {
     const expandedSchemas = Array.from(get().expandedSchemas)
       .filter((key) => parseTreeKey(key).connId === connId)
@@ -167,12 +281,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
     set((state) => {
       const nextTreeItems = { ...state.treeItems }
+      const nextTreeCursors = { ...state.treeCursors }
       Object.keys(nextTreeItems).forEach((key) => {
         if (parseTreeKey(key).connId === connId) {
           delete nextTreeItems[key]
         }
       })
-      return { treeItems: nextTreeItems, treeLoading: true }
+      Object.keys(nextTreeCursors).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextTreeCursors[key]
+        }
+      })
+      return { treeItems: nextTreeItems, treeCursors: nextTreeCursors, treeLoading: true }
     })
 
     await get().fetchTree(connId)

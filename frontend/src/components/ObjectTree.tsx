@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Braces,
+  ChevronsDown,
   CircleDot,
   Database,
   Eye,
@@ -10,8 +11,11 @@ import {
   Hash,
   List,
   ListOrdered,
+  Loader2,
+  MessagesSquare,
   MoreHorizontal,
   Plus,
+  Search,
   Table2,
   Zap,
 } from 'lucide-react'
@@ -160,6 +164,8 @@ function getIcon(type: string, expanded?: boolean) {
       return <Activity className="h-4 w-4 text-orange-500" />
     case 'redis_json':
       return <Braces className="h-4 w-4 text-cyan-500" />
+    case 'kafka_topic':
+      return <MessagesSquare className="h-4 w-4 text-orange-500" />
     default:
       return <Table2 className="h-4 w-4 text-muted-foreground" />
   }
@@ -169,12 +175,15 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
   const connections = useConnectionStore((state) => state.connections)
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
+  const treeCursors = useWorkspaceStore((state) => state.treeCursors)
+  const treeLoadingMore = useWorkspaceStore((state) => state.treeLoadingMore)
   const treeLoading = useWorkspaceStore((state) => state.treeLoading)
   const treeError = useWorkspaceStore((state) => state.treeErrorsByConnection[connId] ?? null)
   const expandedSchemas = useWorkspaceStore((state) => state.expandedSchemas)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
   const visibleSchemasByConnection = useWorkspaceStore((state) => state.visibleSchemasByConnection)
   const fetchTree = useWorkspaceStore((state) => state.fetchTree)
+  const fetchMoreTree = useWorkspaceStore((state) => state.fetchMoreTree)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
   const toggleSchema = useWorkspaceStore((state) => state.toggleSchema)
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
@@ -183,6 +192,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
   const pushToast = useToastStore((state) => state.push)
   const [createTableSchema, setCreateTableSchema] = useState<string | null>(null)
   const [isCreatingTable, setIsCreatingTable] = useState(false)
+  const [topicSearch, setTopicSearch] = useState('')
 
   useEffect(() => {
     void fetchTree(connId)
@@ -190,7 +200,8 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
 
   const currentConnection = connections.find((connection) => connection.id === connId)
   const isRedisConnection = currentConnection?.type === 'redis'
-  const rootItems = treeItems[buildTreeKey(connId)] || []
+  const isKafkaConnection = currentConnection?.type === 'kafka'
+  const rootItems = useMemo(() => treeItems[buildTreeKey(connId)] ?? [], [connId, treeItems])
 
   const availableSchemas = useMemo(
     () => rootItems.filter((item) => item.type === 'schema').map((item) => item.name),
@@ -431,6 +442,26 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     )
   }
 
+  const renderRedisLoadMore = (path = '') => {
+    const key = buildTreeKey(connId, path)
+    if (!treeCursors[key]) {
+      return null
+    }
+    const loadingMore = treeLoadingMore[key] ?? false
+
+    return (
+      <button
+        type="button"
+        disabled={loadingMore}
+        onClick={() => void fetchMoreTree(connId, path)}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+      >
+        {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronsDown className="h-4 w-4" />}
+        <span>{loadingMore ? 'Scanning…' : 'Load more keys'}</span>
+      </button>
+    )
+  }
+
   const renderRedisNamespaceNode = (item: ObjectItem) => {
     const nodePath = item.path ?? item.name
     const expanded = expandedSchemas.has(buildTreeKey(connId, nodePath))
@@ -466,6 +497,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
               children.map((child) =>
                 isRedisNamespace(child.type) ? renderRedisNamespaceNode(child) : renderRedisLeafItem(child)
               )}
+            {!nodeLoading && renderRedisLoadMore(nodePath)}
           </div>
         )}
       </div>
@@ -474,6 +506,35 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
 
   const renderRedisItem = (item: ObjectItem) =>
     isRedisNamespace(item.type) ? renderRedisNamespaceNode(item) : renderRedisLeafItem(item)
+
+  const renderKafkaTopicItem = (item: ObjectItem) => {
+    const partitions = typeof item.meta?.partitions === 'number' ? item.meta.partitions : 0
+
+    return (
+      <button
+        key={`topic:${item.name}`}
+        type="button"
+        onClick={() => openTab(connId, item.path ?? item.name, 'kafka_topic')}
+        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+        title={item.name}
+      >
+        {getIcon('kafka_topic')}
+        <span className="truncate">{item.name}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          <span className="rounded-sm border border-orange-500/20 bg-orange-500/5 px-1.5 py-0.5 font-mono text-[10px] text-orange-500">
+            {partitions}p
+          </span>
+          {item.row_count > 0 && (
+            <span className="font-mono text-[10px] text-muted-foreground">{formatCount(item.row_count)}</span>
+          )}
+        </span>
+      </button>
+    )
+  }
+
+  const visibleKafkaTopics = isKafkaConnection
+    ? rootItems.filter((item) => item.name.toLowerCase().includes(topicSearch.trim().toLowerCase()))
+    : []
 
   if (treeLoading && rootItems.length === 0) {
     return <LoadingSkeleton variant="tree" />
@@ -502,8 +563,14 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       <EmptyState
         variant="no_tables"
         compact
-        title={isRedisConnection ? 'No Redis keys loaded' : undefined}
-        description={isRedisConnection ? 'The Redis connector has not returned any namespace or key nodes yet.' : undefined}
+        title={isRedisConnection ? 'No Redis keys loaded' : isKafkaConnection ? 'No topics' : undefined}
+        description={
+          isRedisConnection
+            ? 'The Redis connector has not returned any namespace or key nodes yet.'
+            : isKafkaConnection
+              ? 'The cluster has no non-internal topics yet.'
+              : undefined
+        }
       />
     )
   }
@@ -519,12 +586,47 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     )
   }
 
+  const rootHasMore = isRedisConnection && Boolean(treeCursors[buildTreeKey(connId)])
+
+  if (isKafkaConnection) {
+    return (
+      <div className="space-y-2">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+          <input
+            value={topicSearch}
+            onChange={(event) => setTopicSearch(event.target.value)}
+            placeholder="Filter topics…"
+            className="h-8 w-full rounded-sm border border-border bg-background pl-7 pr-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+          />
+        </div>
+        <div className="space-y-0.5">
+          {visibleKafkaTopics.map(renderKafkaTopicItem)}
+          {visibleKafkaTopics.length === 0 && (
+            <EmptyState
+              variant="no_tables"
+              compact
+              title="No topics match"
+              description="Adjust the filter or refresh the connection."
+            />
+          )}
+        </div>
+      </div>
+    )
+  }
+
   return (
     <>
+      {rootHasMore && (
+        <div className="mb-2 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+          Partial view — the keyspace is scanned incrementally. Use “Load more keys” to continue.
+        </div>
+      )}
       <div className="space-y-0.5">
         {(isRedisConnection ? rootItems : filteredRootItems).map((item) =>
           isRedisConnection ? renderRedisItem(item) : renderPgSchemaNode(item)
         )}
+        {isRedisConnection && renderRedisLoadMore()}
       </div>
       {!isRedisConnection && (
         <CreateTableForm

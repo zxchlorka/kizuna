@@ -8,6 +8,7 @@ import type { TableRow } from '@/types/api'
 interface ListEditorProps {
   rows: TableRow[]
   saving: boolean
+  readOnly?: boolean
   offset: number
   limit: number
   total: number
@@ -21,6 +22,7 @@ interface ListEditorProps {
 export function ListEditor({
   rows,
   saving,
+  readOnly = false,
   offset,
   limit,
   total,
@@ -43,19 +45,21 @@ export function ListEditor({
           <div className="mt-1 text-sm text-muted-foreground">Paged view with directional inserts.</div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <Textarea value={newValue} onChange={(event) => setNewValue(event.target.value)} placeholder="New item" className="min-h-8 w-64 font-mono text-xs" />
-          <Button type="button" variant={direction === 'left' ? 'secondary' : 'outline'} size="sm" className="h-8" onClick={() => setDirection('left')}>
-            LPUSH
-          </Button>
-          <Button type="button" variant={direction === 'right' ? 'secondary' : 'outline'} size="sm" className="h-8" onClick={() => setDirection('right')}>
-            RPUSH
-          </Button>
-          <Button type="button" size="sm" className="h-8 gap-1.5" disabled={saving || newValue.trim() === ''} onClick={() => void onInsert(newValue, direction)}>
-            <Plus className="h-3.5 w-3.5" />
-            Add item
-          </Button>
-        </div>
+        {!readOnly && (
+          <div className="flex items-center gap-2">
+            <Textarea value={newValue} onChange={(event) => setNewValue(event.target.value)} placeholder="New item" className="min-h-8 w-64 font-mono text-xs" />
+            <Button type="button" variant={direction === 'left' ? 'secondary' : 'outline'} size="sm" className="h-8" onClick={() => setDirection('left')}>
+              LPUSH
+            </Button>
+            <Button type="button" variant={direction === 'right' ? 'secondary' : 'outline'} size="sm" className="h-8" onClick={() => setDirection('right')}>
+              RPUSH
+            </Button>
+            <Button type="button" size="sm" className="h-8 gap-1.5" disabled={saving || newValue.trim() === ''} onClick={() => void onInsert(newValue, direction)}>
+              <Plus className="h-3.5 w-3.5" />
+              Add item
+            </Button>
+          </div>
+        )}
       </div>
 
       <div className="overflow-x-auto">
@@ -78,6 +82,9 @@ export function ListEditor({
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
+                      if (readOnly) {
+                        return
+                      }
                       setEditingIndex(index)
                       setDraftValue(value)
                     }}
@@ -89,21 +96,25 @@ export function ListEditor({
                     )}
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      {editing ? (
-                        <>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(index, draftValue)} disabled={saving}>
-                            <Save className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingIndex(null)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
-                      ) : null}
-                      <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(index)} disabled={saving}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+                    {readOnly ? (
+                      <div className="text-right text-[10px] uppercase tracking-[0.12em] text-muted-foreground">—</div>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        {editing ? (
+                          <>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(index, draftValue)} disabled={saving}>
+                              <Save className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingIndex(null)}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(index)} disabled={saving}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

@@ -1,5 +1,13 @@
-export type ConnectionType = 'postgres' | 'redis'
+export type ConnectionType = 'postgres' | 'redis' | 'kafka'
 export type RedisMode = 'standalone' | 'cluster' | 'sentinel'
+export type KafkaSASLMechanism = '' | 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512'
+
+export interface KafkaConfig {
+  brokers: string[]
+  sasl_mechanism?: string
+  tls_enabled?: boolean
+  schema_registry_url?: string
+}
 export interface RedisConfig {
   mode?: RedisMode
   address?: string
@@ -21,7 +29,9 @@ export type RedisObjectType =
   | 'redis_stream'
   | 'redis_json'
 
-export type ObjectType = 'table' | 'view' | 'index' | 'namespace' | RedisObjectType
+export type KafkaObjectType = 'kafka_topic' | 'kafka_partition' | 'kafka_consumer_group'
+
+export type ObjectType = 'table' | 'view' | 'index' | 'namespace' | RedisObjectType | KafkaObjectType
 export type ObjectItemType = ObjectType | 'schema'
 
 export interface Connection {
@@ -40,7 +50,9 @@ export interface Connection {
   clusterAddresses?: string[]
   sentinelAddresses?: string[]
   redis_config?: RedisConfig
+  kafka_config?: KafkaConfig
   tags?: string[]
+  read_only?: boolean
   visible_schemas: string[] | null
 }
 
@@ -53,6 +65,7 @@ export interface PostgresConnectionInput {
   username: string
   password: string
   tags: string[]
+  read_only?: boolean
   visible_schemas?: string[] | null
 }
 
@@ -65,10 +78,43 @@ export interface RedisConnectionInput {
   username: string
   password: string
   tags: string[]
+  read_only?: boolean
   redis_config: RedisConfig
 }
 
-export type ConnectionInput = PostgresConnectionInput | RedisConnectionInput
+export interface KafkaProduceMessage {
+  key?: string
+  value: string
+  headers?: Record<string, string>
+}
+
+export interface KafkaProduceRequest {
+  topic: string
+  partition?: number | null
+  messages: KafkaProduceMessage[]
+}
+
+export interface KafkaProduceResult {
+  produced: number
+  failed: number
+  errors?: string[]
+  partitions?: Record<string, number>
+}
+
+export interface KafkaConnectionInput {
+  name: string
+  type: 'kafka'
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  tags: string[]
+  read_only?: boolean
+  kafka_config: KafkaConfig
+}
+
+export type ConnectionInput = PostgresConnectionInput | RedisConnectionInput | KafkaConnectionInput
 
 export interface TestResult {
   ok: boolean
@@ -85,6 +131,12 @@ export interface ObjectItem {
   path?: string
   ttl_seconds?: number
   meta?: Record<string, unknown>
+}
+
+export interface ObjectPageResponse {
+  objects: ObjectItem[]
+  next_cursor?: string
+  truncated: boolean
 }
 
 export interface ObjectInfo {

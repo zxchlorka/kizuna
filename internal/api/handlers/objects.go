@@ -22,7 +22,8 @@ func NewObjectsHandler(cfg *config.AppConfig, manager *connector.ConnectionManag
 
 func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	path := r.URL.Query().Get("path")
+	query := r.URL.Query()
+	path := query.Get("path")
 	start := time.Now()
 
 	c, cancel, err := getConnector(r.Context(), h.manager, id)
@@ -31,6 +32,30 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer cancel()
+
+	// paged=1 opts into the cursor-based envelope; the plain array contract
+	// stays untouched for connectors without incremental listing (PostgreSQL).
+	if query.Get("paged") == "1" {
+		pager, ok := c.(connector.PagedObjectLister)
+		if !ok {
+			writeError(w, http.StatusBadRequest, "paged object listing is not supported for this connection")
+			return
+		}
+
+		page, err := pager.ListObjectsPage(r.Context(), connector.ObjectPageOpts{
+			Path:   path,
+			Cursor: query.Get("cursor"),
+			Node:   query.Get("node"),
+		})
+		if err != nil {
+			writeConnectorError(w, err)
+			return
+		}
+
+		logSlowObjectList(id, path, len(page.Objects), time.Since(start))
+		writeJSON(w, http.StatusOK, page)
+		return
+	}
 
 	objects, err := c.ListObjects(r.Context(), path)
 	if err != nil {

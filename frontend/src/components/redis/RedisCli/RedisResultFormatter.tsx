@@ -48,7 +48,7 @@ export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
           <tbody className="divide-y divide-border/60">
             {result.rows.map((row, index) => (
               <tr key={index}>
-                <td className="px-3 py-2 font-mono text-xs text-cyan-700 dark:text-cyan-300">{String(row[0] ?? '')}</td>
+                <td className="px-3 py-2 font-mono text-xs font-medium text-accent">{String(row[0] ?? '')}</td>
                 <td className="px-3 py-2 font-mono text-xs text-foreground">{String(row[1] ?? '')}</td>
               </tr>
             ))}
@@ -64,7 +64,7 @@ export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
         {result.rows.length === 0 ? <div className="text-muted-foreground">(empty)</div> : null}
         {result.rows.map((row, index) => (
           <div key={index} className="text-foreground">
-            <span className="mr-2 text-muted-foreground">{String(row[0] ?? index + 1)})</span>
+            <span className="mr-2 select-none text-accent/70 tabular-nums">{String(row[0] ?? index + 1)})</span>
             {String(row[1] ?? '')}
           </div>
         ))}

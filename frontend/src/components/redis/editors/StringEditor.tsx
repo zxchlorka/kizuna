@@ -8,10 +8,11 @@ interface StringEditorProps {
   value: string
   isJson: boolean
   saving: boolean
+  readOnly?: boolean
   onSave: (value: string) => Promise<void> | void
 }
 
-export function StringEditor({ value, isJson, saving, onSave }: StringEditorProps) {
+export function StringEditor({ value, isJson, saving, readOnly = false, onSave }: StringEditorProps) {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
   const [pretty, setPretty] = useState(isJson)
@@ -61,7 +62,7 @@ export function StringEditor({ value, isJson, saving, onSave }: StringEditorProp
                 {saving ? 'Saving…' : 'Save'}
               </Button>
             </>
-          ) : (
+          ) : readOnly ? null : (
             <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => setEditing(true)}>
               <PencilLine className="h-3.5 w-3.5" />
               Edit

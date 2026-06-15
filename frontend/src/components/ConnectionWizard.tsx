@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as Dialog from '@radix-ui/react-dialog'
-import { ArrowLeft, CheckCircle2, Database, Loader2, Server, X, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Database, Loader2, Server, ShieldCheck, X, XCircle } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { KafkaConnectionForm } from '@/components/ConnectionWizard/KafkaConnectionForm'
 import { PostgresConnectionForm } from '@/components/ConnectionWizard/PostgresConnectionForm'
 import { RedisConnectionForm } from '@/components/ConnectionWizard/RedisConnectionForm'
 import {
@@ -13,7 +15,7 @@ import {
 } from '@/lib/connectionForms'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import type { Connection, ConnectionInput, RedisConnectionInput } from '@/types/api'
+import type { Connection, ConnectionInput, PostgresConnectionInput } from '@/types/api'
 
 interface ConnectionWizardProps {
   open: boolean
@@ -34,6 +36,7 @@ function buildConnectionTestKey(form: ConnectionFormValues, isEdit: boolean) {
     database: String(input.database).trim(),
     username: input.username.trim(),
     password: passwordKey,
+    read_only: input.read_only ?? false,
     redis_config:
       input.type === 'redis'
         ? {
@@ -45,24 +48,32 @@ function buildConnectionTestKey(form: ConnectionFormValues, isEdit: boolean) {
             tls_enabled: input.redis_config.tls_enabled ?? false,
           }
         : null,
+    kafka_config:
+      input.type === 'kafka'
+        ? {
+            brokers: input.kafka_config.brokers,
+            sasl_mechanism: input.kafka_config.sasl_mechanism ?? '',
+            tls_enabled: input.kafka_config.tls_enabled ?? false,
+          }
+        : null,
   })
 }
 
 function toUpdatePayload(form: ConnectionFormValues, editConnection: Connection): Partial<ConnectionInput> {
   const input = buildConnectionInput(form)
 
-  if (input.type === 'redis') {
-    const payload: Partial<RedisConnectionInput> = { ...input }
+  if (input.type === 'postgres') {
+    const payload: Partial<PostgresConnectionInput> = {
+      ...input,
+      visible_schemas: editConnection.visible_schemas ?? null,
+    }
     if (!payload.password) {
       delete payload.password
     }
     return payload
   }
 
-  const payload: Partial<ConnectionInput> = {
-    ...input,
-    visible_schemas: editConnection.visible_schemas ?? null,
-  }
+  const payload: Partial<ConnectionInput> = { ...input }
   if (!payload.password) {
     delete payload.password
   }
@@ -180,7 +191,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
     }
   }
 
-  const selectType = (type: 'postgres' | 'redis') => {
+  const selectType = (type: 'postgres' | 'redis' | 'kafka') => {
     setForm(createConnectionForm(type))
     setStep(2)
   }
@@ -230,11 +241,15 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
                   <span className="font-mono text-xs font-medium">Redis</span>
                   <span className="text-[10px] text-muted-foreground">Standalone / Cluster / Sentinel</span>
                 </button>
-                <div className="flex cursor-not-allowed select-none flex-col items-center gap-2 rounded-sm border border-border p-4 opacity-35">
+                <button
+                  type="button"
+                  onClick={() => selectType('kafka')}
+                  className="group relative flex flex-col items-center gap-2 rounded-sm border border-border bg-background p-4 transition-colors hover:border-orange-500/50 hover:bg-orange-500/5"
+                >
                   <Database className="h-7 w-7 text-orange-400" />
                   <span className="font-mono text-xs font-medium">Kafka</span>
-                  <span className="text-[10px] text-muted-foreground">Next slice</span>
-                </div>
+                  <span className="text-[10px] text-muted-foreground">Topics / Consumer groups</span>
+                </button>
               </div>
             </div>
           )}
@@ -243,9 +258,24 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
             <div className="space-y-4 px-6 py-5">
               {form.type === 'redis' ? (
                 <RedisConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
+              ) : form.type === 'kafka' ? (
+                <KafkaConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
               ) : (
                 <PostgresConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
               )}
+
+              <div className="flex items-center justify-between gap-3 rounded-sm border border-border bg-muted/10 px-3 py-3">
+                <div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Read-only
+                  </label>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Block every data-modifying command. Use for production connections.
+                  </p>
+                </div>
+                <Switch checked={form.readOnly} onCheckedChange={(checked) => updateForm({ readOnly: checked })} />
+              </div>
 
               {(testing || testResult || error) && (
                 <div

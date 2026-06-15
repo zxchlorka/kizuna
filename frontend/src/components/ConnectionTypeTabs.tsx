@@ -18,6 +18,7 @@ const filterOptions: Array<{
   { value: 'all', label: 'All', tone: 'text-foreground' },
   { value: 'postgres', label: 'Postgres', tone: 'text-blue-400' },
   { value: 'redis', label: 'Redis', tone: 'text-red-400' },
+  { value: 'kafka', label: 'Kafka', tone: 'text-orange-400' },
 ]
 
 export function ConnectionTypeTabs({ value, counts, onChange }: ConnectionTypeTabsProps) {

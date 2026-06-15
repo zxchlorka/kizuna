@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { KeyRound, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { KeyRound, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -65,7 +65,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     void fetchData(connId, object, tabId)
   }, [connId, fetchData, fetchSchema, object, tabId])
 
-  const rows = tabData?.rows ?? []
+  const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const columns = tabData?.columns ?? []
   const loading = tabData?.loading ?? false
   const error = tabData?.error ?? null
@@ -78,6 +78,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const currentTTL = typeof meta.ttl === 'number' ? meta.ttl : (ttlSeconds ?? null)
   const ttlLabel = formatRedisTTL(currentTTL)
   const isJson = Boolean(meta.is_json)
+  const readOnly = connection?.read_only ?? false
 
   const refresh = async () => {
     await fetchSchema(connId, object, tabId)
@@ -90,6 +91,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     where?: Record<string, unknown>
     data?: Record<string, unknown>
   }) => {
+    if (readOnly) {
+      pushToast({ tone: 'error', title: 'Read-only connection', message: 'Writes are disabled for this connection.' })
+      return
+    }
     setSaving(true)
     try {
       await mutate(connId, {
@@ -120,7 +125,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   const redisContent = (() => {
     if (normalizedType === 'redis_string') {
-      return <StringEditor value={stringValue} isJson={isJson} saving={saving} onSave={(value) => runMutation({ type: 'update', data: { value } })} />
+      return <StringEditor value={stringValue} isJson={isJson} saving={saving} readOnly={readOnly} onSave={(value) => runMutation({ type: 'update', data: { value } })} />
     }
 
     if (normalizedType === 'redis_hash') {
@@ -128,6 +133,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <HashEditor
           rows={rows}
           saving={saving}
+          readOnly={readOnly}
           onUpdate={(field, value) => runMutation({ type: 'update', where: { field }, data: { value } })}
           onDelete={(field) => runMutation({ type: 'delete', where: { field } })}
           onInsert={(field, value) => runMutation({ type: 'insert', data: { field, value } })}
@@ -140,6 +146,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <ListEditor
           rows={rows}
           saving={saving}
+          readOnly={readOnly}
           offset={listOffset}
           limit={listLimit}
           total={total}
@@ -163,6 +170,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SetEditor
           rows={rows}
           saving={saving}
+          readOnly={readOnly}
           onInsert={(member) => runMutation({ type: 'insert', data: { member } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
         />
@@ -174,6 +182,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SortedSetEditor
           rows={rows}
           saving={saving}
+          readOnly={readOnly}
           onUpdateScore={(member, score) => runMutation({ type: 'update', where: { member }, data: { score } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
           onInsert={(member, score) => runMutation({ type: 'insert', data: { member, score } })}
@@ -269,7 +278,13 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] uppercase tracking-[0.14em]', getRedisTypePillClass(metaType ?? objectType))}>
                       {getRedisObjectTypeLabel(metaType ?? objectType)}
                     </span>
-                    {ttlLabel && (
+                    {ttlLabel && readOnly && (
+                      <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.14em]', getRedisTTLStyle(currentTTL))}>
+                        <TimerReset className="mr-1 h-3 w-3" />
+                        {ttlLabel}
+                      </span>
+                    )}
+                    {ttlLabel && !readOnly && (
                       <button
                         type="button"
                         className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.14em]', getRedisTTLStyle(currentTTL))}
@@ -288,10 +303,17 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                   <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
                   Refresh
                 </Button>
-                <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete key
-                </Button>
+                {readOnly ? (
+                  <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
+                    <Lock className="h-3 w-3" />
+                    Read-only
+                  </span>
+                ) : (
+                  <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    Delete key
+                  </Button>
+                )}
               </div>
             </div>
 
@@ -302,6 +324,13 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             </div>
           </div>
 
+          {Boolean(meta.truncated) && (
+            <div className="rounded-sm border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+              Partial view — this key is too large to load fully, so only the first scanned slice is shown
+              {typeof meta.length === 'number' ? ` (${meta.length.toLocaleString()} items total)` : ''}. Use the
+              filter to narrow it down.
+            </div>
+          )}
           {!loading && total === 0 && rows.length === 0 ? (
             <EmptyState
               variant="no_tables"

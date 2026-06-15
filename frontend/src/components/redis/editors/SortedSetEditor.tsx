@@ -7,6 +7,7 @@ import type { TableRow } from '@/types/api'
 interface SortedSetEditorProps {
   rows: TableRow[]
   saving: boolean
+  readOnly?: boolean
   onUpdateScore: (member: string, score: number) => Promise<void> | void
   onDelete: (member: string) => Promise<void> | void
   onInsert: (member: string, score: number) => Promise<void> | void
@@ -14,7 +15,7 @@ interface SortedSetEditorProps {
 
 type SortKey = 'score' | 'member'
 
-export function SortedSetEditor({ rows, saving, onUpdateScore, onDelete, onInsert }: SortedSetEditorProps) {
+export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore, onDelete, onInsert }: SortedSetEditorProps) {
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [editingMember, setEditingMember] = useState<string | null>(null)
@@ -62,18 +63,22 @@ export function SortedSetEditor({ rows, saving, onUpdateScore, onDelete, onInser
           <Button type="button" variant="outline" size="sm" className="h-8" onClick={() => setSortDir((current) => (current === 'asc' ? 'desc' : 'asc'))}>
             {sortDir}
           </Button>
-          <Input value={newMember} onChange={(event) => setNewMember(event.target.value)} placeholder="member" className="h-8 w-40 font-mono text-xs" />
-          <Input value={newScore} onChange={(event) => setNewScore(event.target.value)} placeholder="score" className="h-8 w-24 font-mono text-xs" />
-          <Button
-            type="button"
-            size="sm"
-            className="h-8 gap-1.5"
-            disabled={saving || newMember.trim() === '' || Number.isNaN(Number(newScore))}
-            onClick={() => void onInsert(newMember.trim(), Number(newScore))}
-          >
-            <Plus className="h-3.5 w-3.5" />
-            Add
-          </Button>
+          {!readOnly && (
+            <>
+              <Input value={newMember} onChange={(event) => setNewMember(event.target.value)} placeholder="member" className="h-8 w-40 font-mono text-xs" />
+              <Input value={newScore} onChange={(event) => setNewScore(event.target.value)} placeholder="score" className="h-8 w-24 font-mono text-xs" />
+              <Button
+                type="button"
+                size="sm"
+                className="h-8 gap-1.5"
+                disabled={saving || newMember.trim() === '' || Number.isNaN(Number(newScore))}
+                onClick={() => void onInsert(newMember.trim(), Number(newScore))}
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
@@ -96,6 +101,9 @@ export function SortedSetEditor({ rows, saving, onUpdateScore, onDelete, onInser
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
+                      if (readOnly) {
+                        return
+                      }
                       setEditingMember(member)
                       setDraftScore(String(score))
                     }}
@@ -108,21 +116,25 @@ export function SortedSetEditor({ rows, saving, onUpdateScore, onDelete, onInser
                   </td>
                   <td className="px-4 py-3 font-mono text-xs text-foreground">{member}</td>
                   <td className="px-4 py-3">
-                    <div className="flex justify-end gap-2">
-                      {editing ? (
-                        <>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" disabled={saving || Number.isNaN(Number(draftScore))} onClick={() => void onUpdateScore(member, Number(draftScore))}>
-                            <Save className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingMember(null)}>
-                            <X className="h-3.5 w-3.5" />
-                          </Button>
-                        </>
-                      ) : null}
-                      <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>
-                        <Trash2 className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
+                    {readOnly ? (
+                      <div className="text-right text-[10px] uppercase tracking-[0.12em] text-muted-foreground">—</div>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        {editing ? (
+                          <>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" disabled={saving || Number.isNaN(Number(draftScore))} onClick={() => void onUpdateScore(member, Number(draftScore))}>
+                              <Save className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingMember(null)}>
+                              <X className="h-3.5 w-3.5" />
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button type="button" size="icon" variant="outline" className="h-8 w-8 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               )

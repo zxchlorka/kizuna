@@ -8,8 +8,10 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/qsnake66/infraview/internal/config"
@@ -35,6 +37,7 @@ type redisClient interface {
 	Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd
 	Persist(ctx context.Context, key string) *goredis.BoolCmd
 	HGetAll(ctx context.Context, key string) *goredis.MapStringStringCmd
+	HScan(ctx context.Context, key string, cursor uint64, match string, count int64) *goredis.ScanCmd
 	HLen(ctx context.Context, key string) *goredis.IntCmd
 	HSet(ctx context.Context, key string, values ...any) *goredis.IntCmd
 	HDel(ctx context.Context, key string, fields ...string) *goredis.IntCmd
@@ -63,13 +66,19 @@ type redisScanClient interface {
 	Scan(ctx context.Context, cursor uint64, match string, count int64) *goredis.ScanCmd
 }
 
-type redisClusterMasterScanner func(ctx context.Context, fn func(ctx context.Context, client redisScanClient) error) error
+// clusterTopology exposes the cluster master nodes and per-node clients so the
+// key tree can be scanned node-by-node with resumable cursors.
+type clusterTopology interface {
+	Masters(ctx context.Context) ([]string, error)
+	NodeScanClient(addr string) (redisScanClient, error)
+	Close() error
+}
 
 type RedisConnector struct {
-	client               redisClient
-	clusterMasterScanner redisClusterMasterScanner
-	config               config.ConnectionConfig
-	redis                redisSettings
+	client   redisClient
+	topology clusterTopology
+	config   config.ConnectionConfig
+	redis    redisSettings
 }
 
 type redisSettings struct {
@@ -96,19 +105,22 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 		return nil, fmt.Errorf("failed to decrypt password: %w", err)
 	}
 
-	client, clusterMasterScanner, err := newRedisClient(settings, password)
+	client, topology, err := newRedisClient(settings, password)
 	if err != nil {
 		return nil, err
 	}
 
 	conn := &RedisConnector{
-		client:               client,
-		clusterMasterScanner: clusterMasterScanner,
-		config:               cfg,
-		redis:                settings,
+		client:   client,
+		topology: topology,
+		config:   cfg,
+		redis:    settings,
 	}
 
 	if err := conn.Ping(ctx); err != nil {
+		if topology != nil {
+			_ = topology.Close()
+		}
 		_ = client.Close()
 		return nil, fmt.Errorf("failed to ping redis: %w", err)
 	}
@@ -123,12 +135,12 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 	return conn, nil
 }
 
-func newRedisConnector(client redisClient, clusterMasterScanner redisClusterMasterScanner, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
+func newRedisConnector(client redisClient, topology clusterTopology, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
 	return &RedisConnector{
-		client:               client,
-		clusterMasterScanner: clusterMasterScanner,
-		config:               cfg,
-		redis:                settings,
+		client:   client,
+		topology: topology,
+		config:   cfg,
+		redis:    settings,
 	}
 }
 
@@ -181,6 +193,15 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 		}
 	}
 
+	if c.topology != nil {
+		masters, err := c.topology.Masters(ctx)
+		if err != nil {
+			slog.Warn("failed to discover redis cluster masters", "error", err)
+		} else {
+			extra["cluster_masters"] = masters
+		}
+	}
+
 	database := strconv.Itoa(c.redis.database)
 	if c.redis.mode == config.RedisModeCluster {
 		database = ""
@@ -196,10 +217,18 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 }
 
 func (c *RedisConnector) Close() error {
-	if c.client == nil {
-		return nil
+	var firstErr error
+	if c.topology != nil {
+		if err := c.topology.Close(); err != nil {
+			firstErr = err
+		}
 	}
-	return c.client.Close()
+	if c.client != nil {
+		if err := c.client.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 
 // NewFactory returns a ConnectorFactory for Redis.
@@ -284,7 +313,71 @@ func unsupportedRedisOperation(name string) error {
 	return fmt.Errorf("%w: redis %s is not implemented yet", connector.ErrBadRequest, name)
 }
 
-func newRedisClient(settings redisSettings, password string) (redisClient, redisClusterMasterScanner, error) {
+// goredisClusterTopology discovers master nodes through the cluster client and
+// keeps lazily created direct clients for node-scoped scans.
+type goredisClusterTopology struct {
+	cluster  *goredis.ClusterClient
+	settings redisSettings
+	password string
+
+	mu      sync.Mutex
+	clients map[string]*goredis.Client
+}
+
+func (t *goredisClusterTopology) Masters(ctx context.Context) ([]string, error) {
+	var mu sync.Mutex
+	addrs := make([]string, 0, 8)
+
+	err := t.cluster.ForEachMaster(ctx, func(_ context.Context, client *goredis.Client) error {
+		mu.Lock()
+		defer mu.Unlock()
+		addrs = append(addrs, client.Options().Addr)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Sorted order keeps the node sequence stable so cluster scan cursors can
+	// resume on the node they stopped at.
+	resolved := resolveRedisAddresses(addrs)
+	sort.Strings(resolved)
+	return resolved, nil
+}
+
+func (t *goredisClusterTopology) NodeScanClient(addr string) (redisScanClient, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if client, ok := t.clients[addr]; ok {
+		return client, nil
+	}
+
+	client := goredis.NewClient(&goredis.Options{
+		Addr:      addr,
+		Username:  t.settings.username,
+		Password:  t.password,
+		TLSConfig: t.settings.tlsConfig,
+	})
+	t.clients[addr] = client
+	return client, nil
+}
+
+func (t *goredisClusterTopology) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	var firstErr error
+	for _, client := range t.clients {
+		if err := client.Close(); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	t.clients = make(map[string]*goredis.Client)
+	return firstErr
+}
+
+func newRedisClient(settings redisSettings, password string) (redisClient, clusterTopology, error) {
 	switch settings.mode {
 	case config.RedisModeStandalone:
 		options := &goredis.Options{
@@ -309,12 +402,13 @@ func newRedisClient(settings redisSettings, password string) (redisClient, redis
 			WriteTimeout: 0,
 		}
 		clusterClient := goredis.NewClusterClient(options)
-		clusterMasterScanner := func(ctx context.Context, fn func(ctx context.Context, client redisScanClient) error) error {
-			return clusterClient.ForEachMaster(ctx, func(ctx context.Context, client *goredis.Client) error {
-				return fn(ctx, client)
-			})
+		topology := &goredisClusterTopology{
+			cluster:  clusterClient,
+			settings: settings,
+			password: password,
+			clients:  make(map[string]*goredis.Client),
 		}
-		return clusterClient, clusterMasterScanner, nil
+		return clusterClient, topology, nil
 	case config.RedisModeSentinel:
 		options := &goredis.FailoverOptions{
 			MasterName:       settings.masterName,

@@ -17,6 +17,10 @@ const (
 )
 
 func (c *RedisConnector) mutateBulk(ctx context.Context, op connector.BulkMutateOp) (*connector.BulkMutateResult, error) {
+	// Preview is read-only (it only counts matching keys); the actual delete is blocked.
+	if c.config.ReadOnly && op.Execute {
+		return nil, connector.ErrReadOnly
+	}
 	pattern := strings.TrimSpace(op.Pattern)
 	if pattern == "" {
 		return nil, fmt.Errorf("%w: pattern is required", connector.ErrBadRequest)
@@ -99,14 +103,50 @@ func (c *RedisConnector) scanMatchingKeys(ctx context.Context, pattern string, o
 	}
 
 	if c.redis.mode == config.RedisModeCluster {
-		if c.clusterMasterScanner == nil {
-			return fmt.Errorf("redis cluster master scanner is not configured")
+		if c.topology == nil {
+			return fmt.Errorf("redis cluster topology is not configured")
 		}
-		return c.clusterMasterScanner(ctx, func(ctx context.Context, client redisScanClient) error {
-			return scanPattern(ctx, client, pattern, visit)
-		})
+		masters, err := c.topology.Masters(ctx)
+		if err != nil {
+			return normalizeRedisError(err)
+		}
+		for _, addr := range masters {
+			client, err := c.topology.NodeScanClient(addr)
+			if err != nil {
+				return normalizeRedisError(err)
+			}
+			if err := scanPattern(ctx, client, pattern, visit); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 	return scanPattern(ctx, c.client, pattern, visit)
+}
+
+// scanPattern iterates the full keyspace for one client. Unlike the paged tree
+// scan it is intentionally unbounded: bulk delete and completions own their
+// stop conditions via the onKey callback.
+func scanPattern(ctx context.Context, client redisScanClient, pattern string, onKey func(key string) error) error {
+	var cursor uint64
+
+	for {
+		batch, nextCursor, err := client.Scan(ctx, cursor, pattern, scanBatchCount).Result()
+		if err != nil {
+			return normalizeRedisError(err)
+		}
+
+		for _, key := range batch {
+			if err := onKey(key); err != nil {
+				return err
+			}
+		}
+
+		cursor = nextCursor
+		if cursor == 0 {
+			return nil
+		}
+	}
 }
 
 func (c *RedisConnector) deleteRedisKeys(ctx context.Context, keys []string) (int64, error) {

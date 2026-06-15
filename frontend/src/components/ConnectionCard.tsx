@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Activity, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { Activity, Lock, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionTypeIcon } from '@/components/ConnectionTypeIcon'
 import { DeleteConnectionDialog } from '@/components/DeleteConnectionDialog'
@@ -136,7 +136,11 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
         <div
           className={cn(
             'absolute bottom-0 left-0 top-0 w-[2px] transition-colors duration-200',
-            connection.type === 'redis' ? 'bg-red-500/20 group-hover:bg-red-500/45' : 'bg-blue-500/20 group-hover:bg-blue-500/50'
+            connection.type === 'redis'
+              ? 'bg-red-500/20 group-hover:bg-red-500/45'
+              : connection.type === 'kafka'
+                ? 'bg-orange-500/20 group-hover:bg-orange-500/45'
+                : 'bg-blue-500/20 group-hover:bg-blue-500/50'
           )}
         />
 
@@ -147,7 +151,9 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
                 'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border transition-colors duration-200',
                 connection.type === 'redis'
                   ? 'border-red-500/15 bg-red-500/5 group-hover:border-red-500/30'
-                  : 'border-blue-500/15 bg-blue-500/5 group-hover:border-blue-500/30'
+                  : connection.type === 'kafka'
+                    ? 'border-orange-500/15 bg-orange-500/5 group-hover:border-orange-500/30'
+                    : 'border-blue-500/15 bg-blue-500/5 group-hover:border-blue-500/30'
               )}
             >
               <ConnectionTypeIcon type={connection.type || 'postgres'} className="h-4 w-4" />
@@ -223,16 +229,26 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
           </div>
 
           <div className="mt-4 flex items-center justify-between gap-3">
-            <span
-              className={cn(
-                'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em]',
-                connection.type === 'redis'
-                  ? 'border-red-500/20 bg-red-500/5 text-red-400/70'
-                  : 'border-blue-500/15 bg-blue-500/5 text-blue-400/60'
+            <div className="flex items-center gap-1.5">
+              <span
+                className={cn(
+                  'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em]',
+                  connection.type === 'redis'
+                    ? 'border-red-500/20 bg-red-500/5 text-red-400/70'
+                    : connection.type === 'kafka'
+                      ? 'border-orange-500/20 bg-orange-500/5 text-orange-400/70'
+                      : 'border-blue-500/15 bg-blue-500/5 text-blue-400/60'
+                )}
+              >
+                {connection.type || 'postgres'}
+              </span>
+              {connection.read_only && (
+                <span className="inline-flex items-center gap-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em] text-amber-500/80">
+                  <Lock className="h-2.5 w-2.5" />
+                  RO
+                </span>
               )}
-            >
-              {connection.type || 'postgres'}
-            </span>
+            </div>
 
             <div className="ml-auto flex items-center gap-2 text-right">
               <span

@@ -438,6 +438,37 @@ func redisFilterValue(filters []connector.FilterExpr, name string) string {
 	return ""
 }
 
+// redisContainsPattern turns a contains/like filter into a server-side MATCH
+// glob so HSCAN/SSCAN filter inside Redis instead of shipping every element.
+// Glob matching is case-sensitive, which is the native Redis behavior.
+func redisContainsPattern(filters []connector.FilterExpr, column string) string {
+	for _, filter := range filters {
+		if !strings.EqualFold(strings.TrimSpace(filter.Column), column) {
+			continue
+		}
+		if filter.Op != "contains" && filter.Op != "like" {
+			continue
+		}
+		needle := strings.TrimSpace(filter.Value)
+		if needle != "" {
+			return "*" + escapeRedisGlob(needle) + "*"
+		}
+	}
+	return ""
+}
+
+func escapeRedisGlob(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch r {
+		case '*', '?', '[', ']', '\\':
+			b.WriteRune('\\')
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
 func redisEncodeJSONValue(value any) (string, error) {
 	encoded, err := json.Marshal(value)
 	if err != nil {

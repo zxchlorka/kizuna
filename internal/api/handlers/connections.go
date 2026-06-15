@@ -32,7 +32,9 @@ type connectionRequest struct {
 	Tags           []string            `json:"tags"`
 	Password       string              `json:"password"`
 	VisibleSchemas []string            `json:"visible_schemas"`
+	ReadOnly       bool                `json:"read_only"`
 	RedisConfig    *config.RedisConfig `json:"redis_config"`
+	KafkaConfig    *config.KafkaConfig `json:"kafka_config"`
 }
 
 type connectionResponse struct {
@@ -45,7 +47,9 @@ type connectionResponse struct {
 	Username         string              `json:"username"`
 	Tags             []string            `json:"tags,omitempty"`
 	VisibleSchemas   []string            `json:"visible_schemas"`
+	ReadOnly         bool                `json:"read_only"`
 	RedisConfig      *config.RedisConfig `json:"redis_config,omitempty"`
+	KafkaConfig      *config.KafkaConfig `json:"kafka_config,omitempty"`
 	Mode             config.RedisMode    `json:"mode,omitempty"`
 	Separator        string              `json:"separator,omitempty"`
 	TLSEnabled       bool                `json:"tlsEnabled,omitempty"`
@@ -175,7 +179,9 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Username    *string             `json:"username"`
 		Tags        *[]string           `json:"tags"`
 		Password    *string             `json:"password"`
+		ReadOnly    *bool               `json:"read_only"`
 		RedisConfig *config.RedisConfig `json:"redis_config"`
+		KafkaConfig *config.KafkaConfig `json:"kafka_config"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -219,8 +225,21 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 			existing.RedisConfig = &normalized
 		}
 	}
+	if req.ReadOnly != nil {
+		existing.ReadOnly = *req.ReadOnly
+	}
+	if req.KafkaConfig != nil {
+		existing.KafkaConfig = req.KafkaConfig.Clone()
+		if existing.KafkaConfig != nil {
+			normalized := existing.KafkaConfig.Normalize()
+			existing.KafkaConfig = &normalized
+		}
+	}
 	if existing.Type != "redis" {
 		existing.RedisConfig = nil
+	}
+	if existing.Type != "kafka" {
+		existing.KafkaConfig = nil
 	}
 
 	h.cfg.UpdateConnection(id, existing)
@@ -424,12 +443,20 @@ func buildConnectionConfig(req connectionRequest, password string) config.Connec
 		Password:       password,
 		Tags:           normalizeTags(req.Tags),
 		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
+		ReadOnly:       req.ReadOnly,
 	}
 	if req.RedisConfig != nil {
 		cfg.RedisConfig = req.RedisConfig.Clone()
 		if cfg.RedisConfig != nil {
 			normalized := cfg.RedisConfig.Normalize()
 			cfg.RedisConfig = &normalized
+		}
+	}
+	if req.KafkaConfig != nil {
+		cfg.KafkaConfig = req.KafkaConfig.Clone()
+		if cfg.KafkaConfig != nil {
+			normalized := cfg.KafkaConfig.Normalize()
+			cfg.KafkaConfig = &normalized
 		}
 	}
 	return cfg
@@ -446,7 +473,9 @@ func buildConnectionResponse(conn config.ConnectionConfig) connectionResponse {
 		Username:       conn.Username,
 		Tags:           slices.Clone(conn.Tags),
 		VisibleSchemas: slices.Clone(conn.VisibleSchemas),
+		ReadOnly:       conn.ReadOnly,
 		RedisConfig:    conn.RedisConfig.Clone(),
+		KafkaConfig:    conn.KafkaConfig.Clone(),
 	}
 	if conn.RedisConfig != nil {
 		resp.Mode = conn.RedisConfig.Mode
@@ -495,6 +524,22 @@ func validateConnectionRequest(req connectionRequest) error {
 			}
 		default:
 			return fmt.Errorf("unsupported redis mode: %s", redisCfg.Mode)
+		}
+	case "kafka":
+		kafkaCfg := config.KafkaConfig{}
+		if req.KafkaConfig != nil {
+			kafkaCfg = req.KafkaConfig.Normalize()
+		}
+		if len(kafkaCfg.Brokers) == 0 && (strings.TrimSpace(req.Host) == "" || req.Port <= 0) {
+			return fmt.Errorf("kafka requires at least one broker address")
+		}
+		switch kafkaCfg.SASLMechanism {
+		case "", config.KafkaSASLPlain, config.KafkaSASLScramSHA256, config.KafkaSASLScramSHA512:
+		default:
+			return fmt.Errorf("unsupported kafka sasl mechanism: %s", kafkaCfg.SASLMechanism)
+		}
+		if kafkaCfg.SASLMechanism != "" && strings.TrimSpace(req.Username) == "" {
+			return fmt.Errorf("kafka sasl authentication requires a username")
 		}
 	default:
 		return fmt.Errorf("unsupported connection type: %s", req.Type)

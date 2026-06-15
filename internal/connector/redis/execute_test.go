@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -48,6 +49,44 @@ func TestExecuteFormatsHashPairs(t *testing.T) {
 	}
 	if len(result.Rows) != 2 {
 		t.Fatalf("unexpected row count: %d", len(result.Rows))
+	}
+}
+
+func TestExecuteFormatsRESP3Map(t *testing.T) {
+	t.Parallel()
+
+	// go-redis v9 returns RESP3 map replies as map[any]any; the result must be
+	// formatted as field/value rows and stay JSON-encodable.
+	conn := newTestRedisConnectorWithClient(&fakeRedisClient{
+		doResult: map[any]any{"name": "alice", "role": "admin", "age": int64(30)},
+	})
+
+	result, err := conn.Execute(context.Background(), "HGETALL user:1")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.Columns[0] != "field" {
+		t.Fatalf("unexpected first column: %q", result.Columns[0])
+	}
+	if len(result.Rows) != 3 {
+		t.Fatalf("unexpected row count: %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "age" {
+		t.Fatalf("rows should be sorted by field; got first %v", result.Rows[0][0])
+	}
+	if _, err := json.Marshal(result); err != nil {
+		t.Fatalf("result must be JSON-encodable: %v", err)
+	}
+}
+
+func TestJSONSafeValueHandlesNestedRESP3(t *testing.T) {
+	t.Parallel()
+
+	safe := jsonSafeValue(map[any]any{
+		"nested": map[any]any{"k": []any{[]byte("v"), int64(1)}},
+	})
+	if _, err := json.Marshal(safe); err != nil {
+		t.Fatalf("nested RESP3 value must be JSON-encodable: %v", err)
 	}
 }
 

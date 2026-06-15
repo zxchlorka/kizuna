@@ -11,6 +11,9 @@ import (
 )
 
 func (c *RedisConnector) Mutate(ctx context.Context, op connector.MutateOp) (*connector.MutateResult, error) {
+	if c.config.ReadOnly {
+		return nil, connector.ErrReadOnly
+	}
 	if strings.TrimSpace(op.Object) == "" {
 		return nil, fmt.Errorf("%w: object is required", connector.ErrBadRequest)
 	}

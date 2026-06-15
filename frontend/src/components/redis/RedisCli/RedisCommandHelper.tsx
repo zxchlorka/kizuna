@@ -1,4 +1,4 @@
-import { HelpCircle } from 'lucide-react'
+import { Lightbulb } from 'lucide-react'
 import type { CompletionItem } from '@/types/api'
 
 interface RedisCommandHelperProps {
@@ -8,19 +8,24 @@ interface RedisCommandHelperProps {
 export function RedisCommandHelper({ item }: RedisCommandHelperProps) {
   if (!item) {
     return (
-      <div className="rounded-sm border border-border/70 bg-background/50 px-3 py-2 text-xs text-muted-foreground">
-        Start typing a Redis command to see syntax help.
+      <div className="flex items-center gap-2 rounded-md border border-dashed border-border bg-muted/20 px-3 py-1.5 font-mono text-[11px] text-muted-foreground">
+        <Lightbulb className="h-3.5 w-3.5 opacity-60" />
+        Start typing a command to see its syntax.
       </div>
     )
   }
 
+  // detail is "SYNTAX — Description"; split so the syntax pops in accent.
+  const [syntax, ...rest] = (item.detail ?? '').split(' — ')
+  const description = rest.join(' — ')
+
   return (
-    <div className="rounded-sm border border-cyan-500/20 bg-cyan-500/5 px-3 py-2 text-xs">
-      <div className="flex items-center gap-2 text-cyan-700 dark:text-cyan-300">
-        <HelpCircle className="h-3.5 w-3.5" />
-        <span className="font-mono">{item.label}</span>
+    <div className="flex items-start gap-2 rounded-md border border-accent/25 bg-accent/[0.06] px-3 py-1.5">
+      <Lightbulb className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+      <div className="min-w-0 font-mono text-[11px] leading-relaxed">
+        <span className="font-semibold text-accent">{syntax || item.label}</span>
+        {description ? <span className="text-muted-foreground"> — {description}</span> : null}
       </div>
-      <div className="mt-1 font-mono text-muted-foreground">{item.detail}</div>
     </div>
   )
 }
