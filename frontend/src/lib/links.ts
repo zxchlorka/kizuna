@@ -101,3 +101,10 @@ export function linkTargetLabel(link: LinkRecord, value: string | null): string 
   }
   return `Kafka: ${link.target_topic} where ${link.target_field} = ${shown}`
 }
+
+// suggestKeyPattern proposes a key pattern scope for a concrete redis key by
+// replacing the segment after the last ':' with '*' (e.g. profile:42 -> profile:*).
+export function suggestKeyPattern(key: string): string {
+  const lastColon = key.lastIndexOf(':')
+  return lastColon >= 0 ? `${key.slice(0, lastColon + 1)}*` : key
+}
