@@ -86,6 +86,11 @@ func (c *AppConfig) GetPath() string {
 	return c.path
 }
 
+// SetPathForTest sets the on-disk config path. Intended for tests.
+func (c *AppConfig) SetPathForTest(path string) {
+	c.path = path
+}
+
 func (c *AppConfig) AddConnection(conn ConnectionConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
