@@ -22,6 +22,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	dataHandler := handlers.NewDataHandler(cfg, manager)
 	ddlHandler := handlers.NewDDLHandler(cfg, manager)
 	sqlHandler := handlers.NewSQLHandler(cfg, manager)
+	linksHandler := handlers.NewLinksHandler(cfg)
 
 	r.Get("/api/health", handlers.Health)
 
@@ -53,6 +54,12 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Get("/history", sqlHandler.History)
 			r.Delete("/history", sqlHandler.ClearHistory)
 		})
+	})
+
+	r.Route("/api/links", func(r chi.Router) {
+		r.Get("/", linksHandler.List)
+		r.Post("/", linksHandler.Create)
+		r.Delete("/{id}", linksHandler.Delete)
 	})
 
 	return r
