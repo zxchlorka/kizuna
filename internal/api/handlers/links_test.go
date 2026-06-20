@@ -29,7 +29,7 @@ func TestLinksHandlerCreateValidatesRedisPattern(t *testing.T) {
 	h := NewLinksHandler(cfg)
 
 	body, _ := json.Marshal(map[string]any{
-		"source_conn_id": "kafka-1", "topic": "cookies", "field": "user_id",
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "user_id",
 		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "w:no-star",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(body))
@@ -45,7 +45,7 @@ func TestLinksHandlerCreateListDelete(t *testing.T) {
 	h := NewLinksHandler(cfg)
 
 	body, _ := json.Marshal(map[string]any{
-		"source_conn_id": "kafka-1", "topic": "cookies", "field": "user_id",
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "user_id",
 		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "w:*",
 	})
 	rec := httptest.NewRecorder()
@@ -62,7 +62,7 @@ func TestLinksHandlerCreateListDelete(t *testing.T) {
 	}
 
 	rec = httptest.NewRecorder()
-	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/links?source_conn_id=kafka-1&topic=cookies", nil))
+	h.List(rec, httptest.NewRequest(http.MethodGet, "/api/links?source_conn_id=kafka-1&scope=cookies", nil))
 	var listed []config.LinkConfig
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode list: %v", err)
@@ -79,5 +79,41 @@ func TestLinksHandlerCreateListDelete(t *testing.T) {
 	h.Delete(rec, req)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("delete: expected 204, got %d", rec.Code)
+	}
+}
+
+func TestLinksHandlerValidatesGeneralizedKinds(t *testing.T) {
+	cfg := newLinksTestConfig(t) // has kafka-1, redis-1
+	h := NewLinksHandler(cfg)
+
+	post := func(body map[string]any) int {
+		raw, _ := json.Marshal(body)
+		rec := httptest.NewRecorder()
+		h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(raw)))
+		return rec.Code
+	}
+
+	if code := post(map[string]any{
+		"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "profile:*",
+		"source_extract": "value_field", "source_field": "user_id",
+		"target_conn_id": "kafka-1", "target_kind": "kafka", "target_topic": "cookies", "target_field": "user_id",
+	}); code != http.StatusCreated {
+		t.Fatalf("redis->kafka: expected 201, got %d", code)
+	}
+
+	if code := post(map[string]any{
+		"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "profile:*",
+		"source_extract": "string_value",
+		"target_conn_id": "kafka-1", "target_kind": "kafka", "target_topic": "cookies",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("kafka target without target_field: expected 400, got %d", code)
+	}
+
+	if code := post(map[string]any{
+		"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "profile:*",
+		"source_extract": "value_field",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "w:*",
+	}); code != http.StatusBadRequest {
+		t.Fatalf("redis value_field without source_field: expected 400, got %d", code)
 	}
 }
