@@ -10,6 +10,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
+import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
 import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
@@ -104,6 +105,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; row: TableRow } | null>(null)
+  const [createLinkOpen, setCreateLinkOpen] = useState(false)
   const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -144,6 +146,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [clearDrafts, connId, fetchData, fetchSchema, object, tabId])
 
   const columns = tabData?.columns ?? EMPTY_COLUMNS
+  const columnNames = useMemo(() => columns.map((c) => c.name), [columns])
   const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
   const opts = tabData?.opts
@@ -901,9 +904,25 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             )
           })}
           <FloatingMenuSeparator />
-          <FloatingMenuItem disabled>+ Create link… (UI in v2 dialog)</FloatingMenuItem>
+          <FloatingMenuItem
+            onClick={() => {
+              setLinkMenu(null)
+              setCreateLinkOpen(true)
+            }}
+          >
+            + Create link…
+          </FloatingMenuItem>
         </FloatingMenu>
       )}
+
+      <CreateLinkDialog
+        open={createLinkOpen}
+        sourceConnId={connId}
+        sourceKind="postgres"
+        sourceScope={object}
+        sourceFieldOptions={columnNames}
+        onOpenChange={setCreateLinkOpen}
+      />
     </div>
   )
 }
