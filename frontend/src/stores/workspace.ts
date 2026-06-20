@@ -58,6 +58,7 @@ export type TreeVisibilityKey = keyof TreeVisibility
 interface WorkspaceStore {
   tabs: WorkspaceTab[]
   activeTabId: string | null
+  activeTabByConnection: Record<string, string>
   openConnectionIds: string[]
   navigationHistory: NavigationEntry[]
   treeItems: Record<string, ObjectItem[]>
@@ -144,6 +145,7 @@ function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  activeTabByConnection: {},
   openConnectionIds: [],
   navigationHistory: [],
   treeItems: {},
@@ -570,9 +572,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     set((state) => {
       const remainingTabs = state.tabs.filter((tab) => tab.connId !== connId)
       const activeStillOpen = remainingTabs.some((tab) => tab.id === state.activeTabId)
+      const nextActiveByConnection = { ...state.activeTabByConnection }
+      delete nextActiveByConnection[connId]
       return {
         openConnectionIds: state.openConnectionIds.filter((id) => id !== connId),
         tabs: remainingTabs,
+        activeTabByConnection: nextActiveByConnection,
         activeTabId: activeStillOpen ? state.activeTabId : null,
         navigationHistory: state.navigationHistory.filter(
           (entry) =>
@@ -584,3 +589,20 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     })
   },
 }))
+
+// Mirror the global activeTabId into a per-connection memory so switching back to
+// a connection (via a chip or a cross-source link) restores the tab that was last
+// active there. Recording in one place means no activation site can be missed.
+useWorkspaceStore.subscribe((state, prev) => {
+  const activeId = state.activeTabId
+  if (!activeId || activeId === prev.activeTabId) {
+    return
+  }
+  const tab = state.tabs.find((item) => item.id === activeId)
+  if (!tab || state.activeTabByConnection[tab.connId] === activeId) {
+    return
+  }
+  useWorkspaceStore.setState((current) => ({
+    activeTabByConnection: { ...current.activeTabByConnection, [tab.connId]: activeId },
+  }))
+})

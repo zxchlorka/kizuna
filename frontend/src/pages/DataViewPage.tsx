@@ -29,13 +29,30 @@ export default function DataViewPage() {
   const refreshHealth = useConnectionHealthStore((state) => state.refresh)
   const { tabs, activeTabId } = useWorkspaceStore()
   const openConnection = useWorkspaceStore((state) => state.openConnection)
+  const activeTabByConnection = useWorkspaceStore((state) => state.activeTabByConnection)
+  const setActiveTab = useWorkspaceStore((state) => state.setActiveTab)
   const currentConnection = connections.find((connection) => connection.id === id)
   const connectionTabs = tabs.filter((tab) => tab.connId === id)
-  const activeTab = connectionTabs.find((t) => t.id === activeTabId) ?? null
+  // Prefer the globally-active tab when it belongs to this connection; otherwise
+  // fall back to this connection's last-active tab (or its most recent tab), so
+  // switching back to a connection never shows a blank pane.
+  const activeTab =
+    connectionTabs.find((t) => t.id === activeTabId) ??
+    connectionTabs.find((t) => t.id === (id ? activeTabByConnection[id] : undefined)) ??
+    connectionTabs[connectionTabs.length - 1] ??
+    null
 
   useEffect(() => {
     hydrateHealth()
   }, [hydrateHealth])
+
+  // Keep the global activeTabId in sync with the resolved tab so TabBar (which
+  // reads activeTabId) highlights the correct tab after a connection switch.
+  useEffect(() => {
+    if (activeTab && activeTab.id !== activeTabId) {
+      setActiveTab(activeTab.id)
+    }
+  }, [activeTab, activeTabId, setActiveTab])
 
   useEffect(() => {
     if (id) {
