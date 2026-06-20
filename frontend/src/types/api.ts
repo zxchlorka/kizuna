@@ -323,16 +323,22 @@ export interface DDLResult {
   object: string
 }
 
-export type LinkTargetKind = 'redis' | 'postgres'
+export type LinkKind = 'kafka' | 'redis' | 'postgres'
+export type LinkTargetKind = LinkKind
+export type RedisExtract = 'value_field' | 'key_capture' | 'string_value'
 
 export interface LinkRecord {
   id: string
   name?: string
   source_conn_id: string
-  topic: string
-  field: string
+  source_kind: LinkKind
+  source_scope: string
+  source_field?: string
+  source_extract?: RedisExtract
   target_conn_id: string
   target_kind: LinkTargetKind
+  target_topic?: string
+  target_field?: string
   key_pattern?: string
   table?: string
   column?: string

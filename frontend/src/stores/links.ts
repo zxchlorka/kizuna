@@ -8,7 +8,7 @@ interface LinksStore {
   fetch: () => Promise<void>
   create: (input: LinkInput) => Promise<LinkRecord>
   remove: (id: string) => Promise<void>
-  linksFor: (sourceConnId: string, topic: string) => LinkRecord[]
+  linksFor: (sourceConnId: string, scope: string) => LinkRecord[]
 }
 
 export const useLinksStore = create<LinksStore>((set, get) => ({
@@ -49,6 +49,6 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
     set({ links: get().links.filter((link) => link.id !== id) })
   },
 
-  linksFor: (sourceConnId: string, topic: string) =>
-    get().links.filter((link) => link.source_conn_id === sourceConnId && link.topic === topic),
+  linksFor: (sourceConnId, scope) =>
+    get().links.filter((link) => link.source_conn_id === sourceConnId && link.source_scope === scope),
 }))

@@ -7,7 +7,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
-import { extractMessageField } from '@/lib/links'
+import { extractMessageField, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
@@ -238,11 +238,7 @@ export function KafkaMessageBrowser({
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
           {links.length === 0 && <FloatingMenuItem disabled>No links for this topic</FloatingMenuItem>}
           {links.map((link) => {
-            const value = extractMessageField(menu.message.value, link.field)
-            const targetLabel =
-              link.target_kind === 'redis'
-                ? `Redis: ${link.field} → ${(link.key_pattern ?? '').replace('*', value ?? '∅')}`
-                : `Postgres: ${link.field} → ${link.table}.${link.column}`
+            const value = extractMessageField(menu.message.value, link.source_field ?? '')
             return (
               <FloatingMenuItem
                 key={link.id}
@@ -254,7 +250,7 @@ export function KafkaMessageBrowser({
                   setMenu(null)
                 }}
               >
-                {value === null ? `${targetLabel} (field missing)` : targetLabel}
+                {value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value)}
               </FloatingMenuItem>
             )
           })}

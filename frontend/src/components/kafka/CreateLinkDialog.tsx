@@ -52,8 +52,9 @@ export function CreateLinkDialog({ open, sourceConnId, topic, fieldOptions, onOp
     try {
       await createLink({
         source_conn_id: sourceConnId,
-        topic,
-        field,
+        source_kind: 'kafka',
+        source_scope: topic,
+        source_field: field,
         target_conn_id: targetConnId,
         target_kind: targetKind,
         key_pattern: targetKind === 'redis' ? keyPattern : undefined,
