@@ -50,6 +50,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const navigate = useNavigate()
   const openTab = useWorkspaceStore((state) => state.openTab)
   const openTabWithFilter = useWorkspaceStore((state) => state.openTabWithFilter)
+  const openConnection = useWorkspaceStore((state) => state.openConnection)
   const resolveObjectType = useDataStore((state) => state.resolveObjectType)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const linksFor = useLinksStore((state) => state.linksFor)
@@ -94,6 +95,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
       void resolveObjectType(link.target_conn_id, key)
         .then((objectType) => {
           openTab(link.target_conn_id, key, objectType)
+          openConnection(link.target_conn_id)
           navigate(`/connections/${link.target_conn_id}`)
         })
         .catch(() => {
@@ -107,6 +109,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
       { column: link.column ?? '', op: 'eq', value },
       'table'
     )
+    openConnection(link.target_conn_id)
     navigate(`/connections/${link.target_conn_id}`)
   }
 
