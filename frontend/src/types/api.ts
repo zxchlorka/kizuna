@@ -322,3 +322,20 @@ export interface DDLResult {
   schema: string
   object: string
 }
+
+export type LinkTargetKind = 'redis' | 'postgres'
+
+export interface LinkRecord {
+  id: string
+  name?: string
+  source_conn_id: string
+  topic: string
+  field: string
+  target_conn_id: string
+  target_kind: LinkTargetKind
+  key_pattern?: string
+  table?: string
+  column?: string
+}
+
+export type LinkInput = Omit<LinkRecord, 'id'>
