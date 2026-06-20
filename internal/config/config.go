@@ -23,9 +23,23 @@ type ConnectionConfig struct {
 	KafkaConfig    *KafkaConfig `json:"kafka_config,omitempty"`
 }
 
+type LinkConfig struct {
+	ID           string `json:"id"`
+	Name         string `json:"name,omitempty"`
+	SourceConnID string `json:"source_conn_id"`
+	Topic        string `json:"topic"`
+	Field        string `json:"field"`
+	TargetConnID string `json:"target_conn_id"`
+	TargetKind   string `json:"target_kind"` // "redis" | "postgres"
+	KeyPattern   string `json:"key_pattern,omitempty"`
+	Table        string `json:"table,omitempty"`
+	Column       string `json:"column,omitempty"`
+}
+
 type AppConfig struct {
 	mu            sync.RWMutex
 	Connections   []ConnectionConfig `json:"connections"`
+	Links         []LinkConfig       `json:"links,omitempty"`
 	EncryptionKey string             `json:"encryption_key"`
 	path          string
 }
@@ -119,6 +133,50 @@ func (c *AppConfig) GetConnections() []ConnectionConfig {
 	result := make([]ConnectionConfig, len(c.Connections))
 	for i, conn := range c.Connections {
 		result[i] = cloneConnection(conn)
+	}
+	return result
+}
+
+func cloneLink(link LinkConfig) LinkConfig {
+	return link // LinkConfig has only value fields; a copy is a deep clone
+}
+
+func (c *AppConfig) AddLink(link LinkConfig) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.Links = append(c.Links, cloneLink(link))
+}
+
+func (c *AppConfig) RemoveLink(id string) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, link := range c.Links {
+		if link.ID == id {
+			c.Links = append(c.Links[:i], c.Links[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func (c *AppConfig) GetLinks() []LinkConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]LinkConfig, len(c.Links))
+	for i, link := range c.Links {
+		result[i] = cloneLink(link)
+	}
+	return result
+}
+
+func (c *AppConfig) GetLinksFor(sourceConnID, topic string) []LinkConfig {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	result := make([]LinkConfig, 0)
+	for _, link := range c.Links {
+		if link.SourceConnID == sourceConnID && link.Topic == topic {
+			result = append(result, cloneLink(link))
+		}
 	}
 	return result
 }

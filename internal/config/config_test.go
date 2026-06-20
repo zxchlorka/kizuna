@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -62,4 +63,51 @@ func TestAppConfigRedisRoundTrip(t *testing.T) {
 	if !got.RedisConfig.TLSEnabled {
 		t.Fatalf("expected tls to round-trip")
 	}
+}
+
+func TestLinkConfigCRUDAndPersistence(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	cfg := &AppConfig{path: path}
+
+	cfg.AddLink(LinkConfig{
+		ID:           "lnk-1",
+		Name:         "cookie consumer",
+		SourceConnID: "kafka-1",
+		Topic:        "cookies",
+		Field:        "user_id",
+		TargetConnID: "redis-1",
+		TargetKind:   "redis",
+		KeyPattern:   "w:*",
+	})
+
+	if got := cfg.GetLinksFor("kafka-1", "cookies"); len(got) != 1 || got[0].ID != "lnk-1" {
+		t.Fatalf("GetLinksFor returned %#v", got)
+	}
+	if got := cfg.GetLinksFor("kafka-1", "other"); len(got) != 0 {
+		t.Fatalf("expected no links for other topic, got %#v", got)
+	}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(reloaded.GetLinks()) != 1 {
+		t.Fatalf("expected 1 link after reload, got %d", len(reloaded.GetLinks()))
+	}
+
+	if !cfg.RemoveLink("lnk-1") {
+		t.Fatalf("RemoveLink returned false")
+	}
+	if cfg.RemoveLink("lnk-1") {
+		t.Fatalf("RemoveLink returned true for already-removed id")
+	}
+	if len(cfg.GetLinks()) != 0 {
+		t.Fatalf("expected 0 links after remove, got %d", len(cfg.GetLinks()))
+	}
+
+	_ = os.Getenv("HOME")
 }
