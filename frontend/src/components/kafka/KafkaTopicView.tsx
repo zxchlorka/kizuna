@@ -4,7 +4,7 @@ import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
 import { KafkaPartitionsTable } from '@/components/kafka/KafkaPartitionsTable'
 import { KafkaProduceModal } from '@/components/kafka/KafkaProduceModal'
-import { CreateLinkDialog } from '@/components/kafka/CreateLinkDialog'
+import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
@@ -222,8 +222,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
       <CreateLinkDialog
         open={createLinkOpen}
         sourceConnId={connId}
-        topic={topic}
-        fieldOptions={createLinkFields}
+        sourceKind="kafka"
+        sourceScope={topic}
+        sourceFieldOptions={createLinkFields}
         onOpenChange={setCreateLinkOpen}
       />
     </div>
