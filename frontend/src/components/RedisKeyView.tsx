@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { KeyRound, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -21,16 +21,23 @@ import {
   stringifyRedisValue,
 } from '@/components/redis/redisUtils'
 import { Button } from '@/components/ui/button'
-import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
+import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { extractRedisValue, linkTargetLabel, redisKeyMatchesPattern } from '@/lib/links'
+import { extractRedisValue, linkTargetLabel, redisKeyMatchesPattern, suggestKeyPattern } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { LinkRecord, ObjectType } from '@/types/api'
+import type { ObjectType } from '@/types/api'
 
 interface RedisKeyViewProps {
   connId: string
@@ -66,7 +73,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const openLinkTarget = useOpenLinkTarget()
-  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number } | null>(null)
+  const [createLinkOpen, setCreateLinkOpen] = useState(false)
 
   useEffect(() => {
     void fetchData(connId, object, tabId)
@@ -88,6 +95,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   )
 
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
+  const hashFieldNames = useMemo(
+    () => rows.map((r) => String(r.field ?? '')).filter((name) => name !== ''),
+    [rows]
+  )
   const columns = tabData?.columns ?? []
   const loading = tabData?.loading ?? false
   const error = tabData?.error ?? null
@@ -291,14 +302,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   return (
     <>
-      <div
-        className="flex flex-1 overflow-auto p-6"
-        onContextMenu={(event) => {
-          if (keyLinks.length === 0) return
-          event.preventDefault()
-          setLinkMenu({ x: event.clientX, y: event.clientY })
-        }}
-      >
+      <div className="flex flex-1 overflow-auto p-6">
         <div className="mx-auto flex w-full max-w-6xl flex-col gap-4">
           <div className="rounded-sm border border-border bg-card">
             <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border px-4 py-4">
@@ -334,6 +338,35 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               </div>
 
               <div className="flex items-center gap-2">
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5">
+                      <Link2 className="h-3.5 w-3.5" />
+                      Links
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    {keyLinks.map((link) => {
+                      const value = extractRedisValue(link, object, stringValue, rows)
+                      return (
+                        <DropdownMenuItem
+                          key={link.id}
+                          disabled={value === null}
+                          onClick={() => {
+                            if (value !== null) openLinkTarget(link, value)
+                          }}
+                          className="font-mono text-xs"
+                        >
+                          {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                    {keyLinks.length > 0 && <DropdownMenuSeparator />}
+                    <DropdownMenuItem className="font-mono text-xs" onClick={() => setCreateLinkOpen(true)}>
+                      + Create link…
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
                 <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => void refresh()} disabled={loading || saving}>
                   <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
                   Refresh
@@ -402,28 +435,14 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         }}
       />
 
-      {linkMenu && (
-        <FloatingMenu x={linkMenu.x} y={linkMenu.y} onClose={() => setLinkMenu(null)}>
-          <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
-          {keyLinks.map((link: LinkRecord) => {
-            const value = extractRedisValue(link, object, stringValue, rows)
-            return (
-              <FloatingMenuItem
-                key={link.id}
-                disabled={value === null}
-                onClick={() => {
-                  if (value !== null) openLinkTarget(link, value)
-                  setLinkMenu(null)
-                }}
-              >
-                {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
-              </FloatingMenuItem>
-            )
-          })}
-          <FloatingMenuSeparator />
-          <FloatingMenuItem disabled>+ Create link… (UI in v2 dialog)</FloatingMenuItem>
-        </FloatingMenu>
-      )}
+      <CreateLinkDialog
+        open={createLinkOpen}
+        sourceConnId={connId}
+        sourceKind="redis"
+        sourceScope={suggestKeyPattern(object)}
+        sourceFieldOptions={hashFieldNames}
+        onOpenChange={setCreateLinkOpen}
+      />
     </>
   )
 }
