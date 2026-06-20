@@ -312,17 +312,10 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	start := time.Now()
 
-	c, cancel, err := getConnector(r.Context(), h.manager, id)
-	if err != nil {
-		writeConnectorError(w, err)
-		return
-	}
-	defer cancel()
-
 	pingCtx, pingCancel := context.WithTimeout(r.Context(), connectionAcquireTimeout)
 	defer pingCancel()
 
-	if err := c.Ping(pingCtx); err != nil {
+	if err := h.manager.Check(pingCtx, id); err != nil {
 		writeConnectorError(w, err)
 		return
 	}

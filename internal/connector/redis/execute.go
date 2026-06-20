@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -313,6 +314,10 @@ func (c *RedisConnector) formatExecResult(command string, args []string, value a
 			result.Columns = []string{"field", "value"}
 			result.ColumnTypes = []string{"string", "string"}
 			result.Rows = makeHashRows(typed)
+		} else if rows, ok := sortedSetScoreRows(args, typed); ok {
+			result.Columns = []string{"member", "score"}
+			result.ColumnTypes = []string{"string", "float"}
+			result.Rows = rows
 		} else {
 			result.Columns = []string{"index", "value"}
 			result.ColumnTypes = []string{"integer", "mixed"}
@@ -427,6 +432,75 @@ func looksLikeHashPairs(args []string, values []any) bool {
 	default:
 		return false
 	}
+}
+
+// sortedSetScoreCommands are sorted-set reads whose reply can carry scores.
+// ZPOPMIN/ZPOPMAX always pair member+score; the rest only with WITHSCORES.
+var sortedSetScoreCommands = map[string]struct{}{
+	"ZRANGE": {}, "ZREVRANGE": {}, "ZRANGEBYSCORE": {}, "ZREVRANGEBYSCORE": {},
+	"ZDIFF": {}, "ZUNION": {}, "ZINTER": {}, "ZRANDMEMBER": {},
+}
+
+func isSortedSetScoreCommand(args []string) bool {
+	if len(args) == 0 {
+		return false
+	}
+	switch strings.ToUpper(args[0]) {
+	case "ZPOPMIN", "ZPOPMAX":
+		return true
+	}
+	if _, ok := sortedSetScoreCommands[strings.ToUpper(args[0])]; !ok {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if strings.EqualFold(arg, "WITHSCORES") {
+			return true
+		}
+	}
+	return false
+}
+
+// sortedSetScoreRows pairs a sorted-set reply into [member, score] rows. It
+// accepts both the RESP2 flat shape ([member, score, member, score, ...]) and
+// the RESP3 nested shape ([[member, score], ...]).
+func sortedSetScoreRows(args []string, values []any) ([][]any, bool) {
+	if !isSortedSetScoreCommand(args) {
+		return nil, false
+	}
+
+	if len(values) > 0 {
+		if _, nested := values[0].([]any); nested {
+			rows := make([][]any, 0, len(values))
+			for _, element := range values {
+				pair, ok := element.([]any)
+				if !ok || len(pair) != 2 {
+					return nil, false
+				}
+				rows = append(rows, []any{pair[0], parseRedisScore(pair[1])})
+			}
+			return rows, true
+		}
+	}
+
+	if len(values)%2 != 0 {
+		return nil, false
+	}
+	rows := make([][]any, 0, len(values)/2)
+	for i := 0; i+1 < len(values); i += 2 {
+		rows = append(rows, []any{values[i], parseRedisScore(values[i+1])})
+	}
+	return rows, true
+}
+
+// parseRedisScore normalizes a score to float64 when it arrives as a string
+// (RESP2), leaving already-numeric RESP3 scores untouched.
+func parseRedisScore(value any) any {
+	if text, ok := value.(string); ok {
+		if score, err := strconv.ParseFloat(text, 64); err == nil {
+			return score
+		}
+	}
+	return value
 }
 
 func makeIndexedRows(values []string) [][]any {

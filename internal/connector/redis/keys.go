@@ -483,6 +483,7 @@ func (c *RedisConnector) describeLeafObjects(
 			if ttlValue >= 0 {
 				ttl = int64(ttlValue / time.Second)
 			}
+			c.storeKeyMeta(key, redisKeyMeta{keyType: keyType, ttl: ttl})
 
 			meta := redisMeta(keyType, ttl)
 			if truncated {

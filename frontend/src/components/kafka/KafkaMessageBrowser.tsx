@@ -1,5 +1,5 @@
-import { Fragment, useState } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw } from 'lucide-react'
+import { Fragment, useState, type FormEvent } from 'react'
+import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { EmptyState } from '@/components/EmptyState'
@@ -17,9 +17,13 @@ interface KafkaMessageBrowserProps {
   hasOlder: boolean
   partitionCount: number
   partitionFilter: number | null
+  searchActive: boolean
+  scanned: number
   onPartitionChange: (partition: number | null) => void
   onRefresh: () => void
   onLoadOlder: () => void
+  onSearch: (field: string, value: string) => void
+  onClearSearch: () => void
 }
 
 const allPartitions = '__all__'
@@ -37,11 +41,31 @@ export function KafkaMessageBrowser({
   hasOlder,
   partitionCount,
   partitionFilter,
+  searchActive,
+  scanned,
   onPartitionChange,
   onRefresh,
   onLoadOlder,
+  onSearch,
+  onClearSearch,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [fieldInput, setFieldInput] = useState('')
+  const [valueInput, setValueInput] = useState('')
+
+  const submitSearch = (event: FormEvent) => {
+    event.preventDefault()
+    if (!fieldInput.trim() || loading) {
+      return
+    }
+    onSearch(fieldInput, valueInput)
+  }
+
+  const handleClear = () => {
+    setFieldInput('')
+    setValueInput('')
+    onClearSearch()
+  }
 
   return (
     <div className="space-y-3">
@@ -71,14 +95,54 @@ export function KafkaMessageBrowser({
         </Button>
       </div>
 
+      <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
+        <input
+          value={fieldInput}
+          onChange={(event) => setFieldInput(event.target.value)}
+          placeholder="JSON field (e.g. product_id, user.id)"
+          spellCheck={false}
+          autoComplete="off"
+          className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+        />
+        <input
+          value={valueInput}
+          onChange={(event) => setValueInput(event.target.value)}
+          placeholder="equals value"
+          spellCheck={false}
+          autoComplete="off"
+          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+        />
+        <Button type="submit" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" disabled={loading || !fieldInput.trim()}>
+          <Search className="h-3.5 w-3.5" />
+          Search
+        </Button>
+        {searchActive && (
+          <Button type="button" size="sm" variant="ghost" className="h-8 gap-1.5 font-mono text-[11px]" onClick={handleClear}>
+            <X className="h-3.5 w-3.5" />
+            Clear
+          </Button>
+        )}
+      </form>
+
+      {searchActive && (
+        <div className="font-mono text-[11px] text-muted-foreground">
+          Scanned {scanned.toLocaleString()} · found {messages.length.toLocaleString()}
+          {!hasOlder && ' · reached beginning'}
+        </div>
+      )}
+
       {error && <ErrorBanner message={error} onRetry={onRefresh} />}
 
       {!error && messages.length === 0 && !loading ? (
         <EmptyState
           variant="no_tables"
           compact
-          title="No messages"
-          description="The selected partitions returned no messages in the newest window."
+          title={searchActive ? 'No matches' : 'No messages'}
+          description={
+            searchActive
+              ? 'No messages matched in the scanned window. Try “Scan more” to look deeper.'
+              : 'The selected partitions returned no messages in the newest window.'
+          }
         />
       ) : (
         <div className="overflow-x-auto rounded-sm border border-border/70">
@@ -143,7 +207,13 @@ export function KafkaMessageBrowser({
           onClick={onLoadOlder}
         >
           {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-          {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+          {searchActive
+            ? loadingOlder
+              ? 'Scanning…'
+              : 'Scan more'
+            : loadingOlder
+              ? 'Loading older messages…'
+              : 'Load older messages'}
         </Button>
       )}
     </div>

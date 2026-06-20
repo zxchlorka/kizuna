@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   Activity,
   Braces,
-  ChevronsDown,
   CircleDot,
   Database,
   Eye,
@@ -11,7 +10,6 @@ import {
   Hash,
   List,
   ListOrdered,
-  Loader2,
   MessagesSquare,
   MoreHorizontal,
   Plus,
@@ -176,14 +174,13 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
   const treeCursors = useWorkspaceStore((state) => state.treeCursors)
-  const treeLoadingMore = useWorkspaceStore((state) => state.treeLoadingMore)
-  const treeLoading = useWorkspaceStore((state) => state.treeLoading)
-  const treeError = useWorkspaceStore((state) => state.treeErrorsByConnection[connId] ?? null)
+  const treeLoadingByKey = useWorkspaceStore((state) => state.treeLoadingByKey)
+  const treeErrorByKey = useWorkspaceStore((state) => state.treeErrorByKey)
+  const treeLoadedByKey = useWorkspaceStore((state) => state.treeLoadedByKey)
   const expandedSchemas = useWorkspaceStore((state) => state.expandedSchemas)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
   const visibleSchemasByConnection = useWorkspaceStore((state) => state.visibleSchemasByConnection)
   const fetchTree = useWorkspaceStore((state) => state.fetchTree)
-  const fetchMoreTree = useWorkspaceStore((state) => state.fetchMoreTree)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
   const toggleSchema = useWorkspaceStore((state) => state.toggleSchema)
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
@@ -201,7 +198,11 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
   const currentConnection = connections.find((connection) => connection.id === connId)
   const isRedisConnection = currentConnection?.type === 'redis'
   const isKafkaConnection = currentConnection?.type === 'kafka'
-  const rootItems = useMemo(() => treeItems[buildTreeKey(connId)] ?? [], [connId, treeItems])
+  const rootKey = buildTreeKey(connId)
+  const rootItems = useMemo(() => treeItems[rootKey] ?? [], [rootKey, treeItems])
+  const rootLoading = treeLoadingByKey[rootKey] ?? false
+  const rootError = treeErrorByKey[rootKey] ?? null
+  const rootLoaded = treeLoadedByKey[rootKey] ?? false
 
   const availableSchemas = useMemo(
     () => rootItems.filter((item) => item.type === 'schema').map((item) => item.name),
@@ -336,11 +337,14 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
 
   const renderPgSchemaNode = (item: ObjectItem) => {
     const nodePath = item.name
-    const expanded = expandedSchemas.has(buildTreeKey(connId, nodePath))
-    const children = treeItems[buildTreeKey(connId, nodePath)] || []
+    const childKey = buildTreeKey(connId, nodePath)
+    const expanded = expandedSchemas.has(childKey)
+    const children = treeItems[childKey] || []
     const visibleChildren = getVisibleChildren(children)
     const groupedChildren = groupSchemaChildren(visibleChildren, treeVisibility.showTables)
-    const schemaLoading = expanded && !treeItems[buildTreeKey(connId, nodePath)] && treeLoading
+    const schemaLoading = expanded && Boolean(treeLoadingByKey[childKey])
+    const schemaError = expanded ? treeErrorByKey[childKey] : null
+    const schemaLoaded = treeLoadedByKey[childKey] ?? false
 
     return (
       <div key={item.name}>
@@ -377,8 +381,13 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
         {expanded && (
           <div className="ml-4 border-l border-border pl-1">
             {schemaLoading && <LoadingSkeleton variant="tree" />}
-            {!schemaLoading && children.length === 0 && <EmptyState variant="no_tables" compact className="mt-2" />}
-            {!schemaLoading && children.length > 0 && visibleChildren.length === 0 && (
+            {!schemaLoading && schemaError && (
+              <div className="mt-2">
+                <ErrorBanner message={schemaError} onRetry={() => void fetchTree(connId, nodePath)} />
+              </div>
+            )}
+            {!schemaLoading && !schemaError && schemaLoaded && children.length === 0 && <EmptyState variant="no_tables" compact className="mt-2" />}
+            {!schemaLoading && !schemaError && schemaLoaded && children.length > 0 && visibleChildren.length === 0 && (
               <EmptyState
                 variant="no_tables"
                 compact
@@ -442,31 +451,30 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     )
   }
 
-  const renderRedisLoadMore = (path = '') => {
+  // A non-empty cursor means the scan was cut short by the per-page budget, so
+  // more keys exist than the single page we load. We never paginate further in
+  // the tree: the user queries large prefixes from the console instead.
+  const renderRedisTruncatedNotice = (path = '') => {
     const key = buildTreeKey(connId, path)
     if (!treeCursors[key]) {
       return null
     }
-    const loadingMore = treeLoadingMore[key] ?? false
 
     return (
-      <button
-        type="button"
-        disabled={loadingMore}
-        onClick={() => void fetchMoreTree(connId, path)}
-        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-      >
-        {loadingMore ? <Loader2 className="h-4 w-4 animate-spin" /> : <ChevronsDown className="h-4 w-4" />}
-        <span>{loadingMore ? 'Scanning…' : 'Load more keys'}</span>
-      </button>
+      <div className="mt-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+        Showing first ~1000 keys. This prefix has more — query it in the console (SCAN/KEYS).
+      </div>
     )
   }
 
   const renderRedisNamespaceNode = (item: ObjectItem) => {
     const nodePath = item.path ?? item.name
-    const expanded = expandedSchemas.has(buildTreeKey(connId, nodePath))
-    const children = treeItems[buildTreeKey(connId, nodePath)] || []
-    const nodeLoading = expanded && !treeItems[buildTreeKey(connId, nodePath)] && treeLoading
+    const childKey = buildTreeKey(connId, nodePath)
+    const expanded = expandedSchemas.has(childKey)
+    const children = treeItems[childKey] || []
+    const nodeLoading = expanded && Boolean(treeLoadingByKey[childKey])
+    const nodeError = expanded ? treeErrorByKey[childKey] : null
+    const nodeLoaded = treeLoadedByKey[childKey] ?? false
 
     return (
       <div key={`namespace:${nodePath}`}>
@@ -478,13 +486,18 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
           {getIcon('namespace', expanded)}
           <span className="truncate">{item.name}</span>
           <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
-            {formatCount(item.row_count)} keys
+            {formatCount(item.row_count)}{item.meta?.truncated ? '+' : ''} keys
           </span>
         </button>
         {expanded && (
           <div className="ml-4 border-l border-border pl-1">
             {nodeLoading && <LoadingSkeleton variant="tree" />}
-            {!nodeLoading && children.length === 0 && (
+            {!nodeLoading && nodeError && (
+              <div className="mt-2">
+                <ErrorBanner message={nodeError} onRetry={() => void fetchTree(connId, nodePath)} />
+              </div>
+            )}
+            {!nodeLoading && !nodeError && nodeLoaded && children.length === 0 && (
               <EmptyState
                 variant="no_tables"
                 compact
@@ -493,11 +506,11 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
                 description="This namespace currently has no loaded children."
               />
             )}
-            {!nodeLoading &&
+            {!nodeLoading && !nodeError &&
               children.map((child) =>
                 isRedisNamespace(child.type) ? renderRedisNamespaceNode(child) : renderRedisLeafItem(child)
               )}
-            {!nodeLoading && renderRedisLoadMore(nodePath)}
+            {!nodeLoading && !nodeError && renderRedisTruncatedNotice(nodePath)}
           </div>
         )}
       </div>
@@ -536,14 +549,18 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     ? rootItems.filter((item) => item.name.toLowerCase().includes(topicSearch.trim().toLowerCase()))
     : []
 
-  if (treeLoading && rootItems.length === 0) {
+  if (rootLoading && rootItems.length === 0) {
     return <LoadingSkeleton variant="tree" />
   }
 
-  if (treeError && rootItems.length === 0) {
+  if (!rootLoaded && !rootError && rootItems.length === 0) {
+    return <LoadingSkeleton variant="tree" />
+  }
+
+  if (rootError && rootItems.length === 0) {
     return (
       <div className="space-y-3">
-        <ErrorBanner message={treeError} onRetry={() => void fetchTree(connId)} />
+        <ErrorBanner message={rootError} onRetry={() => void fetchTree(connId)} />
         <EmptyState
           variant="no_tables"
           compact
@@ -558,7 +575,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     )
   }
 
-  if (!treeLoading && rootItems.length === 0) {
+  if (!rootLoading && !rootError && rootLoaded && rootItems.length === 0) {
     return (
       <EmptyState
         variant="no_tables"
@@ -575,7 +592,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     )
   }
 
-  if (!isRedisConnection && !treeLoading && rootItems.length > 0 && filteredRootItems.length === 0) {
+  if (!isRedisConnection && !rootLoading && rootLoaded && rootItems.length > 0 && filteredRootItems.length === 0) {
     return (
       <EmptyState
         variant="no_tables"
@@ -585,8 +602,6 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       />
     )
   }
-
-  const rootHasMore = isRedisConnection && Boolean(treeCursors[buildTreeKey(connId)])
 
   if (isKafkaConnection) {
     return (
@@ -617,16 +632,11 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
 
   return (
     <>
-      {rootHasMore && (
-        <div className="mb-2 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-          Partial view — the keyspace is scanned incrementally. Use “Load more keys” to continue.
-        </div>
-      )}
       <div className="space-y-0.5">
         {(isRedisConnection ? rootItems : filteredRootItems).map((item) =>
           isRedisConnection ? renderRedisItem(item) : renderPgSchemaNode(item)
         )}
-        {isRedisConnection && renderRedisLoadMore()}
+        {isRedisConnection && renderRedisTruncatedNotice()}
       </div>
       {!isRedisConnection && (
         <CreateTableForm

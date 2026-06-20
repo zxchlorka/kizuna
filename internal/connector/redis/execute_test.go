@@ -79,6 +79,67 @@ func TestExecuteFormatsRESP3Map(t *testing.T) {
 	}
 }
 
+func TestExecuteFormatsSortedSetWithScores(t *testing.T) {
+	t.Parallel()
+
+	conn := newTestRedisConnectorWithClient(&fakeRedisClient{
+		doResult: []any{"alice", "1", "bob", "2.5"},
+	})
+
+	result, err := conn.Execute(context.Background(), "ZRANGE z 0 -1 WITHSCORES")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if len(result.Columns) != 2 || result.Columns[0] != "member" || result.Columns[1] != "score" {
+		t.Fatalf("unexpected columns: %#v", result.Columns)
+	}
+	if len(result.Rows) != 2 {
+		t.Fatalf("unexpected row count: %d", len(result.Rows))
+	}
+	if result.Rows[0][0] != "alice" || result.Rows[0][1] != float64(1) {
+		t.Fatalf("unexpected first row: %#v", result.Rows[0])
+	}
+	if result.Rows[1][1] != 2.5 {
+		t.Fatalf("expected float score, got %#v (%T)", result.Rows[1][1], result.Rows[1][1])
+	}
+}
+
+func TestExecuteFormatsSortedSetNestedScores(t *testing.T) {
+	t.Parallel()
+
+	// RESP3 can deliver WITHSCORES/ZPOP replies as nested [member, score] arrays.
+	conn := newTestRedisConnectorWithClient(&fakeRedisClient{
+		doResult: []any{[]any{"alice", "1"}, []any{"bob", "2.5"}},
+	})
+
+	result, err := conn.Execute(context.Background(), "ZPOPMIN z 2")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.Columns[0] != "member" || result.Columns[1] != "score" {
+		t.Fatalf("unexpected columns: %#v", result.Columns)
+	}
+	if len(result.Rows) != 2 || result.Rows[1][0] != "bob" || result.Rows[1][1] != 2.5 {
+		t.Fatalf("unexpected rows: %#v", result.Rows)
+	}
+}
+
+func TestExecuteSortedSetWithoutScoresStaysIndexed(t *testing.T) {
+	t.Parallel()
+
+	conn := newTestRedisConnectorWithClient(&fakeRedisClient{
+		doResult: []any{"alice", "bob"},
+	})
+
+	result, err := conn.Execute(context.Background(), "ZRANGEBYLEX z - +")
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if result.Columns[0] != "index" {
+		t.Fatalf("expected index/value for a non-scored zset read, got %#v", result.Columns)
+	}
+}
+
 func TestJSONSafeValueHandlesNestedRESP3(t *testing.T) {
 	t.Parallel()
 

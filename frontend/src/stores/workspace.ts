@@ -61,8 +61,10 @@ interface WorkspaceStore {
   navigationHistory: NavigationEntry[]
   treeItems: Record<string, ObjectItem[]>
   treeCursors: Record<string, string>
-  treeLoadingMore: Record<string, boolean>
   treeLoading: boolean
+  treeLoadingByKey: Record<string, boolean>
+  treeErrorByKey: Record<string, string | null>
+  treeLoadedByKey: Record<string, boolean>
   treeErrorsByConnection: Record<string, string | null>
   expandedSchemas: Set<string>
   treeVisibility: TreeVisibility
@@ -71,7 +73,6 @@ interface WorkspaceStore {
   selectedNodeByConnection: Record<string, string>
 
   fetchTree: (connId: string, path?: string) => Promise<void>
-  fetchMoreTree: (connId: string, path?: string) => Promise<void>
   setSelectedNode: (connId: string, node: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (connId: string, schema: string) => void
@@ -131,34 +132,10 @@ function buildObjectsQuery(connId: string, path: string, opts: { paged: boolean;
   return `/api/connections/${connId}/objects${query ? `?${query}` : ''}`
 }
 
-// Pages of a Redis scan arrive incrementally: namespace counts accumulate
-// across pages while leaf keys are deduplicated by their full path.
-function mergeObjectItems(existing: ObjectItem[], incoming: ObjectItem[]): ObjectItem[] {
-  const namespaces = new Map<string, ObjectItem>()
-  const leaves = new Map<string, ObjectItem>()
+const treeRequests = new Map<string, Promise<void>>()
 
-  const add = (item: ObjectItem) => {
-    if (item.type === 'namespace') {
-      const current = namespaces.get(item.name)
-      if (current) {
-        namespaces.set(item.name, { ...current, row_count: current.row_count + item.row_count })
-      } else {
-        namespaces.set(item.name, item)
-      }
-      return
-    }
-    const key = `${item.type}:${item.path ?? item.name}`
-    if (!leaves.has(key)) {
-      leaves.set(key, item)
-    }
-  }
-
-  existing.forEach(add)
-  incoming.forEach(add)
-
-  const sortedNamespaces = Array.from(namespaces.values()).sort((a, b) => a.name.localeCompare(b.name))
-  const sortedLeaves = Array.from(leaves.values()).sort((a, b) => a.name.localeCompare(b.name))
-  return [...sortedNamespaces, ...sortedLeaves]
+function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean {
+  return Object.values(loadingByKey).some(Boolean)
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
@@ -167,8 +144,10 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   navigationHistory: [],
   treeItems: {},
   treeCursors: {},
-  treeLoadingMore: {},
   treeLoading: false,
+  treeLoadingByKey: {},
+  treeErrorByKey: {},
+  treeLoadedByKey: {},
   treeErrorsByConnection: {},
   expandedSchemas: new Set(),
   treeVisibility: {
@@ -181,87 +160,86 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   selectedNodeByConnection: {},
 
   fetchTree: async (connId: string, path?: string) => {
-    set({ treeLoading: true })
-    const paged = isRedisConnection(connId)
-    const key = buildTreeKey(connId, path || '')
-    try {
-      const node = get().selectedNodeByConnection[connId]
-      const res = await fetchWithTimeout(buildObjectsQuery(connId, path || '', { paged, node }))
-      if (!res.ok) throw new Error('Failed to fetch objects')
+    const normalizedPath = path || ''
+    const key = buildTreeKey(connId, normalizedPath)
+    const pending = treeRequests.get(key)
+    if (pending) {
+      return pending
+    }
 
-      let items: ObjectItem[]
-      let nextCursor = ''
-      if (paged) {
-        const page = (await res.json()) as ObjectPageResponse
-        items = page.objects ?? []
-        nextCursor = page.next_cursor ?? ''
-      } else {
-        items = await res.json()
-      }
+    const request = (async () => {
+      set((state) => {
+        const loadingByKey = { ...state.treeLoadingByKey, [key]: true }
+        return {
+          treeLoadingByKey: loadingByKey,
+          treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
+          treeLoading: hasLoadingTreeRequests(loadingByKey),
+        }
+      })
 
-      set((state) => ({
-        treeItems: { ...state.treeItems, [key]: items },
-        treeCursors: { ...state.treeCursors, [key]: nextCursor },
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: null,
-        },
-        availableSchemasByConnection: path
-          ? state.availableSchemasByConnection
-          : {
-              ...state.availableSchemasByConnection,
-              [connId]: items
-                .filter((item) => item.type === 'schema')
-                .map((item) => item.name),
+      const paged = isRedisConnection(connId)
+      try {
+        const node = get().selectedNodeByConnection[connId]
+        const res = await fetchWithTimeout(buildObjectsQuery(connId, normalizedPath, { paged, node }))
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: res.statusText }))
+          throw new Error(body.error || 'Failed to fetch objects')
+        }
+
+        let items: ObjectItem[]
+        let nextCursor = ''
+        if (paged) {
+          const page = (await res.json()) as ObjectPageResponse
+          items = page.objects ?? []
+          nextCursor = page.next_cursor ?? ''
+        } else {
+          items = await res.json()
+        }
+
+        set((state) => {
+          const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+          return {
+            treeItems: { ...state.treeItems, [key]: items },
+            treeCursors: { ...state.treeCursors, [key]: nextCursor },
+            treeLoadingByKey: loadingByKey,
+            treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
+            treeLoadedByKey: { ...state.treeLoadedByKey, [key]: true },
+            treeErrorsByConnection: {
+              ...state.treeErrorsByConnection,
+              [connId]: null,
             },
-        treeLoading: false,
-      }))
-    } catch (error) {
-      set((state) => ({
-        treeLoading: false,
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: (error as Error).message,
-        },
-      }))
-    }
-  },
+            availableSchemasByConnection: normalizedPath
+              ? state.availableSchemasByConnection
+              : {
+                  ...state.availableSchemasByConnection,
+                  [connId]: items
+                    .filter((item) => item.type === 'schema')
+                    .map((item) => item.name),
+                },
+            treeLoading: hasLoadingTreeRequests(loadingByKey),
+          }
+        })
+      } catch (error) {
+        set((state) => {
+          const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+          return {
+            treeLoadingByKey: loadingByKey,
+            treeErrorByKey: { ...state.treeErrorByKey, [key]: (error as Error).message },
+            treeLoadedByKey: { ...state.treeLoadedByKey, [key]: false },
+            treeErrorsByConnection: {
+              ...state.treeErrorsByConnection,
+              [connId]: (error as Error).message,
+            },
+            treeLoading: hasLoadingTreeRequests(loadingByKey),
+          }
+        })
+      } finally {
+        treeRequests.delete(key)
+      }
+    })()
 
-  fetchMoreTree: async (connId: string, path?: string) => {
-    const key = buildTreeKey(connId, path || '')
-    const cursor = get().treeCursors[key]
-    if (!cursor || get().treeLoadingMore[key]) {
-      return
-    }
-
-    set((state) => ({ treeLoadingMore: { ...state.treeLoadingMore, [key]: true } }))
-    try {
-      const node = get().selectedNodeByConnection[connId]
-      const res = await fetchWithTimeout(buildObjectsQuery(connId, path || '', { paged: true, cursor, node }))
-      if (!res.ok) throw new Error('Failed to fetch more objects')
-      const page = (await res.json()) as ObjectPageResponse
-
-      set((state) => ({
-        treeItems: {
-          ...state.treeItems,
-          [key]: mergeObjectItems(state.treeItems[key] ?? [], page.objects ?? []),
-        },
-        treeCursors: { ...state.treeCursors, [key]: page.next_cursor ?? '' },
-        treeLoadingMore: { ...state.treeLoadingMore, [key]: false },
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: null,
-        },
-      }))
-    } catch (error) {
-      set((state) => ({
-        treeLoadingMore: { ...state.treeLoadingMore, [key]: false },
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: (error as Error).message,
-        },
-      }))
-    }
+    treeRequests.set(key, request)
+    return request
   },
 
   setSelectedNode: async (connId: string, node: string) => {
@@ -282,6 +260,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     set((state) => {
       const nextTreeItems = { ...state.treeItems }
       const nextTreeCursors = { ...state.treeCursors }
+      const nextLoadingByKey = { ...state.treeLoadingByKey }
+      const nextErrorByKey = { ...state.treeErrorByKey }
+      const nextLoadedByKey = { ...state.treeLoadedByKey }
       Object.keys(nextTreeItems).forEach((key) => {
         if (parseTreeKey(key).connId === connId) {
           delete nextTreeItems[key]
@@ -292,13 +273,32 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           delete nextTreeCursors[key]
         }
       })
-      return { treeItems: nextTreeItems, treeCursors: nextTreeCursors, treeLoading: true }
+      Object.keys(nextLoadingByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextLoadingByKey[key]
+        }
+      })
+      Object.keys(nextErrorByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextErrorByKey[key]
+        }
+      })
+      Object.keys(nextLoadedByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextLoadedByKey[key]
+        }
+      })
+      return {
+        treeItems: nextTreeItems,
+        treeCursors: nextTreeCursors,
+        treeLoadingByKey: nextLoadingByKey,
+        treeErrorByKey: nextErrorByKey,
+        treeLoadedByKey: nextLoadedByKey,
+        treeLoading: false,
+      }
     })
 
-    await get().fetchTree(connId)
-    for (const schema of expandedSchemas) {
-      await get().fetchTree(connId, schema)
-    }
+    await Promise.all([get().fetchTree(connId), ...expandedSchemas.map((schema) => get().fetchTree(connId, schema))])
   },
 
   toggleSchema: (connId: string, schema: string) => {

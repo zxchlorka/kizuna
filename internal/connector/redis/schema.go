@@ -8,12 +8,7 @@ import (
 )
 
 func (c *RedisConnector) GetObjectInfo(ctx context.Context, object string) (*connector.ObjectInfo, error) {
-	keyType, err := redisTypeOrNotFound(ctx, c, object)
-	if err != nil {
-		return nil, err
-	}
-
-	ttl, err := redisTTLSeconds(ctx, c, object)
+	keyMeta, err := c.getKeyMeta(ctx, object)
 	if err != nil {
 		return nil, err
 	}
@@ -26,22 +21,19 @@ func (c *RedisConnector) GetObjectInfo(ctx context.Context, object string) (*con
 	return &connector.ObjectInfo{
 		Name:       object,
 		Schema:     "",
-		ObjectType: redisObjectTypeName(keyType),
+		ObjectType: redisObjectTypeName(keyMeta.keyType),
 		Columns:    columnNames(schema.Columns),
-		Definition: fmt.Sprintf("Redis %s key %q (ttl=%d)", keyType, object, ttl),
+		Definition: fmt.Sprintf("Redis %s key %q (ttl=%d)", keyMeta.keyType, object, keyMeta.ttl),
 	}, nil
 }
 
 func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connector.Schema, error) {
-	keyType, err := redisTypeOrNotFound(ctx, c, object)
+	keyMeta, err := c.getKeyMeta(ctx, object)
 	if err != nil {
 		return nil, err
 	}
-
-	ttl, err := redisTTLSeconds(ctx, c, object)
-	if err != nil {
-		return nil, err
-	}
+	keyType := keyMeta.keyType
+	ttl := keyMeta.ttl
 
 	meta := redisMeta(keyType, ttl)
 	var columns []connector.ColumnMeta
@@ -52,9 +44,9 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 			{Name: "value", DataType: "text", Editable: true},
 		}
 	case "hash":
-		length, err := c.client.HLen(ctx, object).Result()
+		length, err := c.keyLength(ctx, object, keyType, ttl)
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, err
 		}
 		meta["length"] = length
 		columns = []connector.ColumnMeta{
@@ -62,9 +54,9 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 			{Name: "value", DataType: "text", Editable: true},
 		}
 	case "list":
-		length, err := c.client.LLen(ctx, object).Result()
+		length, err := c.keyLength(ctx, object, keyType, ttl)
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, err
 		}
 		meta["length"] = length
 		columns = []connector.ColumnMeta{
@@ -72,18 +64,18 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 			{Name: "value", DataType: "text", Editable: true},
 		}
 	case "set":
-		length, err := c.client.SCard(ctx, object).Result()
+		length, err := c.keyLength(ctx, object, keyType, ttl)
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, err
 		}
 		meta["length"] = length
 		columns = []connector.ColumnMeta{
 			{Name: "member", DataType: "text", Editable: true},
 		}
 	case "zset":
-		length, err := c.client.ZCard(ctx, object).Result()
+		length, err := c.keyLength(ctx, object, keyType, ttl)
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, err
 		}
 		meta["length"] = length
 		columns = []connector.ColumnMeta{
@@ -91,9 +83,9 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 			{Name: "member", DataType: "text"},
 		}
 	case "stream":
-		length, err := c.client.XLen(ctx, object).Result()
+		length, err := c.keyLength(ctx, object, keyType, ttl)
 		if err != nil {
-			return nil, normalizeRedisError(err)
+			return nil, err
 		}
 		meta["length"] = length
 		columns = []connector.ColumnMeta{
@@ -118,6 +110,36 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 		Columns:    columns,
 		Meta:       meta,
 	}, nil
+}
+
+func (c *RedisConnector) keyLength(ctx context.Context, key string, keyType string, ttl int64) (int64, error) {
+	if meta, ok := c.cachedKeyMeta(key, true); ok && meta.keyType == keyType {
+		return *meta.length, nil
+	}
+
+	var (
+		length int64
+		err    error
+	)
+	switch keyType {
+	case "hash":
+		length, err = c.client.HLen(ctx, key).Result()
+	case "list":
+		length, err = c.client.LLen(ctx, key).Result()
+	case "set":
+		length, err = c.client.SCard(ctx, key).Result()
+	case "zset":
+		length, err = c.client.ZCard(ctx, key).Result()
+	case "stream":
+		length, err = c.client.XLen(ctx, key).Result()
+	default:
+		return 0, nil
+	}
+	if err != nil {
+		return 0, normalizeRedisError(err)
+	}
+	c.rememberKeyLength(key, keyType, ttl, length)
+	return length, nil
 }
 
 func columnNames(columns []connector.ColumnMeta) []string {

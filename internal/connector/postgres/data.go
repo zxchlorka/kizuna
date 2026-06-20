@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/qsnake66/infraview/internal/connector"
@@ -137,25 +137,14 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 		orderClause = fmt.Sprintf(" ORDER BY %s %s", pgx.Identifier{opts.OrderBy}.Sanitize(), dir)
 	}
 
-	countSQL := fmt.Sprintf("SELECT count(*) FROM %s%s", tableRef, whereClause)
+	dataLimit := limit + 1
 	dataSQL := fmt.Sprintf("SELECT %s FROM %s%s%s LIMIT %d OFFSET %d",
 		strings.Join(selectCols, ", "),
-		tableRef, whereClause, orderClause, limit, offset)
-
-	// Run count query in parallel
-	var total int64
-	var countErr error
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		countErr = p.pool.QueryRow(ctx, countSQL, args...).Scan(&total)
-	}()
+		tableRef, whereClause, orderClause, dataLimit, offset)
 
 	// Run data query
 	rows, err := p.pool.Query(ctx, dataSQL, args...)
 	if err != nil {
-		wg.Wait()
 		return nil, normalizePostgresError(fmt.Errorf("failed to query data: %w", err))
 	}
 	defer rows.Close()
@@ -164,27 +153,80 @@ func (p *PostgresConnector) GetData(ctx context.Context, object string, opts con
 	for rows.Next() {
 		vals, err := rows.Values()
 		if err != nil {
-			wg.Wait()
 			return nil, normalizePostgresError(fmt.Errorf("failed to scan row: %w", err))
 		}
 		resultRows = append(resultRows, buildResultRow(schemaResult.Columns, vals))
 	}
 	if err := rows.Err(); err != nil {
-		wg.Wait()
 		return nil, normalizePostgresError(fmt.Errorf("row iteration error: %w", err))
 	}
 
-	wg.Wait()
-	if countErr != nil {
-		return nil, normalizePostgresError(fmt.Errorf("failed to count rows: %w", countErr))
+	hasMore := len(resultRows) > limit
+	if hasMore {
+		resultRows = resultRows[:limit]
 	}
 
-	hasMore := int64(offset+len(resultRows)) < total
+	total, countStrategy := p.displayTotal(ctx, schema, table, len(opts.Filters) == 0, offset, limit, len(resultRows), hasMore)
 
 	return &connector.DataResult{
 		Columns: schemaResult.Columns,
 		Rows:    resultRows,
 		Total:   total,
 		HasMore: hasMore,
+		Meta: map[string]any{
+			"count_strategy": countStrategy,
+		},
 	}, nil
+}
+
+func (p *PostgresConnector) displayTotal(
+	ctx context.Context,
+	schema string,
+	table string,
+	canEstimate bool,
+	offset int,
+	limit int,
+	rowCount int,
+	hasMore bool,
+) (int64, string) {
+	// The window reached the end of the result set, so the total is exact.
+	if !hasMore {
+		return int64(offset + rowCount), "exact"
+	}
+
+	// More rows exist beyond this page; fall back to a bounded estimate.
+	lowerBound := int64(offset + limit + 1)
+	if !canEstimate {
+		return lowerBound, "window"
+	}
+
+	estimate, err := p.estimateTableRows(ctx, schema, table)
+	if err != nil {
+		return lowerBound, "window"
+	}
+	if estimate < lowerBound {
+		estimate = lowerBound
+	}
+	return estimate, "estimate"
+}
+
+func (p *PostgresConnector) estimateTableRows(ctx context.Context, schema string, table string) (int64, error) {
+	estimateCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	var estimate float64
+	err := p.pool.QueryRow(estimateCtx,
+		`SELECT COALESCE(c.reltuples, 0)
+		 FROM pg_class c
+		 JOIN pg_namespace n ON n.oid = c.relnamespace
+		 WHERE n.nspname = $1 AND c.relname = $2`,
+		schema, table,
+	).Scan(&estimate)
+	if err != nil {
+		return 0, normalizePostgresError(err)
+	}
+	if estimate < 0 {
+		return 0, nil
+	}
+	return int64(estimate + 0.5), nil
 }

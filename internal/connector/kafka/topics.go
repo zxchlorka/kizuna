@@ -25,30 +25,21 @@ func (c *KafkaConnector) listTopics(ctx context.Context) ([]connector.Object, er
 		return nil, normalizeKafkaError(err)
 	}
 
-	// One offsets round trip for all topics; failures only degrade the
-	// approximate message counts, never the listing itself.
-	starts, startsErr := c.admin.ListStartOffsets(ctx)
-	ends, endsErr := c.admin.ListEndOffsets(ctx)
-
 	objects := make([]connector.Object, 0, len(topics))
 	for _, detail := range topics.Sorted() {
 		if detail.Err != nil {
 			continue
 		}
 
-		var messages int64
-		if startsErr == nil && endsErr == nil {
-			messages = topicMessageEstimate(detail.Topic, sortedPartitionIDs(detail.Partitions), starts, ends)
-		}
-
 		objects = append(objects, connector.Object{
 			Name:     detail.Topic,
 			Type:     "kafka_topic",
-			RowCount: messages,
+			RowCount: 0,
 			Path:     detail.Topic,
 			Meta: map[string]any{
-				"partitions":  len(detail.Partitions),
-				"replication": topicReplicationFactor(detail),
+				"partitions":   len(detail.Partitions),
+				"replication":  topicReplicationFactor(detail),
+				"count_status": "not_loaded",
 			},
 		})
 	}

@@ -53,6 +53,7 @@ export function TabBar({ connId }: TabBarProps) {
   const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab, openRedisCliTab } = useWorkspaceStore()
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const isRedis = connection?.type === 'redis'
+  const isKafka = connection?.type === 'kafka'
   const visibleTabs = tabs.filter((tab) => tab.connId === connId)
 
   return (
@@ -83,7 +84,7 @@ export function TabBar({ connId }: TabBarProps) {
           </div>
         ))}
       </div>
-      {isRedis ? (
+      {isKafka ? null : isRedis ? (
         <Button
           type="button"
           size="sm"

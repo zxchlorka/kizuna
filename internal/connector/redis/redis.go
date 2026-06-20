@@ -79,6 +79,20 @@ type RedisConnector struct {
 	topology clusterTopology
 	config   config.ConnectionConfig
 	redis    redisSettings
+
+	metaMu       sync.RWMutex
+	keyMetaCache map[string]redisKeyMetaBucket
+}
+
+type redisKeyMeta struct {
+	keyType string
+	ttl     int64
+	length  *int64
+}
+
+type redisKeyMetaBucket struct {
+	meta    redisKeyMeta
+	expires time.Time
 }
 
 type redisSettings struct {
@@ -111,10 +125,11 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 	}
 
 	conn := &RedisConnector{
-		client:   client,
-		topology: topology,
-		config:   cfg,
-		redis:    settings,
+		client:       client,
+		topology:     topology,
+		config:       cfg,
+		redis:        settings,
+		keyMetaCache: make(map[string]redisKeyMetaBucket),
 	}
 
 	if err := conn.Ping(ctx); err != nil {
@@ -137,10 +152,11 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Redi
 
 func newRedisConnector(client redisClient, topology clusterTopology, cfg config.ConnectionConfig, settings redisSettings) *RedisConnector {
 	return &RedisConnector{
-		client:   client,
-		topology: topology,
-		config:   cfg,
-		redis:    settings,
+		client:       client,
+		topology:     topology,
+		config:       cfg,
+		redis:        settings,
+		keyMetaCache: make(map[string]redisKeyMetaBucket),
 	}
 }
 

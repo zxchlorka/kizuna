@@ -48,7 +48,6 @@ function metaCard(label: string, value: string, accentClass: string) {
 export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: RedisKeyViewProps) {
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const tabData = useDataStore((state) => state.tabs[tabId])
-  const fetchSchema = useDataStore((state) => state.fetchSchema)
   const fetchData = useDataStore((state) => state.fetchData)
   const mutate = useDataStore((state) => state.mutate)
   const setOpts = useDataStore((state) => state.setOpts)
@@ -61,9 +60,8 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
 
   useEffect(() => {
-    void fetchSchema(connId, object, tabId)
     void fetchData(connId, object, tabId)
-  }, [connId, fetchData, fetchSchema, object, tabId])
+  }, [connId, fetchData, object, tabId])
 
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const columns = tabData?.columns ?? []
@@ -81,7 +79,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const readOnly = connection?.read_only ?? false
 
   const refresh = async () => {
-    await fetchSchema(connId, object, tabId)
     await fetchData(connId, object, tabId)
     await refreshTree(connId)
   }
@@ -103,8 +100,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         object,
         where: payload.where,
         data: payload.data,
-      }, tabId)
-      await fetchSchema(connId, object, tabId)
+      }, tabId, { reload: false })
       await fetchData(connId, object, tabId)
       await refreshTree(connId)
     } catch (mutationError) {
@@ -154,12 +150,14 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           onDelete={(index) => runMutation({ type: 'delete', where: { index } })}
           onInsert={(value, direction) => runMutation({ type: 'insert', data: { value, direction } })}
           onNext={() => {
-            setOpts(tabId, { offset: listOffset + listLimit })
-            void fetchData(connId, object, tabId)
+            const nextOpts = { offset: listOffset + listLimit }
+            setOpts(tabId, nextOpts)
+            void fetchData(connId, object, tabId, nextOpts)
           }}
           onPrev={() => {
-            setOpts(tabId, { offset: Math.max(0, listOffset - listLimit) })
-            void fetchData(connId, object, tabId)
+            const nextOpts = { offset: Math.max(0, listOffset - listLimit) }
+            setOpts(tabId, nextOpts)
+            void fetchData(connId, object, tabId, nextOpts)
           }}
         />
       )
@@ -203,7 +201,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               offset: 0,
               filters: firstId ? [{ column: 'before_id', op: 'eq', value: firstId }] : [],
             })
-            void fetchData(connId, object, tabId)
+            void fetchData(connId, object, tabId, {
+              offset: 0,
+              filters: firstId ? [{ column: 'before_id', op: 'eq', value: firstId }] : [],
+            })
           }}
           onLoadNewer={() => {
             const lastId = typeof meta.last_id === 'string' ? meta.last_id : ''
@@ -211,7 +212,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               offset: 0,
               filters: lastId ? [{ column: 'after_id', op: 'eq', value: lastId }] : [],
             })
-            void fetchData(connId, object, tabId)
+            void fetchData(connId, object, tabId, {
+              offset: 0,
+              filters: lastId ? [{ column: 'after_id', op: 'eq', value: lastId }] : [],
+            })
           }}
         />
       )

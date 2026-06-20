@@ -36,10 +36,13 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const fetchMessages = useKafkaStore((state) => state.fetchMessages)
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
+  const setSearch = useKafkaStore((state) => state.setSearch)
+  const clearSearch = useKafkaStore((state) => state.clearSearch)
 
   useEffect(() => {
-    void fetchTopicChildren(connId, topic, tabId)
-    void fetchMessages(connId, topic, tabId)
+    void fetchMessages(connId, topic, tabId).finally(() => {
+      void fetchTopicChildren(connId, topic, tabId)
+    })
   }, [connId, fetchMessages, fetchTopicChildren, tabId, topic])
 
   const partitions = useMemo(
@@ -141,9 +144,13 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             hasOlder={tab?.hasOlder ?? false}
             partitionCount={partitions.length}
             partitionFilter={tab?.partitionFilter ?? null}
+            searchActive={tab?.searchActive ?? false}
+            scanned={tab?.scanned ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onRefresh={() => void fetchMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
+            onSearch={(field, value) => void setSearch(connId, topic, tabId, field, value)}
+            onClearSearch={() => void clearSearch(connId, topic, tabId)}
           />
         )}
 

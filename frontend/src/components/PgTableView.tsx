@@ -109,8 +109,13 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const { schema: schemaName, table: tableName } = useMemo(() => parseObjectName(object), [object])
 
   useEffect(() => {
-    void fetchSchema(connId, object, tabId)
-    void fetchData(connId, object, tabId)
+    void (async () => {
+      await fetchData(connId, object, tabId)
+      const current = useDataStore.getState().tabs[tabId]
+      if (!current?.dataError) {
+        await fetchSchema(connId, object, tabId)
+      }
+    })()
     setSelectedRows(new Map())
     setSorting([])
     setEditMode(false)
@@ -127,6 +132,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const isLoading = tabData?.loading ?? false
   const error = tabData?.error ?? null
   const total = tabData?.total ?? 0
+  const hasMore = tabData?.hasMore ?? false
   const draftUpdates = tabData?.draftUpdates ?? EMPTY_DRAFT_UPDATES
   const draftDeletes = tabData?.draftDeletes ?? EMPTY_DRAFT_DELETES
   const draftInserts = tabData?.draftInserts ?? EMPTY_INSERTS
@@ -202,32 +208,37 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleSortChange = useCallback(
     (column: string, direction: 'asc' | 'desc' | null) => {
+      const nextOpts = direction === null
+        ? { order_by: '', order_dir: 'asc' as const, offset: 0 }
+        : { order_by: column, order_dir: direction, offset: 0 }
       if (direction === null) {
         setSorting([])
-        setOpts(tabId, { order_by: '', order_dir: 'asc', offset: 0 })
       } else {
         setSorting([{ id: column, desc: direction === 'desc' }])
-        setOpts(tabId, { order_by: column, order_dir: direction, offset: 0 })
       }
-      void fetchData(connId, object, tabId)
+      setOpts(tabId, nextOpts)
+      void fetchData(connId, object, tabId, nextOpts)
     },
     [connId, fetchData, object, setOpts, tabId]
   )
 
   const handleNext = useCallback(() => {
-    setOpts(tabId, { offset: currentOffset + currentLimit })
-    void fetchData(connId, object, tabId)
+    const nextOpts = { offset: currentOffset + currentLimit }
+    setOpts(tabId, nextOpts)
+    void fetchData(connId, object, tabId, nextOpts)
   }, [connId, currentLimit, currentOffset, fetchData, object, setOpts, tabId])
 
   const handlePrev = useCallback(() => {
-    setOpts(tabId, { offset: Math.max(0, currentOffset - currentLimit) })
-    void fetchData(connId, object, tabId)
+    const nextOpts = { offset: Math.max(0, currentOffset - currentLimit) }
+    setOpts(tabId, nextOpts)
+    void fetchData(connId, object, tabId, nextOpts)
   }, [connId, currentLimit, currentOffset, fetchData, object, setOpts, tabId])
 
   const handlePageSizeChange = useCallback(
     (limit: number) => {
-      setOpts(tabId, { limit, offset: 0 })
-      void fetchData(connId, object, tabId)
+      const nextOpts = { limit, offset: 0 }
+      setOpts(tabId, nextOpts)
+      void fetchData(connId, object, tabId, nextOpts)
     },
     [connId, fetchData, object, setOpts, tabId]
   )
@@ -305,11 +316,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     }
 
     const timeout = window.setTimeout(() => {
-      void fetchData(connId, object, tabId)
+      void fetchData(connId, object, tabId, { filters: activeFilters, offset: 0 })
     }, FILTER_DEBOUNCE_MS)
 
     return () => window.clearTimeout(timeout)
-  }, [connId, fetchData, filterSignature, object, tabId])
+  }, [activeFilters, connId, fetchData, filterSignature, object, tabId])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -428,7 +439,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             object: tableName,
             where,
           },
-          tabId
+          tabId,
+          { reload: false }
         )
       }
       setSelectedRows(new Map())
@@ -467,7 +479,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setIsSaving(true)
     setLocalError(null)
     try {
-      await mutateBulk(connId, payload, tabId)
+      await mutateBulk(connId, payload, tabId, { reload: false })
       clearDrafts(tabId)
       setSelectedRows(new Map())
       setEditMode(false)
@@ -499,7 +511,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             object: tableName,
             data,
           },
-          tabId
+          tabId,
+          { reload: false }
         )
         setShowAddDialog(false)
         await fetchData(connId, object, tabId)
@@ -762,7 +775,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         </div>
       )}
 
-      <PaginationBar offset={currentOffset} limit={currentLimit} total={total} onPrev={handlePrev} onNext={handleNext} />
+      <PaginationBar
+        offset={currentOffset}
+        limit={currentLimit}
+        total={total}
+        hasMore={hasMore}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
 
       <ReferencedByDialog
         open={showReferencedByDialog}
