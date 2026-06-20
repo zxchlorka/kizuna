@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, type MouseEvent } from 'react'
 import {
   flexRender,
   getCoreRowModel,
@@ -37,6 +37,7 @@ export interface DataTableProps {
   getDraftValue: (rowKey: string, colName: string, fallback: unknown) => unknown
   isDirtyCell: (rowKey: string, colName: string) => boolean
   onNavigateToFk?: (colMeta: ColumnMeta, value: unknown) => void
+  onRowContextMenu?: (row: TableRow, event: MouseEvent) => void
 }
 
 const ROW_HEIGHT = 40
@@ -141,6 +142,7 @@ export function DataTable({
   getDraftValue,
   isDirtyCell,
   onNavigateToFk,
+  onRowContextMenu,
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
@@ -363,6 +365,7 @@ export function DataTable({
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
+                      onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(row.original, event) : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td
@@ -387,6 +390,7 @@ export function DataTable({
                         rowDeleted ? 'bg-destructive/5' : 'hover:bg-muted/35'
                       )}
                       style={{ height: `${ROW_HEIGHT}px` }}
+                      onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(row.original, event) : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td

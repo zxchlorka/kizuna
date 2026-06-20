@@ -16,6 +16,10 @@ import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { useLinksStore } from '@/stores/links'
+import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
+import { extractPgColumn, linkTargetLabel } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
@@ -28,7 +32,7 @@ import {
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { ColumnMeta, FKRef, FilterExpr, TableRow } from '@/types/api'
+import type { ColumnMeta, FKRef, FilterExpr, LinkRecord, TableRow } from '@/types/api'
 import type { RowIdentity } from '@/types/table'
 
 interface PgTableViewProps {
@@ -93,8 +97,13 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const clearObjectTabFilterState = useWorkspaceStore((state) => state.clearObjectTabFilterState)
   const goBackFromTab = useWorkspaceStore((state) => state.goBackFromTab)
   const pushToast = useToastStore((state) => state.push)
+  const links = useLinksStore((state) => state.links)
+  const fetchLinks = useLinksStore((state) => state.fetch)
+  const linksFor = useLinksStore((state) => state.linksFor)
+  const openLinkTarget = useOpenLinkTarget()
 
   const [sorting, setSorting] = useState<SortingState>([])
+  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; row: TableRow } | null>(null)
   const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -107,6 +116,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const skipFirstFilterFetch = useRef(true)
 
   const { schema: schemaName, table: tableName } = useMemo(() => parseObjectName(object), [object])
+
+  useEffect(() => {
+    void fetchLinks().catch(() => undefined)
+  }, [fetchLinks])
+
+  const tableLinks = useMemo(
+    () => linksFor(connId, object).filter((link) => link.source_kind === 'postgres'),
+    [linksFor, links, connId, object]
+  )
 
   useEffect(() => {
     void (async () => {
@@ -746,6 +764,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             getDraftValue={getDraftValue}
             isDirtyCell={isDirtyCell}
             onNavigateToFk={handleNavigateToFk}
+            onRowContextMenu={(row, event) => {
+              event.preventDefault()
+              setLinkMenu({ x: event.clientX, y: event.clientY, row })
+            }}
           />
         )}
       </div>
@@ -858,6 +880,30 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_column' : null)}
         onConfirm={(target) => submitDangerousDDL('drop_column', target)}
       />
+
+      {linkMenu && (
+        <FloatingMenu x={linkMenu.x} y={linkMenu.y} onClose={() => setLinkMenu(null)}>
+          <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
+          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
+          {tableLinks.map((link: LinkRecord) => {
+            const value = extractPgColumn(columns, linkMenu.row, link.source_field ?? '')
+            return (
+              <FloatingMenuItem
+                key={link.id}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) openLinkTarget(link, value)
+                  setLinkMenu(null)
+                }}
+              >
+                {value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          <FloatingMenuSeparator />
+          <FloatingMenuItem disabled>+ Create link… (UI in v2 dialog)</FloatingMenuItem>
+        </FloatingMenu>
+      )}
     </div>
   )
 }
