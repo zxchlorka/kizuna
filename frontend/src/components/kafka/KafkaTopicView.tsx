@@ -1,15 +1,24 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { Layers, Lock, MessagesSquare, RefreshCw, Send, Users } from 'lucide-react'
 import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
 import { KafkaPartitionsTable } from '@/components/kafka/KafkaPartitionsTable'
 import { KafkaProduceModal } from '@/components/kafka/KafkaProduceModal'
+import { CreateLinkDialog } from '@/components/kafka/CreateLinkDialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
+import { buildRedisKey } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
+import { useDataStore } from '@/stores/data'
 import { useKafkaStore } from '@/stores/kafka'
+import { useLinksStore } from '@/stores/links'
+import { useToastStore } from '@/stores/toast'
+import { useWorkspaceStore } from '@/stores/workspace'
+import type { KafkaMessageRow } from '@/stores/kafka'
+import type { LinkRecord } from '@/types/api'
 
 interface KafkaTopicViewProps {
   tabId: string
@@ -38,12 +47,26 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
   const setSearch = useKafkaStore((state) => state.setSearch)
   const clearSearch = useKafkaStore((state) => state.clearSearch)
+  const navigate = useNavigate()
+  const openTab = useWorkspaceStore((state) => state.openTab)
+  const openTabWithFilter = useWorkspaceStore((state) => state.openTabWithFilter)
+  const resolveObjectType = useDataStore((state) => state.resolveObjectType)
+  const fetchLinks = useLinksStore((state) => state.fetch)
+  const linksFor = useLinksStore((state) => state.linksFor)
+  const links = useLinksStore((state) => state.links)
+  const pushToast = useToastStore((state) => state.push)
+  const [createLinkOpen, setCreateLinkOpen] = useState(false)
+  const [createLinkFields, setCreateLinkFields] = useState<string[]>([])
 
   useEffect(() => {
     void fetchMessages(connId, topic, tabId).finally(() => {
       void fetchTopicChildren(connId, topic, tabId)
     })
   }, [connId, fetchMessages, fetchTopicChildren, tabId, topic])
+
+  useEffect(() => {
+    void fetchLinks().catch(() => undefined)
+  }, [fetchLinks])
 
   const partitions = useMemo(
     () => (tab?.children ?? []).filter((child) => child.type === 'kafka_partition'),
@@ -61,6 +84,44 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const refreshAll = () => {
     void fetchTopicChildren(connId, topic, tabId)
     void fetchMessages(connId, topic, tabId)
+  }
+
+  const topicLinks = useMemo(() => linksFor(connId, topic), [linksFor, links, connId, topic])
+
+  const handleOpenLink = (link: LinkRecord, value: string) => {
+    if (link.target_kind === 'redis') {
+      const key = buildRedisKey(link.key_pattern ?? '', value)
+      void resolveObjectType(link.target_conn_id, key)
+        .then((objectType) => {
+          openTab(link.target_conn_id, key, objectType)
+          navigate(`/connections/${link.target_conn_id}`)
+        })
+        .catch(() => {
+          pushToast({ tone: 'error', title: 'Not found', message: `Key ${key} not found` })
+        })
+      return
+    }
+    openTabWithFilter(
+      link.target_conn_id,
+      link.table ?? '',
+      { column: link.column ?? '', op: 'eq', value },
+      'table'
+    )
+    navigate(`/connections/${link.target_conn_id}`)
+  }
+
+  const handleCreateLink = (message: KafkaMessageRow) => {
+    let fields: string[] = []
+    try {
+      const parsed = JSON.parse(message.value)
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        fields = Object.keys(parsed)
+      }
+    } catch {
+      fields = []
+    }
+    setCreateLinkFields(fields)
+    setCreateLinkOpen(true)
   }
 
   return (
@@ -151,6 +212,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
             onSearch={(field, value) => void setSearch(connId, topic, tabId, field, value)}
             onClearSearch={() => void clearSearch(connId, topic, tabId)}
+            links={topicLinks}
+            onOpenLink={handleOpenLink}
+            onCreateLink={handleCreateLink}
           />
         )}
 
@@ -179,6 +243,14 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
           void fetchTopicChildren(connId, topic, tabId)
           void fetchMessages(connId, topic, tabId)
         }}
+      />
+
+      <CreateLinkDialog
+        open={createLinkOpen}
+        sourceConnId={connId}
+        topic={topic}
+        fieldOptions={createLinkFields}
+        onOpenChange={setCreateLinkOpen}
       />
     </div>
   )

@@ -1,4 +1,4 @@
-import { Fragment, useState, type FormEvent } from 'react'
+import { Fragment, useState, type FormEvent, type MouseEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
@@ -6,8 +6,11 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { extractMessageField } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import type { KafkaMessageRow } from '@/stores/kafka'
+import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
   messages: KafkaMessageRow[]
@@ -24,6 +27,9 @@ interface KafkaMessageBrowserProps {
   onLoadOlder: () => void
   onSearch: (field: string, value: string) => void
   onClearSearch: () => void
+  links: LinkRecord[]
+  onOpenLink: (link: LinkRecord, value: string) => void
+  onCreateLink: (message: KafkaMessageRow) => void
 }
 
 const allPartitions = '__all__'
@@ -48,10 +54,19 @@ export function KafkaMessageBrowser({
   onLoadOlder,
   onSearch,
   onClearSearch,
+  links,
+  onOpenLink,
+  onCreateLink,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
+  const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
+
+  const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
+    event.preventDefault()
+    setMenu({ x: event.clientX, y: event.clientY, message })
+  }
 
   const submitSearch = (event: FormEvent) => {
     event.preventDefault()
@@ -167,6 +182,7 @@ export function KafkaMessageBrowser({
                     <tr
                       className="cursor-pointer transition-colors hover:bg-muted/30"
                       onClick={() => setExpanded(isExpanded ? null : rowKey)}
+                      onContextMenu={(event) => openMenu(event, message)}
                     >
                       <td className="px-2 py-2 text-muted-foreground">
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
@@ -215,6 +231,43 @@ export function KafkaMessageBrowser({
               ? 'Loading older messages…'
               : 'Load older messages'}
         </Button>
+      )}
+
+      {menu && (
+        <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
+          <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
+          {links.length === 0 && <FloatingMenuItem disabled>No links for this topic</FloatingMenuItem>}
+          {links.map((link) => {
+            const value = extractMessageField(menu.message.value, link.field)
+            const targetLabel =
+              link.target_kind === 'redis'
+                ? `Redis: ${link.field} → ${(link.key_pattern ?? '').replace('*', value ?? '∅')}`
+                : `Postgres: ${link.field} → ${link.table}.${link.column}`
+            return (
+              <FloatingMenuItem
+                key={link.id}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) {
+                    onOpenLink(link, value)
+                  }
+                  setMenu(null)
+                }}
+              >
+                {value === null ? `${targetLabel} (field missing)` : targetLabel}
+              </FloatingMenuItem>
+            )
+          })}
+          <FloatingMenuSeparator />
+          <FloatingMenuItem
+            onClick={() => {
+              onCreateLink(menu.message)
+              setMenu(null)
+            }}
+          >
+            + Create link…
+          </FloatingMenuItem>
+        </FloatingMenu>
       )}
     </div>
   )
