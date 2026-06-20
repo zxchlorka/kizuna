@@ -58,6 +58,7 @@ export type TreeVisibilityKey = keyof TreeVisibility
 interface WorkspaceStore {
   tabs: WorkspaceTab[]
   activeTabId: string | null
+  openConnectionIds: string[]
   navigationHistory: NavigationEntry[]
   treeItems: Record<string, ObjectItem[]>
   treeCursors: Record<string, string>
@@ -87,6 +88,8 @@ interface WorkspaceStore {
   openRedisCliTab: (connId: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
+  openConnection: (connId: string) => void
+  closeConnection: (connId: string) => void
 }
 
 function buildFilterSignature(filters: FilterExpr[]): string {
@@ -141,6 +144,7 @@ function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  openConnectionIds: [],
   navigationHistory: [],
   treeItems: {},
   treeCursors: {},
@@ -552,5 +556,31 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   setActiveTab: (tabId: string) => {
     set({ activeTabId: tabId })
+  },
+
+  openConnection: (connId: string) => {
+    set((state) =>
+      state.openConnectionIds.includes(connId)
+        ? state
+        : { openConnectionIds: [...state.openConnectionIds, connId] }
+    )
+  },
+
+  closeConnection: (connId: string) => {
+    set((state) => {
+      const remainingTabs = state.tabs.filter((tab) => tab.connId !== connId)
+      const activeStillOpen = remainingTabs.some((tab) => tab.id === state.activeTabId)
+      return {
+        openConnectionIds: state.openConnectionIds.filter((id) => id !== connId),
+        tabs: remainingTabs,
+        activeTabId: activeStillOpen ? state.activeTabId : null,
+        navigationHistory: state.navigationHistory.filter(
+          (entry) =>
+            !state.tabs.some(
+              (tab) => tab.connId === connId && (tab.id === entry.fromTabId || tab.id === entry.toTabId)
+            )
+        ),
+      }
+    })
   },
 }))
