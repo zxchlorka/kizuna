@@ -111,3 +111,25 @@ func TestLinkConfigCRUDAndPersistence(t *testing.T) {
 
 	_ = os.Getenv("HOME")
 }
+
+func TestLinkBackwardCompatAndScopeMatch(t *testing.T) {
+	cfg := &AppConfig{
+		Links: []LinkConfig{
+			{ID: "v1", SourceConnID: "k1", Topic: "cookies", Field: "user_id", TargetConnID: "r1", TargetKind: "redis", KeyPattern: "w:*"},
+			{ID: "v2", SourceConnID: "r1", SourceKind: "redis", SourceScope: "profile:*", SourceExtract: "value_field", SourceField: "user_id", TargetConnID: "k1", TargetKind: "kafka", TargetTopic: "cookies", TargetField: "user_id"},
+		},
+	}
+
+	kafkaLinks := cfg.GetLinksFor("k1", "cookies")
+	if len(kafkaLinks) != 1 || kafkaLinks[0].SourceKind != "kafka" || kafkaLinks[0].SourceScope != "cookies" || kafkaLinks[0].SourceField != "user_id" {
+		t.Fatalf("v1 link not normalized to kafka source: %#v", kafkaLinks)
+	}
+
+	redisLinks := cfg.GetLinksFor("r1", "profile:123123")
+	if len(redisLinks) != 1 || redisLinks[0].ID != "v2" {
+		t.Fatalf("expected redis pattern scope match, got %#v", redisLinks)
+	}
+	if got := cfg.GetLinksFor("r1", "other:1"); len(got) != 0 {
+		t.Fatalf("expected no match for non-matching key, got %#v", got)
+	}
+}

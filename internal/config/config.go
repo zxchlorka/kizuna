@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 )
 
@@ -24,16 +25,25 @@ type ConnectionConfig struct {
 }
 
 type LinkConfig struct {
-	ID           string `json:"id"`
-	Name         string `json:"name,omitempty"`
-	SourceConnID string `json:"source_conn_id"`
-	Topic        string `json:"topic"`
-	Field        string `json:"field"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	// SOURCE
+	SourceConnID  string `json:"source_conn_id"`
+	SourceKind    string `json:"source_kind,omitempty"`    // "kafka" | "redis" | "postgres"
+	SourceScope   string `json:"source_scope,omitempty"`   // kafka: topic; postgres: table; redis: key_pattern
+	SourceField   string `json:"source_field,omitempty"`   // kafka: json-path; postgres: column; redis: hash-field/json-path
+	SourceExtract string `json:"source_extract,omitempty"` // redis only: value_field|key_capture|string_value
+	// TARGET
 	TargetConnID string `json:"target_conn_id"`
-	TargetKind   string `json:"target_kind"` // "redis" | "postgres"
+	TargetKind   string `json:"target_kind"` // "kafka" | "redis" | "postgres"
+	TargetTopic  string `json:"target_topic,omitempty"`
+	TargetField  string `json:"target_field,omitempty"`
 	KeyPattern   string `json:"key_pattern,omitempty"`
 	Table        string `json:"table,omitempty"`
 	Column       string `json:"column,omitempty"`
+	// Deprecated v1 fields kept for backward-compat reads of older config.json.
+	Topic string `json:"topic,omitempty"`
+	Field string `json:"field,omitempty"`
 }
 
 type AppConfig struct {
@@ -146,6 +156,39 @@ func cloneLink(link LinkConfig) LinkConfig {
 	return link // LinkConfig has only value fields; a copy is a deep clone
 }
 
+// normalizeLink upgrades a v1 (kafka-only) link shape to the v2 generalized
+// fields so older config.json files keep working.
+func normalizeLink(link LinkConfig) LinkConfig {
+	if link.SourceKind == "" {
+		link.SourceKind = "kafka"
+		if link.SourceScope == "" {
+			link.SourceScope = link.Topic
+		}
+		if link.SourceField == "" {
+			link.SourceField = link.Field
+		}
+	}
+	return link
+}
+
+func linkScopeMatches(link LinkConfig, object string) bool {
+	if link.SourceKind == "redis" {
+		return redisPatternMatches(link.SourceScope, object)
+	}
+	return link.SourceScope == object
+}
+
+// redisPatternMatches matches a key against a "prefix*suffix" pattern (one '*').
+func redisPatternMatches(pattern, key string) bool {
+	star := strings.Index(pattern, "*")
+	if star < 0 {
+		return pattern == key
+	}
+	prefix := pattern[:star]
+	suffix := pattern[star+1:]
+	return len(key) >= len(prefix)+len(suffix) && strings.HasPrefix(key, prefix) && strings.HasSuffix(key, suffix)
+}
+
 func (c *AppConfig) AddLink(link LinkConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -169,18 +212,19 @@ func (c *AppConfig) GetLinks() []LinkConfig {
 	defer c.mu.RUnlock()
 	result := make([]LinkConfig, len(c.Links))
 	for i, link := range c.Links {
-		result[i] = cloneLink(link)
+		result[i] = normalizeLink(cloneLink(link))
 	}
 	return result
 }
 
-func (c *AppConfig) GetLinksFor(sourceConnID, topic string) []LinkConfig {
+func (c *AppConfig) GetLinksFor(sourceConnID, scope string) []LinkConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	result := make([]LinkConfig, 0)
 	for _, link := range c.Links {
-		if link.SourceConnID == sourceConnID && link.Topic == topic {
-			result = append(result, cloneLink(link))
+		normalized := normalizeLink(cloneLink(link))
+		if normalized.SourceConnID == sourceConnID && linkScopeMatches(normalized, scope) {
+			result = append(result, normalized)
 		}
 	}
 	return result
