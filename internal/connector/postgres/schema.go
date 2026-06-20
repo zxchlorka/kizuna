@@ -9,7 +9,11 @@ import (
 	"github.com/qsnake66/infraview/internal/connector"
 )
 
-const objectCacheTTL = 15 * time.Second
+const (
+	objectCacheTTL    = 15 * time.Second
+	schemaCacheTTL    = 45 * time.Second
+	maxSchemaCacheLen = 128
+)
 
 func (p *PostgresConnector) ListObjects(ctx context.Context, path string) ([]connector.Object, error) {
 	if path == "" {
@@ -127,6 +131,13 @@ func (p *PostgresConnector) invalidateObjectCache() {
 	p.childObjectCache = make(map[string]objectCacheBucket)
 }
 
+func (p *PostgresConnector) invalidateSchemaCache() {
+	p.schemaCacheMu.Lock()
+	defer p.schemaCacheMu.Unlock()
+
+	p.schemaCache = make(map[string]schemaCacheBucket)
+}
+
 func (p *PostgresConnector) cachedRootObjects() ([]connector.Object, bool) {
 	p.objectCacheMu.RLock()
 	defer p.objectCacheMu.RUnlock()
@@ -175,6 +186,19 @@ func cloneObjects(items []connector.Object) []connector.Object {
 }
 
 func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*connector.Schema, error) {
+	if schema, ok := p.cachedSchema(object); ok {
+		return schema, nil
+	}
+
+	schema, err := p.loadSchema(ctx, object)
+	if err != nil {
+		return nil, err
+	}
+	p.storeSchema(object, schema)
+	return cloneSchema(schema), nil
+}
+
+func (p *PostgresConnector) loadSchema(ctx context.Context, object string) (*connector.Schema, error) {
 	schema, table, err := parseSchemaTable(object)
 	if err != nil {
 		return nil, err
@@ -333,6 +357,69 @@ func (p *PostgresConnector) GetSchema(ctx context.Context, object string) (*conn
 	}
 
 	return &connector.Schema{Columns: columns, ReferencedBy: referencedBy}, nil
+}
+
+func (p *PostgresConnector) cachedSchema(object string) (*connector.Schema, bool) {
+	p.schemaCacheMu.RLock()
+	defer p.schemaCacheMu.RUnlock()
+
+	bucket, ok := p.schemaCache[object]
+	if !ok || time.Now().After(bucket.expires) || bucket.schema == nil {
+		return nil, false
+	}
+	return cloneSchema(bucket.schema), true
+}
+
+func (p *PostgresConnector) storeSchema(object string, schema *connector.Schema) {
+	p.schemaCacheMu.Lock()
+	defer p.schemaCacheMu.Unlock()
+
+	if p.schemaCache == nil {
+		p.schemaCache = make(map[string]schemaCacheBucket)
+	}
+	if len(p.schemaCache) >= maxSchemaCacheLen {
+		now := time.Now()
+		for key, bucket := range p.schemaCache {
+			if now.After(bucket.expires) {
+				delete(p.schemaCache, key)
+			}
+		}
+	}
+	if len(p.schemaCache) >= maxSchemaCacheLen {
+		var oldestKey string
+		var oldest time.Time
+		for key, bucket := range p.schemaCache {
+			if oldestKey == "" || bucket.expires.Before(oldest) {
+				oldestKey = key
+				oldest = bucket.expires
+			}
+		}
+		delete(p.schemaCache, oldestKey)
+	}
+
+	p.schemaCache[object] = schemaCacheBucket{
+		schema:  cloneSchema(schema),
+		expires: time.Now().Add(schemaCacheTTL),
+	}
+}
+
+func cloneSchema(schema *connector.Schema) *connector.Schema {
+	if schema == nil {
+		return nil
+	}
+
+	clone := &connector.Schema{
+		ObjectType:   schema.ObjectType,
+		Columns:      append([]connector.ColumnMeta(nil), schema.Columns...),
+		ReferencedBy: append([]connector.FKRef(nil), schema.ReferencedBy...),
+	}
+	if schema.Meta != nil {
+		clone.Meta = make(map[string]any, len(schema.Meta))
+		for key, value := range schema.Meta {
+			clone.Meta[key] = value
+		}
+	}
+	return clone
 }
 
 // parseSchemaTable splits "schema.table" into schema and table parts.

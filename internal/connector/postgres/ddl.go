@@ -61,6 +61,7 @@ func (p *PostgresConnector) DDL(ctx context.Context, op connector.DDLOp) error {
 		return normalizePostgresError(err)
 	}
 	p.invalidateObjectCache()
+	p.invalidateSchemaCache()
 	p.invalidateCompletionCache()
 	return nil
 }

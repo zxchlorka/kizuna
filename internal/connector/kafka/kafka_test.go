@@ -186,6 +186,72 @@ func TestParseBeforeOffsets(t *testing.T) {
 	}
 }
 
+func TestParseMatchFilter(t *testing.T) {
+	t.Parallel()
+
+	field, value := parseMatchFilter([]connector.FilterExpr{
+		{Column: "match_field", Value: " user.id "},
+		{Column: "match_value", Value: "42"},
+	})
+	if field != "user.id" || value != "42" {
+		t.Fatalf("unexpected match filter: field=%q value=%q", field, value)
+	}
+
+	if field, _ := parseMatchFilter(nil); field != "" {
+		t.Fatalf("expected empty field for no filter, got %q", field)
+	}
+}
+
+func TestMessageMatchesField(t *testing.T) {
+	t.Parallel()
+
+	jsonRow := func(value string) map[string]any {
+		return map[string]any{"format": "json", "value": value}
+	}
+
+	tests := []struct {
+		name  string
+		row   map[string]any
+		field string
+		want  string
+		match bool
+	}{
+		{name: "top-level number", row: jsonRow(`{"product_id":123,"k":1}`), field: "product_id", want: "123", match: true},
+		{name: "number mismatch", row: jsonRow(`{"product_id":123}`), field: "product_id", want: "124", match: false},
+		{name: "dot path", row: jsonRow(`{"user":{"id":"u-7"}}`), field: "user.id", want: "u-7", match: true},
+		{name: "missing path", row: jsonRow(`{"user":{"id":"u-7"}}`), field: "user.name", want: "x", match: false},
+		{name: "string value", row: jsonRow(`{"status":"paid"}`), field: "status", want: "paid", match: true},
+		{name: "bool value", row: jsonRow(`{"ok":true}`), field: "ok", want: "true", match: true},
+		{name: "nested object never matches", row: jsonRow(`{"user":{"id":1}}`), field: "user", want: "anything", match: false},
+		{name: "non-json never matches", row: map[string]any{"format": "text", "value": "product_id=123"}, field: "product_id", want: "123", match: false},
+		{name: "empty field matches all", row: jsonRow(`{"a":1}`), field: "", want: "", match: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := messageMatchesField(tc.row, tc.field, tc.want); got != tc.match {
+				t.Fatalf("messageMatchesField = %v, want %v", got, tc.match)
+			}
+		})
+	}
+}
+
+func TestLowestConsumedOffsets(t *testing.T) {
+	t.Parallel()
+
+	rows := []map[string]any{
+		{"partition": int32(0), "offset": int64(50)},
+		{"partition": int32(0), "offset": int64(20)},
+		{"partition": int32(1), "offset": int64(99)},
+	}
+	reached := lowestConsumedOffsets(rows)
+	if reached[0] != 20 || reached[1] != 99 {
+		t.Fatalf("unexpected reached offsets: %#v", reached)
+	}
+}
+
 func TestDeserializePayload(t *testing.T) {
 	t.Parallel()
 

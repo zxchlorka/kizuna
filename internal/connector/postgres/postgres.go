@@ -37,6 +37,9 @@ type PostgresConnector struct {
 	objectCacheMu    sync.RWMutex
 	rootObjectCache  objectCacheBucket
 	childObjectCache map[string]objectCacheBucket
+
+	schemaCacheMu sync.RWMutex
+	schemaCache   map[string]schemaCacheBucket
 }
 
 type completionCacheItem struct {
@@ -51,6 +54,11 @@ type completionCacheBucket struct {
 
 type objectCacheBucket struct {
 	items   []connector.Object
+	expires time.Time
+}
+
+type schemaCacheBucket struct {
+	schema  *connector.Schema
 	expires time.Time
 }
 
@@ -92,6 +100,7 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 		config:           cfg,
 		columnCache:      make(map[string]completionCacheBucket),
 		childObjectCache: make(map[string]objectCacheBucket),
+		schemaCache:      make(map[string]schemaCacheBucket),
 	}, nil
 }
 

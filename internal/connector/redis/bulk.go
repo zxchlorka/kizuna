@@ -152,6 +152,7 @@ func scanPattern(ctx context.Context, client redisScanClient, pattern string, on
 func (c *RedisConnector) deleteRedisKeys(ctx context.Context, keys []string) (int64, error) {
 	count, err := c.client.Del(ctx, keys...).Result()
 	if err == nil {
+		c.invalidateKeyMeta(keys...)
 		return count, nil
 	}
 	if !strings.Contains(strings.ToLower(err.Error()), "crossslot") {
@@ -166,5 +167,6 @@ func (c *RedisConnector) deleteRedisKeys(ctx context.Context, keys []string) (in
 		}
 		total += count
 	}
+	c.invalidateKeyMeta(keys...)
 	return total, nil
 }

@@ -17,6 +17,9 @@ const (
 	defaultRedisLimit = 100
 	maxRedisLimit     = 1000
 	maxScanKeys       = 10000
+
+	redisMetaCacheTTL    = 10 * time.Second
+	maxRedisMetaCacheLen = 512
 )
 
 func redisTypeOrNotFound(ctx context.Context, c *RedisConnector, key string) (string, error) {
@@ -52,6 +55,87 @@ func redisTTLSeconds(ctx context.Context, c *RedisConnector, key string) (int64,
 		return int64(ttl), nil
 	}
 	return int64(ttl / time.Second), nil
+}
+
+func (c *RedisConnector) getKeyMeta(ctx context.Context, key string) (redisKeyMeta, error) {
+	if meta, ok := c.cachedKeyMeta(key, false); ok {
+		return meta, nil
+	}
+
+	keyType, err := redisTypeOrNotFound(ctx, c, key)
+	if err != nil {
+		return redisKeyMeta{}, err
+	}
+	ttl, err := redisTTLSeconds(ctx, c, key)
+	if err != nil {
+		return redisKeyMeta{}, err
+	}
+
+	meta := redisKeyMeta{keyType: keyType, ttl: ttl}
+	c.storeKeyMeta(key, meta)
+	return meta, nil
+}
+
+func (c *RedisConnector) cachedKeyMeta(key string, requireLength bool) (redisKeyMeta, bool) {
+	c.metaMu.RLock()
+	defer c.metaMu.RUnlock()
+
+	bucket, ok := c.keyMetaCache[key]
+	if !ok || time.Now().After(bucket.expires) {
+		return redisKeyMeta{}, false
+	}
+	if requireLength && bucket.meta.length == nil {
+		return redisKeyMeta{}, false
+	}
+	return bucket.meta, true
+}
+
+func (c *RedisConnector) storeKeyMeta(key string, meta redisKeyMeta) {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+
+	if c.keyMetaCache == nil {
+		c.keyMetaCache = make(map[string]redisKeyMetaBucket)
+	}
+	if existing, ok := c.keyMetaCache[key]; ok && meta.length == nil {
+		meta.length = existing.meta.length
+	}
+	if len(c.keyMetaCache) >= maxRedisMetaCacheLen {
+		now := time.Now()
+		for cacheKey, bucket := range c.keyMetaCache {
+			if now.After(bucket.expires) {
+				delete(c.keyMetaCache, cacheKey)
+			}
+		}
+	}
+	if len(c.keyMetaCache) >= maxRedisMetaCacheLen {
+		for cacheKey := range c.keyMetaCache {
+			delete(c.keyMetaCache, cacheKey)
+			break
+		}
+	}
+	c.keyMetaCache[key] = redisKeyMetaBucket{
+		meta:    meta,
+		expires: time.Now().Add(redisMetaCacheTTL),
+	}
+}
+
+func (c *RedisConnector) rememberKeyLength(key string, keyType string, ttl int64, length int64) {
+	value := length
+	c.storeKeyMeta(key, redisKeyMeta{
+		keyType: keyType,
+		ttl:     ttl,
+		length:  &value,
+	})
+}
+
+func (c *RedisConnector) invalidateKeyMeta(keys ...string) {
+	c.metaMu.Lock()
+	defer c.metaMu.Unlock()
+
+	for _, key := range keys {
+		delete(c.keyMetaCache, key)
+	}
 }
 
 func redisDataResult(

@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
+import { RedisKeyLookup } from '@/components/redis/RedisKeyLookup'
+import { EmptyState } from '@/components/EmptyState'
+import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { SchemaFilterButton } from '@/components/Sidebar/SchemaFilterButton'
 import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
 import { Button } from '@/components/ui/button'
@@ -26,6 +29,8 @@ export function Sidebar({ connId }: SidebarProps) {
   const [createKeyOpen, setCreateKeyOpen] = useState(false)
   const [createKeySaving, setCreateKeySaving] = useState(false)
   const connections = useConnectionStore((state) => state.connections)
+  const connectionsLoading = useConnectionStore((state) => state.loading)
+  const connectionsLoadedOnce = useConnectionStore((state) => state.loadedOnce)
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const pushToast = useToastStore((state) => state.push)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
@@ -203,7 +208,18 @@ export function Sidebar({ connId }: SidebarProps) {
       {/* Tree */}
       {!collapsed && (
         <div className="flex-1 overflow-auto p-2">
-          {isRedisConnection ? (
+          {!currentConnection ? (
+            connectionsLoading || !connectionsLoadedOnce ? (
+              <LoadingSkeleton variant="tree" />
+            ) : (
+              <EmptyState
+                variant="no_tables"
+                compact
+                title="Connection not found"
+                description="Go back to the connection list and choose an existing connection."
+              />
+            )
+          ) : isRedisConnection ? (
             <div className="mb-3 rounded-sm border border-border bg-muted/10 p-2">
               <div className="flex items-center justify-between gap-2 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
                 <div className="flex items-center gap-2">
@@ -286,8 +302,9 @@ export function Sidebar({ connId }: SidebarProps) {
               </div>
             </div>
           )}
-          <ObjectTree connId={connId} />
-          {!isRedisConnection && (
+          {currentConnection && isRedisConnection && <RedisKeyLookup connId={connId} />}
+          {currentConnection && <ObjectTree connId={connId} />}
+          {currentConnection && !isRedisConnection && (
             <SchemaFilterDialog
               open={schemaDialogOpen}
               saving={schemaFilterSaving}
@@ -297,7 +314,7 @@ export function Sidebar({ connId }: SidebarProps) {
               onSave={handleSaveVisibleSchemas}
             />
           )}
-          {isRedisConnection && (
+          {currentConnection && isRedisConnection && (
             <CreateKeyDialog
               open={createKeyOpen}
               saving={createKeySaving}

@@ -23,12 +23,14 @@ func (c *RedisConnector) Mutate(ctx context.Context, op connector.MutateOp) (*co
 	if op.Where == nil {
 		op.Where = map[string]any{}
 	}
+	originalObject := op.Object
 
 	if op.Type == "insert" {
 		if createType := redisCreateType(op.Data); createType != "" {
 			if err := c.createKey(ctx, op.Object, createType, op.Data); err != nil {
 				return nil, err
 			}
+			c.invalidateKeyMeta(op.Object)
 			return &connector.MutateResult{RowsAffected: 1}, nil
 		}
 	}
@@ -72,6 +74,7 @@ func (c *RedisConnector) Mutate(ctx context.Context, op connector.MutateOp) (*co
 		}
 	}
 
+	c.invalidateKeyMeta(originalObject, op.Object)
 	return &connector.MutateResult{RowsAffected: rowsAffected}, nil
 }
 

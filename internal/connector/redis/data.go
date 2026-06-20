@@ -15,15 +15,12 @@ import (
 func (c *RedisConnector) GetData(ctx context.Context, object string, opts connector.DataOpts) (*connector.DataResult, error) {
 	opts = normalizeRedisOpts(opts)
 
-	keyType, err := redisTypeOrNotFound(ctx, c, object)
+	keyMeta, err := c.getKeyMeta(ctx, object)
 	if err != nil {
 		return nil, err
 	}
-
-	ttl, err := redisTTLSeconds(ctx, c, object)
-	if err != nil {
-		return nil, err
-	}
+	keyType := keyMeta.keyType
+	ttl := keyMeta.ttl
 
 	switch keyType {
 	case "string":
@@ -71,6 +68,7 @@ func (c *RedisConnector) getHashData(ctx context.Context, key string, ttl int64,
 	if err != nil {
 		return nil, normalizeRedisError(err)
 	}
+	c.rememberKeyLength(key, "hash", ttl, total)
 
 	// HSCAN with a cap instead of HGETALL: a multi-million-field hash must not
 	// be shipped (and held in memory) wholesale.
@@ -142,6 +140,7 @@ func (c *RedisConnector) getListData(ctx context.Context, key string, ttl int64,
 	if err != nil {
 		return nil, normalizeRedisError(err)
 	}
+	c.rememberKeyLength(key, "list", ttl, total)
 
 	values, err := c.client.LRange(ctx, key, int64(opts.Offset), int64(opts.Offset+opts.Limit-1)).Result()
 	if err != nil {
@@ -175,6 +174,7 @@ func (c *RedisConnector) getSetData(ctx context.Context, key string, ttl int64, 
 	if err != nil {
 		return nil, normalizeRedisError(err)
 	}
+	c.rememberKeyLength(key, "set", ttl, total)
 
 	match := redisContainsPattern(opts.Filters, "member")
 	members, truncated, err := c.scanSetMembers(ctx, key, match)
@@ -210,6 +210,7 @@ func (c *RedisConnector) getZSetData(ctx context.Context, key string, ttl int64,
 	if err != nil {
 		return nil, normalizeRedisError(err)
 	}
+	c.rememberKeyLength(key, "zset", ttl, total)
 
 	var values []goredis.Z
 	if opts.OrderDir == "desc" {
@@ -259,6 +260,7 @@ func (c *RedisConnector) getStreamData(ctx context.Context, key string, ttl int6
 	if err != nil {
 		return nil, normalizeRedisError(err)
 	}
+	c.rememberKeyLength(key, "stream", ttl, total)
 
 	afterID := redisFilterValue(opts.Filters, "after_id")
 	beforeID := redisFilterValue(opts.Filters, "before_id")

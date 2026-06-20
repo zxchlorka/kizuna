@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { RedisResultTable } from '@/components/redis/RedisCli/RedisResultTable'
 import type { ExecResult } from '@/types/api'
 
 interface RedisResultFormatterProps {
@@ -35,41 +36,10 @@ export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
     return <div className="font-mono text-sm text-destructive">(error) {result.error}</div>
   }
 
-  if (result.columns.length === 2 && result.columns[0] === 'field') {
-    return (
-      <div className="overflow-x-auto rounded-sm border border-border/70">
-        <table className="min-w-[260px] divide-y divide-border text-sm">
-          <thead className="bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-            <tr>
-              <th className="px-3 py-2">Field</th>
-              <th className="px-3 py-2">Value</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-border/60">
-            {result.rows.map((row, index) => (
-              <tr key={index}>
-                <td className="px-3 py-2 font-mono text-xs font-medium text-accent">{String(row[0] ?? '')}</td>
-                <td className="px-3 py-2 font-mono text-xs text-foreground">{String(row[1] ?? '')}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    )
-  }
-
-  if (result.columns.length === 2 && result.columns[0] === 'index') {
-    return (
-      <div className="space-y-1 font-mono text-sm">
-        {result.rows.length === 0 ? <div className="text-muted-foreground">(empty)</div> : null}
-        {result.rows.map((row, index) => (
-          <div key={index} className="text-foreground">
-            <span className="mr-2 select-none text-accent/70 tabular-nums">{String(row[0] ?? index + 1)})</span>
-            {String(row[1] ?? '')}
-          </div>
-        ))}
-      </div>
-    )
+  // Any reply with two or more columns (hash field/value, zset member/score,
+  // list index/value, …) renders as one labelled, expandable table.
+  if (result.columns.length >= 2) {
+    return <RedisResultTable result={result} />
   }
 
   const scalar = result.rows[0]?.[0]
