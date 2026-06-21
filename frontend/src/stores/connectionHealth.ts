@@ -22,6 +22,10 @@ interface ConnectionHealthStore {
 
 const STORAGE_KEY = 'infraview-connection-health'
 const HEALTH_TTL_MS = 60_000
+// Cap concurrent health checks so a large connection list refreshes fast without
+// dialing every datasource at once. Each check is bounded by fetchWithTimeout on
+// the client and dial/ping deadlines on the server, so workers never hang.
+const HEALTH_REFRESH_CONCURRENCY = 8
 const pendingChecks = new Map<string, Promise<ConnectionHealthEntry>>()
 
 function defaultEntry(): ConnectionHealthEntry {
@@ -184,16 +188,25 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
   },
 
   refreshStale: async (ids: string[]) => {
-    for (const id of ids) {
+    const stale = ids.filter((id) => {
       const entry = get().entries[id]
-      if (isFresh(entry) || entry?.checking) {
-        continue
-      }
-      try {
-        await get().refresh(id)
-      } catch {
-        // Keep background refresh best-effort. The card will render the error state.
+      return !isFresh(entry) && !entry?.checking
+    })
+
+    let cursor = 0
+    const worker = async () => {
+      // `cursor++` is synchronous, so each worker claims a unique index — no race.
+      while (cursor < stale.length) {
+        const id = stale[cursor++]
+        try {
+          await get().refresh(id)
+        } catch {
+          // Keep background refresh best-effort. The card will render the error state.
+        }
       }
     }
+
+    const workers = Array.from({ length: Math.min(HEALTH_REFRESH_CONCURRENCY, stale.length) }, () => worker())
+    await Promise.all(workers)
   },
 }))
