@@ -20,7 +20,8 @@ import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { useLinksStore } from '@/stores/links'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { extractPgColumn, linkTargetLabel } from '@/lib/links'
+import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import { canReverse, extractPgColumn, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
@@ -126,6 +127,19 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const tableLinks = useMemo(
     () => linksFor(connId, object).filter((link) => link.source_kind === 'postgres'),
     [linksFor, links, connId, object]
+  )
+
+  const openLinkSource = useOpenLinkSource()
+  const reverseLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'postgres' &&
+          link.table === object &&
+          canReverse(link)
+      ),
+    [links, connId, object]
   )
 
   useEffect(() => {
@@ -900,6 +914,23 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
                 }}
               >
                 {value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          {reverseLinks.length > 0 && <FloatingMenuSeparator />}
+          {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
+          {reverseLinks.map((link: LinkRecord) => {
+            const value = extractPgColumn(columns, linkMenu.row, link.column ?? '')
+            return (
+              <FloatingMenuItem
+                key={`rev-${link.id}`}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) openLinkSource(link, value)
+                  setLinkMenu(null)
+                }}
+              >
+                {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
               </FloatingMenuItem>
             )
           })}
