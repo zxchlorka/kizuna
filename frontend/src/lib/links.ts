@@ -130,3 +130,22 @@ export function linkSourceLabel(link: LinkRecord, value: string | null): string 
   }
   return `↩ ${link.source_scope.replace('*', shown)}`
 }
+
+// linkSummary renders a readable one-line description of a link for the Settings list.
+export function linkSummary(link: LinkRecord): string {
+  const srcDetail = link.source_extract
+    ? ` [${link.source_extract}${link.source_field ? ` ${link.source_field}` : ''}]`
+    : link.source_field
+    ? ` ${link.source_field}`
+    : ''
+  const source = `${link.source_kind}:${link.source_scope}${srcDetail}`
+  let target: string
+  if (link.target_kind === 'kafka') {
+    target = `kafka:${link.target_topic} (${link.target_field})`
+  } else if (link.target_kind === 'redis') {
+    target = `redis:${link.key_pattern}`
+  } else {
+    target = `postgres:${link.table}.${link.column}`
+  }
+  return `${source} → ${target}`
+}
