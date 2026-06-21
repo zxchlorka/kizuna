@@ -7,6 +7,7 @@ interface LinksStore {
   loaded: boolean
   fetch: () => Promise<void>
   create: (input: LinkInput) => Promise<LinkRecord>
+  update: (id: string, input: LinkInput) => Promise<LinkRecord>
   remove: (id: string) => Promise<void>
   linksFor: (sourceConnId: string, scope: string) => LinkRecord[]
 }
@@ -38,6 +39,21 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
     const link = (await res.json()) as LinkRecord
     set({ links: [...get().links, link] })
     return link
+  },
+
+  update: async (id: string, input: LinkInput) => {
+    const res = await fetchWithTimeout(`/api/links/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({ error: res.statusText }))
+      throw new Error(body.error || res.statusText)
+    }
+    const updated = (await res.json()) as LinkRecord
+    set({ links: get().links.map((link) => (link.id === id ? updated : link)) })
+    return updated
   },
 
   remove: async (id: string) => {
