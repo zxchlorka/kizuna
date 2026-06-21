@@ -60,6 +60,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 		r.Get("/", linksHandler.List)
 		r.Post("/", linksHandler.Create)
 		r.Delete("/{id}", linksHandler.Delete)
+		r.Put("/{id}", linksHandler.Update)
 	})
 
 	return r

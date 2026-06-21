@@ -6,6 +6,31 @@ import (
 	"testing"
 )
 
+func TestUpdateLink(t *testing.T) {
+	cfg := &AppConfig{}
+	cfg.AddLink(LinkConfig{
+		ID: "lnk-1", SourceConnID: "kafka-1", SourceKind: "kafka",
+		SourceScope: "cookies", SourceField: "user_id",
+		TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "w:*",
+	})
+
+	ok := cfg.UpdateLink("lnk-1", LinkConfig{
+		SourceConnID: "kafka-1", SourceKind: "kafka",
+		SourceScope: "cookies", SourceField: "uid",
+		TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "c:*",
+	})
+	if !ok {
+		t.Fatalf("UpdateLink returned false for existing id")
+	}
+	got := cfg.GetLinks()
+	if len(got) != 1 || got[0].ID != "lnk-1" || got[0].SourceField != "uid" || got[0].KeyPattern != "c:*" {
+		t.Fatalf("UpdateLink did not replace fields / preserve id: %#v", got)
+	}
+	if cfg.UpdateLink("nope", LinkConfig{}) {
+		t.Fatalf("UpdateLink returned true for unknown id")
+	}
+}
+
 func TestAppConfigRedisRoundTrip(t *testing.T) {
 	t.Parallel()
 

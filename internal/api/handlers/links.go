@@ -87,6 +87,46 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, link)
 }
 
+func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	var req linkRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := h.validate(req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	link := config.LinkConfig{
+		ID:            id,
+		Name:          strings.TrimSpace(req.Name),
+		SourceConnID:  req.SourceConnID,
+		SourceKind:    req.SourceKind,
+		SourceScope:   strings.TrimSpace(req.SourceScope),
+		SourceField:   strings.TrimSpace(req.SourceField),
+		SourceExtract: req.SourceExtract,
+		TargetConnID:  req.TargetConnID,
+		TargetKind:    req.TargetKind,
+		TargetTopic:   strings.TrimSpace(req.TargetTopic),
+		TargetField:   strings.TrimSpace(req.TargetField),
+		KeyPattern:    strings.TrimSpace(req.KeyPattern),
+		Table:         strings.TrimSpace(req.Table),
+		Column:        strings.TrimSpace(req.Column),
+	}
+	if !h.cfg.UpdateLink(id, link) {
+		writeError(w, http.StatusNotFound, "link not found")
+		return
+	}
+	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
+		slog.Error("failed to save config", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save configuration")
+		return
+	}
+	writeJSON(w, http.StatusOK, link)
+}
+
 func (h *LinksHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if !h.cfg.RemoveLink(id) {

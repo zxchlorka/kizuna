@@ -82,6 +82,58 @@ func TestLinksHandlerCreateListDelete(t *testing.T) {
 	}
 }
 
+func TestLinksHandlerUpdate(t *testing.T) {
+	cfg := newLinksTestConfig(t)
+	h := NewLinksHandler(cfg)
+
+	body, _ := json.Marshal(map[string]any{
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "user_id",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "w:*",
+	})
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(body)))
+	var created config.LinkConfig
+	_ = json.Unmarshal(rec.Body.Bytes(), &created)
+
+	put := func(id string, payload map[string]any) *httptest.ResponseRecorder {
+		raw, _ := json.Marshal(payload)
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPut, "/api/links/"+id, bytes.NewReader(raw))
+		rctx := chi.NewRouteContext()
+		rctx.URLParams.Add("id", id)
+		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+		h.Update(rec, req)
+		return rec
+	}
+
+	rec = put(created.ID, map[string]any{
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "uid",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "c:*",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update: expected 200, got %d (%s)", rec.Code, rec.Body.String())
+	}
+	var updated config.LinkConfig
+	_ = json.Unmarshal(rec.Body.Bytes(), &updated)
+	if updated.ID != created.ID || updated.KeyPattern != "c:*" || updated.SourceField != "uid" {
+		t.Fatalf("update did not apply / preserve id: %#v", updated)
+	}
+
+	if rec := put(created.ID, map[string]any{
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "uid",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "no-star",
+	}); rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid update: expected 400, got %d", rec.Code)
+	}
+
+	if rec := put("missing", map[string]any{
+		"source_conn_id": "kafka-1", "source_kind": "kafka", "source_scope": "cookies", "source_field": "uid",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "w:*",
+	}); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown id: expected 404, got %d", rec.Code)
+	}
+}
+
 func TestLinksHandlerValidatesGeneralizedKinds(t *testing.T) {
 	cfg := newLinksTestConfig(t) // has kafka-1, redis-1
 	h := NewLinksHandler(cfg)

@@ -207,6 +207,21 @@ func (c *AppConfig) RemoveLink(id string) bool {
 	return false
 }
 
+// UpdateLink replaces the link with the given id, preserving the id. Returns
+// false if no link with that id exists.
+func (c *AppConfig) UpdateLink(id string, link LinkConfig) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for i, existing := range c.Links {
+		if existing.ID == id {
+			link.ID = id
+			c.Links[i] = cloneLink(link)
+			return true
+		}
+	}
+	return false
+}
+
 func (c *AppConfig) GetLinks() []LinkConfig {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
