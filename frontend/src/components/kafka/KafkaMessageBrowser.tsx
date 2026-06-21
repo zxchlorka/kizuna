@@ -7,7 +7,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
-import { extractMessageField, linkTargetLabel } from '@/lib/links'
+import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
@@ -30,6 +30,8 @@ interface KafkaMessageBrowserProps {
   links: LinkRecord[]
   onOpenLink: (link: LinkRecord, value: string) => void
   onCreateLink: (message: KafkaMessageRow) => void
+  reverseLinks: LinkRecord[]
+  onOpenReverse: (link: LinkRecord, value: string) => void
 }
 
 const allPartitions = '__all__'
@@ -57,6 +59,8 @@ export function KafkaMessageBrowser({
   links,
   onOpenLink,
   onCreateLink,
+  reverseLinks,
+  onOpenReverse,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [fieldInput, setFieldInput] = useState('')
@@ -251,6 +255,23 @@ export function KafkaMessageBrowser({
                 }}
               >
                 {value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          {reverseLinks.length > 0 && <FloatingMenuSeparator />}
+          {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
+          {reverseLinks.map((link) => {
+            const value = extractMessageField(menu.message.value, link.target_field ?? '')
+            return (
+              <FloatingMenuItem
+                key={`rev-${link.id}`}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) onOpenReverse(link, value)
+                  setMenu(null)
+                }}
+              >
+                {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
               </FloatingMenuItem>
             )
           })}

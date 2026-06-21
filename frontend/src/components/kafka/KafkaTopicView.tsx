@@ -9,6 +9,8 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
+import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import { canReverse } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useKafkaStore } from '@/stores/kafka'
@@ -47,6 +49,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const linksFor = useLinksStore((state) => state.linksFor)
   const links = useLinksStore((state) => state.links)
   const openLinkTarget = useOpenLinkTarget()
+  const openLinkSource = useOpenLinkSource()
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
   const [createLinkFields, setCreateLinkFields] = useState<string[]>([])
 
@@ -79,6 +82,17 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   }
 
   const topicLinks = useMemo(() => linksFor(connId, topic), [linksFor, links, connId, topic])
+  const reverseLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'kafka' &&
+          link.target_topic === topic &&
+          canReverse(link)
+      ),
+    [links, connId, topic]
+  )
 
   const handleOpenLink = (link: LinkRecord, value: string) => {
     openLinkTarget(link, value)
@@ -189,6 +203,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             links={topicLinks}
             onOpenLink={handleOpenLink}
             onCreateLink={handleCreateLink}
+            reverseLinks={reverseLinks}
+            onOpenReverse={(link, value) => openLinkSource(link, value)}
           />
         )}
 
