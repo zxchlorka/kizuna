@@ -108,3 +108,25 @@ export function suggestKeyPattern(key: string): string {
   const lastColon = key.lastIndexOf(':')
   return lastColon >= 0 ? `${key.slice(0, lastColon + 1)}*` : key
 }
+
+// canReverse reports whether a link's source can be reached from its target.
+// Redis sources only reverse when the value was captured from the key name
+// (key_capture); value_field/string_value would require a redis content scan.
+export function canReverse(link: LinkRecord): boolean {
+  if (link.source_kind === 'redis') {
+    return link.source_extract === 'key_capture'
+  }
+  return true
+}
+
+// linkSourceLabel renders a "back to source" menu label for a resolved value.
+export function linkSourceLabel(link: LinkRecord, value: string | null): string {
+  const shown = value ?? '∅'
+  if (link.source_kind === 'kafka') {
+    return `↩ ${link.source_scope} where ${link.source_field} = ${shown}`
+  }
+  if (link.source_kind === 'postgres') {
+    return `↩ ${link.source_scope}.${link.source_field} = ${shown}`
+  }
+  return `↩ ${link.source_scope.replace('*', shown)}`
+}
