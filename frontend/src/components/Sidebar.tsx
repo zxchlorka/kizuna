@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
+import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
 import { RedisKeyLookup } from '@/components/redis/RedisKeyLookup'
@@ -234,8 +234,16 @@ export function Sidebar({ connId }: SidebarProps) {
                 ) : (
                   <div className="flex items-center gap-2">
                     <BulkActions connId={connId} />
-                    <Button type="button" size="sm" variant="outline" className="h-7 px-2 font-mono text-[10px]" onClick={() => setCreateKeyOpen(true)}>
-                      New Key
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="h-7 w-7 shrink-0 p-0"
+                      title="New Key"
+                      aria-label="New Key"
+                      onClick={() => setCreateKeyOpen(true)}
+                    >
+                      <Plus className="h-3.5 w-3.5" />
                     </Button>
                   </div>
                 )}
