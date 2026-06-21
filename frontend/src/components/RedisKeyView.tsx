@@ -30,7 +30,16 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { extractRedisValue, linkTargetLabel, redisKeyMatchesPattern, suggestKeyPattern } from '@/lib/links'
+import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import {
+  canReverse,
+  captureFromKey,
+  extractRedisValue,
+  linkSourceLabel,
+  linkTargetLabel,
+  redisKeyMatchesPattern,
+  suggestKeyPattern,
+} from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
@@ -90,6 +99,19 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           link.source_conn_id === connId &&
           link.source_kind === 'redis' &&
           redisKeyMatchesPattern(link.source_scope, object)
+      ),
+    [links, connId, object]
+  )
+
+  const openLinkSource = useOpenLinkSource()
+  const reverseLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'redis' &&
+          redisKeyMatchesPattern(link.key_pattern ?? '', object) &&
+          canReverse(link)
       ),
     [links, connId, object]
   )
@@ -358,6 +380,27 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                           className="font-mono text-xs"
                         >
                           {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+                        </DropdownMenuItem>
+                      )
+                    })}
+                    {reverseLinks.length > 0 && <DropdownMenuSeparator />}
+                    {reverseLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Back to source
+                      </div>
+                    )}
+                    {reverseLinks.map((link) => {
+                      const value = captureFromKey(link.key_pattern ?? '', object)
+                      return (
+                        <DropdownMenuItem
+                          key={`rev-${link.id}`}
+                          disabled={value === null}
+                          onClick={() => {
+                            if (value !== null) openLinkSource(link, value)
+                          }}
+                          className="font-mono text-xs"
+                        >
+                          {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
                         </DropdownMenuItem>
                       )
                     })}
