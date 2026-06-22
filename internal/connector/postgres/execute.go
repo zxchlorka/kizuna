@@ -220,8 +220,10 @@ func resolveColumnSources(ctx context.Context, exec sqlExecutor, fields []pgconn
 	placeholders := make([]string, 0, len(pairs))
 	args := make([]any, 0, len(pairs)*2)
 	for i, pair := range pairs {
-		placeholders = append(placeholders, fmt.Sprintf("($%d,$%d)", i*2+1, i*2+2))
-		args = append(args, pair.oid, int16(pair.attnum))
+		// Cast explicitly: oid is sent as int8 (pgx has no uint32 codec) and PG
+		// coerces it back to oid/int2 for the row-value comparison.
+		placeholders = append(placeholders, fmt.Sprintf("($%d::oid, $%d::int2)", i*2+1, i*2+2))
+		args = append(args, int64(pair.oid), int16(pair.attnum))
 	}
 	query := fmt.Sprintf(`SELECT c.oid, a.attnum, n.nspname, c.relname, a.attname
 FROM pg_attribute a
