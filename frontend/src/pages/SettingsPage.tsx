@@ -1,11 +1,14 @@
-import { useEffect } from 'react'
-import { ArrowLeft, Monitor, Moon, Sun, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ArrowLeft, Monitor, Moon, Pencil, Sun, Trash2 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import { useNavigate } from 'react-router-dom'
+import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { Button } from '@/components/ui/button'
+import { linkSummary } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
+import type { LinkRecord } from '@/types/api'
 
 const THEMES = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -20,6 +23,7 @@ export default function SettingsPage() {
   const fetchLinks = useLinksStore((state) => state.fetch)
   const removeLink = useLinksStore((state) => state.remove)
   const pushToast = useToastStore((state) => state.push)
+  const [editing, setEditing] = useState<LinkRecord | null>(null)
 
   useEffect(() => {
     void fetchLinks().catch(() => undefined)
@@ -88,26 +92,40 @@ export default function SettingsPage() {
                   key={link.id}
                   className="flex items-center justify-between gap-3 rounded-sm border border-border bg-background px-3 py-2"
                 >
-                  <div className="min-w-0 font-mono text-xs">
-                    <span className="text-muted-foreground">{link.source_scope}</span> · {link.source_field} →{' '}
-                    {link.target_kind === 'redis' ? link.key_pattern : `${link.table}.${link.column}`}
+                  <div className="min-w-0 truncate font-mono text-xs text-foreground">{linkSummary(link)}</div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-foreground"
+                      onClick={() => setEditing(link)}
+                      aria-label="Edit link"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      className="text-muted-foreground hover:text-destructive"
+                      onClick={() =>
+                        void removeLink(link.id).catch((error) =>
+                          pushToast({ tone: 'error', title: 'Delete failed', message: (error as Error).message })
+                        )
+                      }
+                      aria-label="Delete link"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="shrink-0 text-muted-foreground hover:text-destructive"
-                    onClick={() =>
-                      void removeLink(link.id).catch((error) =>
-                        pushToast({ tone: 'error', title: 'Delete failed', message: (error as Error).message })
-                      )
-                    }
-                    aria-label="Delete link"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
                 </div>
               ))}
             </div>
           )}
+          <CreateLinkDialog
+            open={editing !== null}
+            editLink={editing ?? undefined}
+            onOpenChange={(next) => {
+              if (!next) setEditing(null)
+            }}
+          />
         </div>
 
         <div className="mt-4 rounded-sm border border-border bg-card p-6">
