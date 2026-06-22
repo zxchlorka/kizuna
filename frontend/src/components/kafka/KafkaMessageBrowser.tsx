@@ -6,6 +6,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
@@ -29,6 +30,9 @@ interface KafkaMessageBrowserProps {
   onLoadOlder: () => void
   onSearch: (field: string, value: string) => void
   onClearSearch: () => void
+  deepScanning: boolean
+  onDeepScan: (field: string, value: string) => void
+  onCancelDeepScan: () => void
   links: LinkRecord[]
   onOpenLink: (link: LinkRecord, value: string) => void
   onCreateLink: (message: KafkaMessageRow) => void
@@ -60,6 +64,9 @@ export function KafkaMessageBrowser({
   onLoadOlder,
   onSearch,
   onClearSearch,
+  deepScanning,
+  onDeepScan,
+  onCancelDeepScan,
   links,
   onOpenLink,
   onCreateLink,
@@ -70,6 +77,7 @@ export function KafkaMessageBrowser({
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
+  const [confirmOpen, setConfirmOpen] = useState(false)
 
   // Seed the editable inputs from the active search (e.g. a link jump sets it
   // programmatically) so the user sees what's being searched and can refine it.
@@ -98,7 +106,7 @@ export function KafkaMessageBrowser({
   }
 
   return (
-    <div className="space-y-3">
+    <div className="relative space-y-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Partition</span>
@@ -145,6 +153,17 @@ export function KafkaMessageBrowser({
         <Button type="submit" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" disabled={loading || !fieldInput.trim()}>
           <Search className="h-3.5 w-3.5" />
           Search
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 font-mono text-[11px]"
+          disabled={loading || deepScanning || !fieldInput.trim()}
+          onClick={() => setConfirmOpen(true)}
+        >
+          <ChevronsDown className="h-3.5 w-3.5" />
+          Search all
         </Button>
         {searchActive && (
           <Button type="button" size="sm" variant="ghost" className="h-8 gap-1.5 font-mono text-[11px]" onClick={handleClear}>
@@ -234,7 +253,7 @@ export function KafkaMessageBrowser({
           variant="outline"
           size="sm"
           className="h-8 w-full gap-1.5 font-mono text-[11px]"
-          disabled={loadingOlder}
+          disabled={loadingOlder || deepScanning}
           onClick={onLoadOlder}
         >
           {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
@@ -296,6 +315,43 @@ export function KafkaMessageBrowser({
             + Create link…
           </FloatingMenuItem>
         </FloatingMenu>
+      )}
+
+      <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Search the whole topic?</DialogTitle>
+          </DialogHeader>
+          <p className="text-xs text-muted-foreground">
+            Scans the entire topic from newest to oldest in batches until a match is found or the beginning is
+            reached. This can take a long time and many requests. You can cancel anytime.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                setConfirmOpen(false)
+                onDeepScan(fieldInput, valueInput)
+              }}
+            >
+              Continue
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {deepScanning && (
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-sm bg-background/85 backdrop-blur-sm">
+          <Loader2 className="h-6 w-6 animate-spin text-orange-500" />
+          <div className="font-mono text-xs text-muted-foreground">Deep scan · scanned {scanned.toLocaleString()}…</div>
+          <Button type="button" size="sm" variant="outline" onClick={onCancelDeepScan}>
+            Cancel
+          </Button>
+        </div>
       )}
     </div>
   )

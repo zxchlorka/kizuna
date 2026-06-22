@@ -45,6 +45,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
   const setSearch = useKafkaStore((state) => state.setSearch)
   const clearSearch = useKafkaStore((state) => state.clearSearch)
+  const deepScan = useKafkaStore((state) => state.deepScan)
+  const cancelDeepScan = useKafkaStore((state) => state.cancelDeepScan)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const linksFor = useLinksStore((state) => state.linksFor)
   const links = useLinksStore((state) => state.links)
@@ -202,6 +204,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
             onSearch={(field, value) => void setSearch(connId, topic, tabId, field, value)}
             onClearSearch={() => void clearSearch(connId, topic, tabId)}
+            deepScanning={tab?.deepScanning ?? false}
+            onDeepScan={(field, value) => void deepScan(connId, topic, tabId, field, value)}
+            onCancelDeepScan={() => cancelDeepScan(tabId)}
             links={topicLinks}
             onOpenLink={handleOpenLink}
             onCreateLink={handleCreateLink}
