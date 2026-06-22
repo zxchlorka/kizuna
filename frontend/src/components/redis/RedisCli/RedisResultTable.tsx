@@ -1,9 +1,10 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { cn } from '@/lib/utils'
 import type { ExecResult } from '@/types/api'
 
 interface RedisResultTableProps {
   result: ExecResult
+  onCellContextMenu?: (value: string, event: MouseEvent) => void
 }
 
 function formatCell(value: unknown): string {
@@ -34,7 +35,7 @@ function formatExpanded(value: unknown): string {
   return String(value)
 }
 
-export function RedisResultTable({ result }: RedisResultTableProps) {
+export function RedisResultTable({ result, onCellContextMenu }: RedisResultTableProps) {
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
   const toggle = (key: string) => {
@@ -82,6 +83,7 @@ export function RedisResultTable({ result }: RedisResultTableProps) {
                   <td
                     key={colIndex}
                     onClick={() => toggle(cellKey)}
+                    onContextMenu={onCellContextMenu ? (event) => onCellContextMenu(display, event) : undefined}
                     className="cursor-pointer px-3 py-2"
                   >
                     {isExpanded ? (

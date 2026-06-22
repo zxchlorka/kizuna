@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RedisResultTable } from '@/components/redis/RedisCli/RedisResultTable'
@@ -6,6 +6,7 @@ import type { ExecResult } from '@/types/api'
 
 interface RedisResultFormatterProps {
   result: ExecResult
+  onCellContextMenu?: (value: string, event: MouseEvent) => void
 }
 
 function renderValue(value: unknown, prettyJson: boolean) {
@@ -28,7 +29,7 @@ function renderValue(value: unknown, prettyJson: boolean) {
   return String(value)
 }
 
-export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
+export function RedisResultFormatter({ result, onCellContextMenu }: RedisResultFormatterProps) {
   const [prettyJson, setPrettyJson] = useState(true)
   const isJson = result.column_types?.[0] === 'json'
 
@@ -39,7 +40,7 @@ export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
   // Any reply with two or more columns (hash field/value, zset member/score,
   // list index/value, …) renders as one labelled, expandable table.
   if (result.columns.length >= 2) {
-    return <RedisResultTable result={result} />
+    return <RedisResultTable result={result} onCellContextMenu={onCellContextMenu} />
   }
 
   const scalar = result.rows[0]?.[0]
@@ -58,7 +59,10 @@ export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
           {prettyJson ? 'Formatted JSON' : 'Raw JSON'}
         </Button>
       ) : null}
-      <pre className="overflow-x-auto whitespace-pre-wrap rounded-sm border border-border/70 bg-background/60 px-3 py-2 font-mono text-sm text-emerald-600 dark:text-emerald-300">
+      <pre
+        className="overflow-x-auto whitespace-pre-wrap rounded-sm border border-border/70 bg-background/60 px-3 py-2 font-mono text-sm text-emerald-600 dark:text-emerald-300"
+        onContextMenu={onCellContextMenu ? (event) => onCellContextMenu(String(scalar), event) : undefined}
+      >
         {renderValue(scalar, prettyJson)}
       </pre>
     </div>

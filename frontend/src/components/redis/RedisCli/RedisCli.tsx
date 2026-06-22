@@ -133,7 +133,7 @@ export function RedisCli({ tabId, connId }: RedisCliProps) {
         </div>
       </div>
 
-      <RedisCliOutput entries={tab.entries} />
+      <RedisCliOutput connId={connId} entries={tab.entries} />
 
       <div className="relative z-10 space-y-2.5 border-t border-border bg-card/40 px-4 py-3 backdrop-blur-sm">
         <RedisCommandHelper item={helperItem} />

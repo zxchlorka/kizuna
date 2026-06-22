@@ -1,14 +1,40 @@
-import { useEffect, useRef } from 'react'
-import { TerminalSquare } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { ArrowUpRight, TerminalSquare } from 'lucide-react'
 import { RedisResultFormatter } from '@/components/redis/RedisCli/RedisResultFormatter'
+import { FloatingMenu, FloatingMenuItem } from '@/components/ui/floating-menu'
+import { parseRedisKeyFromCommand } from '@/lib/redisCommand'
+import { useDataStore } from '@/stores/data'
+import { useToastStore } from '@/stores/toast'
+import { useWorkspaceStore } from '@/stores/workspace'
 import type { RedisCliEntry } from '@/stores/redisCli'
 
 interface RedisCliOutputProps {
+  connId: string
   entries: RedisCliEntry[]
 }
 
-export function RedisCliOutput({ entries }: RedisCliOutputProps) {
+export function RedisCliOutput({ connId, entries }: RedisCliOutputProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const resolveObjectType = useDataStore((state) => state.resolveObjectType)
+  const openTab = useWorkspaceStore((state) => state.openTab)
+  const pushToast = useToastStore((state) => state.push)
+  const [cellMenu, setCellMenu] = useState<{ x: number; y: number; value: string } | null>(null)
+
+  const openKey = useCallback(
+    (value: string) => {
+      const key = value.trim()
+      if (!key) return
+      void resolveObjectType(connId, key)
+        .then((type) => openTab(connId, key, type))
+        .catch(() => pushToast({ tone: 'error', title: 'Key not found', message: key }))
+    },
+    [connId, resolveObjectType, openTab, pushToast]
+  )
+
+  const handleCellContextMenu = (value: string, event: MouseEvent) => {
+    event.preventDefault()
+    setCellMenu({ x: event.clientX, y: event.clientY, value })
+  }
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -34,28 +60,56 @@ export function RedisCliOutput({ entries }: RedisCliOutputProps) {
         </div>
       ) : (
         <div className="space-y-4">
-          {entries.map((entry) => (
-            <div key={entry.id} className="group/entry border-l-2 border-border pl-3 transition-colors hover:border-accent/40">
-              <div className="flex items-center justify-between gap-3 font-mono text-[13px]">
-                <div className="min-w-0 truncate">
-                  <span className="mr-2 select-none font-semibold text-accent">redis&gt;</span>
-                  <span className="text-foreground">{entry.statement}</span>
+          {entries.map((entry) => {
+            const cmdKey = parseRedisKeyFromCommand(entry.statement)
+            return (
+              <div key={entry.id} className="group/entry border-l-2 border-border pl-3 transition-colors hover:border-accent/40">
+                <div className="flex items-center justify-between gap-3 font-mono text-[13px]">
+                  <div className="min-w-0 truncate">
+                    <span className="mr-2 select-none font-semibold text-accent">redis&gt;</span>
+                    <span className="text-foreground">{entry.statement}</span>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {cmdKey ? (
+                      <button
+                        type="button"
+                        onClick={() => openKey(cmdKey)}
+                        className="inline-flex items-center gap-1 rounded-sm border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:border-accent/40 hover:text-foreground"
+                        title={`Open key ${cmdKey}`}
+                      >
+                        <ArrowUpRight className="h-3 w-3" />
+                        open {cmdKey}
+                      </button>
+                    ) : null}
+                    <span className="rounded-full border border-border bg-muted/30 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
+                      {entry.result.duration_ms}ms
+                    </span>
+                  </div>
                 </div>
-                <span className="shrink-0 rounded-full border border-border bg-muted/30 px-2 py-0.5 text-[10px] tabular-nums text-muted-foreground">
-                  {entry.result.duration_ms}ms
-                </span>
-              </div>
-              <div className="mt-2">
-                <RedisResultFormatter result={entry.result} />
-              </div>
-              {entry.result.truncated ? (
-                <div className="mt-1.5 font-mono text-[11px] text-amber-600 dark:text-amber-400">
-                  Output truncated to the first {entry.result.applied_limit ?? 1000} rows.
+                <div className="mt-2">
+                  <RedisResultFormatter result={entry.result} onCellContextMenu={handleCellContextMenu} />
                 </div>
-              ) : null}
-            </div>
-          ))}
+                {entry.result.truncated ? (
+                  <div className="mt-1.5 font-mono text-[11px] text-amber-600 dark:text-amber-400">
+                    Output truncated to the first {entry.result.applied_limit ?? 1000} rows.
+                  </div>
+                ) : null}
+              </div>
+            )
+          })}
         </div>
+      )}
+      {cellMenu && (
+        <FloatingMenu x={cellMenu.x} y={cellMenu.y} onClose={() => setCellMenu(null)}>
+          <FloatingMenuItem
+            onClick={() => {
+              openKey(cellMenu.value)
+              setCellMenu(null)
+            }}
+          >
+            Open as Redis key: {cellMenu.value}
+          </FloatingMenuItem>
+        </FloatingMenu>
       )}
     </div>
   )
