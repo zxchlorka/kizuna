@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,9 +11,10 @@ interface HashEditorProps {
   onUpdate: (field: string, value: string) => Promise<void> | void
   onDelete: (field: string) => Promise<void> | void
   onInsert: (field: string, value: string) => Promise<void> | void
+  onElementContextMenu?: (value: string, event: MouseEvent) => void
 }
 
-export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete, onInsert }: HashEditorProps) {
+export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete, onInsert, onElementContextMenu }: HashEditorProps) {
   const [editingField, setEditingField] = useState<string | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const [newField, setNewField] = useState('')
@@ -62,7 +63,7 @@ export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete,
               const value = String(row.value ?? '')
               const editing = editingField === field
               return (
-                <tr key={field} className="align-top">
+                <tr key={field} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event) : undefined}>
                   <td className="px-4 py-3 font-mono text-xs text-foreground">{field}</td>
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"

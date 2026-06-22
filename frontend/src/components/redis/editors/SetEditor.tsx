@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type MouseEvent } from 'react'
 import { Plus, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,9 +10,10 @@ interface SetEditorProps {
   readOnly?: boolean
   onInsert: (member: string) => Promise<void> | void
   onDelete: (member: string) => Promise<void> | void
+  onElementContextMenu?: (value: string, event: MouseEvent) => void
 }
 
-export function SetEditor({ rows, saving, readOnly = false, onInsert, onDelete }: SetEditorProps) {
+export function SetEditor({ rows, saving, readOnly = false, onInsert, onDelete, onElementContextMenu }: SetEditorProps) {
   const [search, setSearch] = useState('')
   const [newMember, setNewMember] = useState('')
 
@@ -51,7 +52,11 @@ export function SetEditor({ rows, saving, readOnly = false, onInsert, onDelete }
         {filteredRows.map((row, index) => {
           const member = String(row.member ?? `member-${index}`)
           return (
-            <div key={member} className="flex items-center gap-2 rounded-sm border border-border bg-background px-3 py-2">
+            <div
+              key={member}
+              className="flex items-center gap-2 rounded-sm border border-border bg-background px-3 py-2"
+              onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(member, event) : undefined}
+            >
               <div className="min-w-0 flex-1 font-mono text-xs text-foreground">{member}</div>
               {!readOnly && (
                 <Button type="button" size="icon" variant="outline" className="h-7 w-7 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>

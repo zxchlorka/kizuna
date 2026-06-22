@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel } from '@/components/ui/floating-menu'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
 import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
 import {
@@ -102,6 +103,23 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       ),
     [links, connId, object]
   )
+
+  const memberLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.source_conn_id === connId &&
+          link.source_kind === 'redis' &&
+          link.source_extract === 'member' &&
+          redisKeyMatchesPattern(link.source_scope, object)
+      ),
+    [links, connId, object]
+  )
+  const [memberMenu, setMemberMenu] = useState<{ x: number; y: number; value: string } | null>(null)
+  const handleElementContextMenu = (value: string, event: MouseEvent) => {
+    event.preventDefault()
+    setMemberMenu({ x: event.clientX, y: event.clientY, value })
+  }
 
   const openLinkSource = useOpenLinkSource()
   const reverseLinks = useMemo(
@@ -190,6 +208,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           onUpdate={(field, value) => runMutation({ type: 'update', where: { field }, data: { value } })}
           onDelete={(field) => runMutation({ type: 'delete', where: { field } })}
           onInsert={(field, value) => runMutation({ type: 'insert', data: { field, value } })}
+          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
         />
       )
     }
@@ -216,6 +235,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             setOpts(tabId, nextOpts)
             void fetchData(connId, object, tabId, nextOpts)
           }}
+          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
         />
       )
     }
@@ -228,6 +248,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           readOnly={readOnly}
           onInsert={(member) => runMutation({ type: 'insert', data: { member } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
+          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
         />
       )
     }
@@ -241,6 +262,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           onUpdateScore={(member, score) => runMutation({ type: 'update', where: { member }, data: { score } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
           onInsert={(member, score) => runMutation({ type: 'insert', data: { member, score } })}
+          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
         />
       )
     }
@@ -486,6 +508,23 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         sourceFieldOptions={hashFieldNames}
         onOpenChange={setCreateLinkOpen}
       />
+
+      {memberMenu && (
+        <FloatingMenu x={memberMenu.x} y={memberMenu.y} onClose={() => setMemberMenu(null)}>
+          <FloatingMenuLabel>Open from element</FloatingMenuLabel>
+          {memberLinks.map((link) => (
+            <FloatingMenuItem
+              key={link.id}
+              onClick={() => {
+                openLinkTarget(link, memberMenu.value)
+                setMemberMenu(null)
+              }}
+            >
+              {linkTargetLabel(link, memberMenu.value)}
+            </FloatingMenuItem>
+          ))}
+        </FloatingMenu>
+      )}
     </>
   )
 }

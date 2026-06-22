@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type MouseEvent } from 'react'
 import { ChevronLeft, ChevronRight, Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,6 +17,7 @@ interface ListEditorProps {
   onInsert: (value: string, direction: 'left' | 'right') => Promise<void> | void
   onNext: () => void
   onPrev: () => void
+  onElementContextMenu?: (value: string, event: MouseEvent) => void
 }
 
 export function ListEditor({
@@ -31,6 +32,7 @@ export function ListEditor({
   onInsert,
   onNext,
   onPrev,
+  onElementContextMenu,
 }: ListEditorProps) {
   const [editingIndex, setEditingIndex] = useState<number | null>(null)
   const [draftValue, setDraftValue] = useState('')
@@ -77,7 +79,7 @@ export function ListEditor({
               const value = String(row.value ?? '')
               const editing = editingIndex === index
               return (
-                <tr key={`list-${index}`} className="align-top">
+                <tr key={`list-${index}`} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event) : undefined}>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{index}</td>
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"

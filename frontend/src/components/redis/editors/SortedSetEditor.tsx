@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, type MouseEvent } from 'react'
 import { ArrowDownUp, Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,11 +11,12 @@ interface SortedSetEditorProps {
   onUpdateScore: (member: string, score: number) => Promise<void> | void
   onDelete: (member: string) => Promise<void> | void
   onInsert: (member: string, score: number) => Promise<void> | void
+  onElementContextMenu?: (value: string, event: MouseEvent) => void
 }
 
 type SortKey = 'score' | 'member'
 
-export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore, onDelete, onInsert }: SortedSetEditorProps) {
+export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore, onDelete, onInsert, onElementContextMenu }: SortedSetEditorProps) {
   const [sortKey, setSortKey] = useState<SortKey>('score')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
   const [editingMember, setEditingMember] = useState<string | null>(null)
@@ -97,7 +98,7 @@ export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore,
               const score = Number(row.score ?? 0)
               const editing = editingMember === member
               return (
-                <tr key={member}>
+                <tr key={member} onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(member, event) : undefined}>
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
