@@ -1,4 +1,4 @@
-import { Fragment, useState, type FormEvent, type MouseEvent } from 'react'
+import { Fragment, useEffect, useState, type FormEvent, type MouseEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
@@ -21,6 +21,8 @@ interface KafkaMessageBrowserProps {
   partitionCount: number
   partitionFilter: number | null
   searchActive: boolean
+  searchField: string
+  searchValue: string
   scanned: number
   onPartitionChange: (partition: number | null) => void
   onRefresh: () => void
@@ -50,6 +52,8 @@ export function KafkaMessageBrowser({
   partitionCount,
   partitionFilter,
   searchActive,
+  searchField,
+  searchValue,
   scanned,
   onPartitionChange,
   onRefresh,
@@ -66,6 +70,13 @@ export function KafkaMessageBrowser({
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
+
+  // Seed the editable inputs from the active search (e.g. a link jump sets it
+  // programmatically) so the user sees what's being searched and can refine it.
+  useEffect(() => {
+    setFieldInput(searchField)
+    setValueInput(searchValue)
+  }, [searchField, searchValue])
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
     event.preventDefault()

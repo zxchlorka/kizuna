@@ -194,6 +194,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             partitionCount={partitions.length}
             partitionFilter={tab?.partitionFilter ?? null}
             searchActive={tab?.searchActive ?? false}
+            searchField={tab?.searchField ?? ''}
+            searchValue={tab?.searchValue ?? ''}
             scanned={tab?.scanned ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onRefresh={() => void fetchMessages(connId, topic, tabId)}
