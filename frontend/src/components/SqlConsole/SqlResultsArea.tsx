@@ -1,17 +1,22 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { AlertTriangle, Rows3, SkipForward } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ExplainView } from '@/components/SqlConsole/ExplainView'
 import { SqlResultCell } from '@/components/SqlConsole/SqlResultCell'
 import { SqlResultTab } from '@/components/SqlConsole/SqlResultTab'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel } from '@/components/ui/floating-menu'
+import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
 import type { SqlResultItem } from '@/stores/sqlConsole'
 import { cn } from '@/lib/utils'
+import { linkTargetLabel } from '@/lib/links'
 import { getPostgresTypeBadge } from '@/lib/postgresTypes'
+import { useLinksStore } from '@/stores/links'
 
 interface SqlResultsAreaProps {
   results: SqlResultItem[]
   activeResultId: string | null
   onSelectResult: (resultId: string) => void
+  connId: string
 }
 
 type SortState = {
@@ -44,9 +49,16 @@ function TypeBadge({ typeName }: { typeName: string }) {
   )
 }
 
-export function SqlResultsArea({ results, activeResultId, onSelectResult }: SqlResultsAreaProps) {
+export function SqlResultsArea({ results, activeResultId, onSelectResult, connId }: SqlResultsAreaProps) {
   const [sortState, setSortState] = useState<SortState>(null)
   const activeResult = results.find((result) => result.id === activeResultId) ?? results[0] ?? null
+  const openLinkTarget = useOpenLinkTarget()
+  const linksFor = useLinksStore((state) => state.linksFor)
+  const fetchLinks = useLinksStore((state) => state.fetch)
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; row: unknown[] } | null>(null)
+  useEffect(() => {
+    void fetchLinks().catch(() => undefined)
+  }, [fetchLinks])
 
   useEffect(() => {
     setSortState(null)
@@ -159,7 +171,14 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult }: SqlR
               </thead>
               <tbody>
                 {sortedRows.map((row, rowIndex) => (
-                  <tr key={`${activeResult.id}-${rowIndex}`} className="odd:bg-muted/10">
+                  <tr
+                    key={`${activeResult.id}-${rowIndex}`}
+                    className="odd:bg-muted/10"
+                    onContextMenu={(event: MouseEvent) => {
+                      event.preventDefault()
+                      setRowMenu({ x: event.clientX, y: event.clientY, row })
+                    }}
+                  >
                     {row.map((value, columnIndex) => (
                       <td key={`${activeResult.id}-${rowIndex}-${columnIndex}`} className="max-w-[320px] border-b border-r border-border/70 px-3 py-2 align-top font-mono text-[12px] text-foreground">
                         <SqlResultCell
@@ -173,6 +192,38 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult }: SqlR
                 ))}
               </tbody>
             </table>
+            {rowMenu && activeExecuteResult && (
+              <FloatingMenu x={rowMenu.x} y={rowMenu.y} onClose={() => setRowMenu(null)}>
+                <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
+                {(() => {
+                  const items: JSX.Element[] = []
+                  const sources = activeExecuteResult.column_sources ?? []
+                  sources.forEach((src, columnIndex) => {
+                    if (!src) return
+                    const value = renderValue(rowMenu.row[columnIndex])
+                    linksFor(connId, src.table)
+                      .filter((link) => link.source_kind === 'postgres' && link.source_field === src.column)
+                      .forEach((link) => {
+                        items.push(
+                          <FloatingMenuItem
+                            key={`${link.id}-${columnIndex}`}
+                            onClick={() => {
+                              openLinkTarget(link, value)
+                              setRowMenu(null)
+                            }}
+                          >
+                            {linkTargetLabel(link, value)}
+                          </FloatingMenuItem>
+                        )
+                      })
+                  })
+                  if (items.length === 0) {
+                    return <FloatingMenuItem disabled>No links for these columns</FloatingMenuItem>
+                  }
+                  return items
+                })()}
+              </FloatingMenu>
+            )}
             {sortedRows.length === 0 && (
               <div className="p-4">
                 <EmptyState variant="no_data" compact title="0 rows returned" description="This query ran successfully but returned no rows." />

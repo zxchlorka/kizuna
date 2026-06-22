@@ -186,6 +186,11 @@ export interface DataResult {
   meta?: Record<string, unknown>
 }
 
+export interface ColumnSource {
+  table: string
+  column: string
+}
+
 export interface ExecResult {
   columns: string[]
   column_types?: string[]
@@ -197,6 +202,7 @@ export interface ExecResult {
   rows_returned: number
   truncated?: boolean
   applied_limit?: number
+  column_sources?: (ColumnSource | null)[]
   skipped?: boolean
 }
 
