@@ -6,6 +6,7 @@ import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { Button } from '@/components/ui/button'
 import { linkSummary } from '@/lib/links'
 import { cn } from '@/lib/utils'
+import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import type { LinkRecord } from '@/types/api'
@@ -22,12 +23,14 @@ export default function SettingsPage() {
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const removeLink = useLinksStore((state) => state.remove)
+  const fetchConnections = useConnectionStore((state) => state.fetch)
   const pushToast = useToastStore((state) => state.push)
   const [editing, setEditing] = useState<LinkRecord | null>(null)
 
   useEffect(() => {
     void fetchLinks().catch(() => undefined)
-  }, [fetchLinks])
+    void fetchConnections().catch(() => undefined)
+  }, [fetchLinks, fetchConnections])
 
   return (
     <div className="min-h-screen bg-background">
