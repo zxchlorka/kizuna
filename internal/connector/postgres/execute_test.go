@@ -195,17 +195,17 @@ func TestRowFetchPolicyForStatement(t *testing.T) {
 }
 
 func TestBuildColumnSources(t *testing.T) {
-	fields := []pgconn.FieldDescription{
-		{Name: "id", TableOID: 100, TableAttributeNumber: 1},
-		{Name: "cnt", TableOID: 0, TableAttributeNumber: 0},
-		{Name: "email", TableOID: 100, TableAttributeNumber: 2},
+	keys := []oidAttn{
+		{oid: 100, attnum: 1},
+		{oid: 0, attnum: 0},
+		{oid: 100, attnum: 2},
 	}
 	lookup := map[oidAttn]connector.ColumnSource{
 		{oid: 100, attnum: 1}: {Table: "public.users", Column: "id"},
 		{oid: 100, attnum: 2}: {Table: "public.users", Column: "email"},
 	}
 
-	got := buildColumnSources(fields, lookup)
+	got := buildColumnSources(keys, lookup)
 	if len(got) != 3 {
 		t.Fatalf("expected 3 entries, got %d", len(got))
 	}
@@ -218,7 +218,7 @@ func TestBuildColumnSources(t *testing.T) {
 	if got[2] == nil || got[2].Column != "email" {
 		t.Fatalf("col 2 = %#v", got[2])
 	}
-	if buildColumnSources([]pgconn.FieldDescription{{Name: "n", TableOID: 0}}, lookup) != nil {
+	if buildColumnSources([]oidAttn{{oid: 0, attnum: 0}}, lookup) != nil {
 		t.Fatalf("all-expression result should yield nil")
 	}
 }
