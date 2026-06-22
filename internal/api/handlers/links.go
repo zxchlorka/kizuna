@@ -168,8 +168,9 @@ func (h *LinksHandler) validate(req linkRequest) error {
 				return errBadLink("redis key_capture requires a source_scope with exactly one '*'")
 			}
 		case "string_value":
+		case "member":
 		default:
-			return errBadLink("source_extract must be value_field, key_capture or string_value")
+			return errBadLink("source_extract must be value_field, key_capture, string_value or member")
 		}
 	default:
 		return errBadLink("source_kind must be kafka, redis or postgres")

@@ -169,3 +169,19 @@ func TestLinksHandlerValidatesGeneralizedKinds(t *testing.T) {
 		t.Fatalf("redis value_field without source_field: expected 400, got %d", code)
 	}
 }
+
+func TestLinksHandlerAcceptsMemberExtract(t *testing.T) {
+	cfg := newLinksTestConfig(t)
+	h := NewLinksHandler(cfg)
+
+	body, _ := json.Marshal(map[string]any{
+		"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "w:*",
+		"source_extract": "member",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "profile:*",
+	})
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(body)))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("member extract: expected 201, got %d (%s)", rec.Code, rec.Body.String())
+	}
+}
