@@ -180,20 +180,21 @@ type oidAttn struct {
 	attnum uint16
 }
 
-// buildColumnSources aligns resolved table/column provenance to the result
-// fields. Fields with TableOID == 0 (expressions/aggregates) or with no catalog
-// match get a nil entry. Returns nil if no field has provenance.
-func buildColumnSources(fields []pgconn.FieldDescription, lookup map[oidAttn]connector.ColumnSource) []*connector.ColumnSource {
-	if len(fields) == 0 {
+// buildColumnSources aligns resolved table/column provenance to per-column keys
+// (snapshotted from the result FieldDescriptions). Keys with oid == 0
+// (expressions/aggregates) or with no catalog match get a nil entry. Returns nil
+// if no key has provenance.
+func buildColumnSources(keys []oidAttn, lookup map[oidAttn]connector.ColumnSource) []*connector.ColumnSource {
+	if len(keys) == 0 {
 		return nil
 	}
-	out := make([]*connector.ColumnSource, len(fields))
+	out := make([]*connector.ColumnSource, len(keys))
 	found := false
-	for i, field := range fields {
-		if field.TableOID == 0 {
+	for i, key := range keys {
+		if key.oid == 0 {
 			continue
 		}
-		if src, ok := lookup[oidAttn{oid: field.TableOID, attnum: field.TableAttributeNumber}]; ok {
+		if src, ok := lookup[key]; ok {
 			copied := src
 			out[i] = &copied
 			found = true
@@ -208,13 +209,20 @@ func buildColumnSources(fields []pgconn.FieldDescription, lookup map[oidAttn]con
 // resolveColumnSources resolves result-column provenance via one catalog query.
 // Best-effort: any error returns nil so the query result is still served.
 func resolveColumnSources(ctx context.Context, exec sqlExecutor, fields []pgconn.FieldDescription) []*connector.ColumnSource {
+	// Snapshot per-column provenance keys BEFORE running another query: pgx reuses
+	// the connection's FieldDescription buffer once a subsequent query executes on
+	// the same connection, which would zero TableOID on the original slice.
+	keys := make([]oidAttn, len(fields))
+	for i, field := range fields {
+		keys[i] = oidAttn{oid: field.TableOID, attnum: field.TableAttributeNumber}
+	}
+
 	seen := make(map[oidAttn]bool)
-	pairs := make([]oidAttn, 0, len(fields))
-	for _, field := range fields {
-		if field.TableOID == 0 {
+	pairs := make([]oidAttn, 0, len(keys))
+	for _, key := range keys {
+		if key.oid == 0 {
 			continue
 		}
-		key := oidAttn{oid: field.TableOID, attnum: field.TableAttributeNumber}
 		if !seen[key] {
 			seen[key] = true
 			pairs = append(pairs, key)
@@ -227,16 +235,20 @@ func resolveColumnSources(ctx context.Context, exec sqlExecutor, fields []pgconn
 	placeholders := make([]string, 0, len(pairs))
 	args := make([]any, 0, len(pairs)*2)
 	for i, pair := range pairs {
-		// Cast explicitly: oid is sent as int8 (pgx has no uint32 codec) and PG
-		// coerces it back to oid/int2 for the row-value comparison.
-		placeholders = append(placeholders, fmt.Sprintf("($%d::oid, $%d::int2)", i*2+1, i*2+2))
-		args = append(args, int64(pair.oid), int16(pair.attnum))
+		// Cast the columns (not the params) to bigint: pgx encodes int64 cleanly,
+		// and PG coerces oid/int2 to bigint for the row-value comparison. Casting
+		// the params to ::oid instead would force pgx to encode int64 as oid (no
+		// codec) and fail.
+		placeholders = append(placeholders, fmt.Sprintf("($%d,$%d)", i*2+1, i*2+2))
+		args = append(args, int64(pair.oid), int64(pair.attnum))
 	}
-	query := fmt.Sprintf(`SELECT c.oid, a.attnum, n.nspname, c.relname, a.attname
+	// Cast catalog outputs to bigint/text so scans use standard codecs (the oid
+	// and name pg types don't scan cleanly into uint32/string by default).
+	query := fmt.Sprintf(`SELECT c.oid::bigint, a.attnum::bigint, n.nspname::text, c.relname::text, a.attname::text
 FROM pg_attribute a
 JOIN pg_class c ON a.attrelid = c.oid
 JOIN pg_namespace n ON c.relnamespace = n.oid
-WHERE a.attnum > 0 AND (c.oid, a.attnum) IN (%s)`, strings.Join(placeholders, ","))
+WHERE a.attnum > 0 AND (c.oid::bigint, a.attnum::bigint) IN (%s)`, strings.Join(placeholders, ","))
 
 	rows, err := exec.Query(ctx, query, args...)
 	if err != nil {
@@ -246,18 +258,18 @@ WHERE a.attnum > 0 AND (c.oid, a.attnum) IN (%s)`, strings.Join(placeholders, ",
 
 	lookup := make(map[oidAttn]connector.ColumnSource, len(pairs))
 	for rows.Next() {
-		var oid uint32
-		var attnum int16
+		var oid int64
+		var attnum int64
 		var schema, table, column string
 		if scanErr := rows.Scan(&oid, &attnum, &schema, &table, &column); scanErr != nil {
 			return nil
 		}
-		lookup[oidAttn{oid: oid, attnum: uint16(attnum)}] = connector.ColumnSource{Table: schema + "." + table, Column: column}
+		lookup[oidAttn{oid: uint32(oid), attnum: uint16(attnum)}] = connector.ColumnSource{Table: schema + "." + table, Column: column}
 	}
 	if rows.Err() != nil {
 		return nil
 	}
-	return buildColumnSources(fields, lookup)
+	return buildColumnSources(keys, lookup)
 }
 
 func columnTypeNames(fields []pgconn.FieldDescription) []string {
