@@ -157,14 +157,98 @@ func (p *PostgresConnector) executeQuery(ctx context.Context, exec sqlExecutor, 
 	}
 
 	return &connector.ExecResult{
-		Columns:      columns,
-		ColumnTypes:  columnTypes,
-		Rows:         resultRows,
-		RowsReturned: len(resultRows),
-		RowsAffected: rows.CommandTag().RowsAffected(),
-		Truncated:    truncated,
-		AppliedLimit: policy.appliedLimit,
+		Columns:       columns,
+		ColumnTypes:   columnTypes,
+		Rows:          resultRows,
+		RowsReturned:  len(resultRows),
+		RowsAffected:  rows.CommandTag().RowsAffected(),
+		Truncated:     truncated,
+		AppliedLimit:  policy.appliedLimit,
+		ColumnSources: resolveColumnSources(ctx, exec, fields),
 	}, nil
+}
+
+type oidAttn struct {
+	oid    uint32
+	attnum uint16
+}
+
+// buildColumnSources aligns resolved table/column provenance to the result
+// fields. Fields with TableOID == 0 (expressions/aggregates) or with no catalog
+// match get a nil entry. Returns nil if no field has provenance.
+func buildColumnSources(fields []pgconn.FieldDescription, lookup map[oidAttn]connector.ColumnSource) []*connector.ColumnSource {
+	if len(fields) == 0 {
+		return nil
+	}
+	out := make([]*connector.ColumnSource, len(fields))
+	found := false
+	for i, field := range fields {
+		if field.TableOID == 0 {
+			continue
+		}
+		if src, ok := lookup[oidAttn{oid: field.TableOID, attnum: field.TableAttributeNumber}]; ok {
+			copied := src
+			out[i] = &copied
+			found = true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return out
+}
+
+// resolveColumnSources resolves result-column provenance via one catalog query.
+// Best-effort: any error returns nil so the query result is still served.
+func resolveColumnSources(ctx context.Context, exec sqlExecutor, fields []pgconn.FieldDescription) []*connector.ColumnSource {
+	seen := make(map[oidAttn]bool)
+	pairs := make([]oidAttn, 0, len(fields))
+	for _, field := range fields {
+		if field.TableOID == 0 {
+			continue
+		}
+		key := oidAttn{oid: field.TableOID, attnum: field.TableAttributeNumber}
+		if !seen[key] {
+			seen[key] = true
+			pairs = append(pairs, key)
+		}
+	}
+	if len(pairs) == 0 {
+		return nil
+	}
+
+	placeholders := make([]string, 0, len(pairs))
+	args := make([]any, 0, len(pairs)*2)
+	for i, pair := range pairs {
+		placeholders = append(placeholders, fmt.Sprintf("($%d,$%d)", i*2+1, i*2+2))
+		args = append(args, pair.oid, int16(pair.attnum))
+	}
+	query := fmt.Sprintf(`SELECT c.oid, a.attnum, n.nspname, c.relname, a.attname
+FROM pg_attribute a
+JOIN pg_class c ON a.attrelid = c.oid
+JOIN pg_namespace n ON c.relnamespace = n.oid
+WHERE a.attnum > 0 AND (c.oid, a.attnum) IN (%s)`, strings.Join(placeholders, ","))
+
+	rows, err := exec.Query(ctx, query, args...)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	lookup := make(map[oidAttn]connector.ColumnSource, len(pairs))
+	for rows.Next() {
+		var oid uint32
+		var attnum int16
+		var schema, table, column string
+		if scanErr := rows.Scan(&oid, &attnum, &schema, &table, &column); scanErr != nil {
+			return nil
+		}
+		lookup[oidAttn{oid: oid, attnum: uint16(attnum)}] = connector.ColumnSource{Table: schema + "." + table, Column: column}
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return buildColumnSources(fields, lookup)
 }
 
 func columnTypeNames(fields []pgconn.FieldDescription) []string {

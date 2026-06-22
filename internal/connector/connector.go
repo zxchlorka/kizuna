@@ -165,18 +165,26 @@ type DDLOp struct {
 	Params map[string]any `json:"params"`
 }
 
+// ColumnSource is the origin table/column of a SQL result column, when it maps
+// to a real table column (not an expression/aggregate).
+type ColumnSource struct {
+	Table  string `json:"table"` // schema.table
+	Column string `json:"column"`
+}
+
 type ExecResult struct {
-	Columns      []string `json:"columns"`
-	ColumnTypes  []string `json:"column_types,omitempty"`
-	Rows         [][]any  `json:"rows"`
-	RowsAffected int64    `json:"rows_affected"`
-	Statement    string   `json:"statement,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	DurationMs   int64    `json:"duration_ms"`
-	RowsReturned int      `json:"rows_returned"`
-	Truncated    bool     `json:"truncated,omitempty"`
-	AppliedLimit int      `json:"applied_limit,omitempty"`
-	Skipped      bool     `json:"skipped,omitempty"`
+	Columns       []string        `json:"columns"`
+	ColumnTypes   []string        `json:"column_types,omitempty"`
+	Rows          [][]any         `json:"rows"`
+	RowsAffected  int64           `json:"rows_affected"`
+	Statement     string          `json:"statement,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	DurationMs    int64           `json:"duration_ms"`
+	RowsReturned  int             `json:"rows_returned"`
+	Truncated     bool            `json:"truncated,omitempty"`
+	AppliedLimit  int             `json:"applied_limit,omitempty"`
+	ColumnSources []*ColumnSource `json:"column_sources,omitempty"` // aligned to Columns; nil for expressions
+	Skipped       bool            `json:"skipped,omitempty"`
 }
 
 type MutateResult struct {
