@@ -29,6 +29,8 @@ interface KafkaTopicTabState {
   searchValue: string
   searchActive: boolean
   scanned: number
+  deepScanning: boolean
+  deepScanCanceled: boolean
 }
 
 interface KafkaSearch {
@@ -44,6 +46,8 @@ interface KafkaStore {
   setPartitionFilter: (connId: string, topic: string, tabId: string, partition: number | null) => Promise<void>
   setSearch: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
   clearSearch: (connId: string, topic: string, tabId: string) => Promise<void>
+  deepScan: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
+  cancelDeepScan: (tabId: string) => void
   produce: (connId: string, request: KafkaProduceRequest) => Promise<KafkaProduceResult>
 }
 
@@ -64,6 +68,8 @@ function defaultTabState(): KafkaTopicTabState {
     searchValue: '',
     searchActive: false,
     scanned: 0,
+    deepScanning: false,
+    deepScanCanceled: false,
   }
 }
 
@@ -356,6 +362,40 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
       },
     }))
     await get().fetchMessages(connId, topic, tabId)
+  },
+
+  deepScan: async (connId, topic, tabId, field, value) => {
+    set((state) => ({
+      tabs: {
+        ...state.tabs,
+        [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: true, deepScanCanceled: false },
+      },
+    }))
+    // First window (resets messages/scanned/cursor; preserves the deepScan flags on merge).
+    await get().setSearch(connId, topic, tabId, field, value)
+    // Auto-loop "Scan more" until found / beginning / error / no cursor / canceled.
+    while (true) {
+      const t = ensureState(get().tabs, tabId)
+      if (t.deepScanCanceled || t.messages.length > 0 || !t.hasOlder || t.messagesError || !t.nextBeforeOffsets) {
+        break
+      }
+      await get().fetchOlderMessages(connId, topic, tabId)
+    }
+    set((state) => ({
+      tabs: {
+        ...state.tabs,
+        [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: false },
+      },
+    }))
+  },
+
+  cancelDeepScan: (tabId) => {
+    set((state) => ({
+      tabs: {
+        ...state.tabs,
+        [tabId]: { ...ensureState(state.tabs, tabId), deepScanCanceled: true },
+      },
+    }))
   },
 
   produce: async (connId, request) => {
