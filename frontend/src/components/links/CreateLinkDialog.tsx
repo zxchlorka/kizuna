@@ -184,6 +184,7 @@ export function CreateLinkDialog({
                   <SelectItem value="value_field" className="font-mono text-xs">value field (hash / JSON path)</SelectItem>
                   <SelectItem value="key_capture" className="font-mono text-xs">key capture (the * in the pattern)</SelectItem>
                   <SelectItem value="string_value" className="font-mono text-xs">whole string value</SelectItem>
+                  <SelectItem value="member" className="font-mono text-xs">collection element (set/zset/list member, hash value)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
