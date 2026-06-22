@@ -156,15 +156,22 @@ func (p *PostgresConnector) executeQuery(ctx context.Context, exec sqlExecutor, 
 		resultRows = resultRows[:policy.appliedLimit]
 	}
 
+	rowsAffected := rows.CommandTag().RowsAffected()
+	// Release the connection before the provenance lookup: ExecuteBatch runs on a
+	// single session, and a second query while these rows are open errors with
+	// "conn busy". Closing first frees the connection for the catalog query.
+	rows.Close()
+	columnSources := resolveColumnSources(ctx, exec, fields)
+
 	return &connector.ExecResult{
 		Columns:       columns,
 		ColumnTypes:   columnTypes,
 		Rows:          resultRows,
 		RowsReturned:  len(resultRows),
-		RowsAffected:  rows.CommandTag().RowsAffected(),
+		RowsAffected:  rowsAffected,
 		Truncated:     truncated,
 		AppliedLimit:  policy.appliedLimit,
-		ColumnSources: resolveColumnSources(ctx, exec, fields),
+		ColumnSources: columnSources,
 	}, nil
 }
 
