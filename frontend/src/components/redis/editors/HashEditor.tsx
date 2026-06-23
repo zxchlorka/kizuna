@@ -88,7 +88,7 @@ export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete,
                       <div className="flex justify-end gap-2">
                         {editing ? (
                           <>
-                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(field, draftValue)} disabled={saving}>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void Promise.resolve(onUpdate(field, draftValue)).then(() => setEditingField(null))} disabled={saving}>
                               <Save className="h-3.5 w-3.5" />
                             </Button>
                             <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingField(null)}>

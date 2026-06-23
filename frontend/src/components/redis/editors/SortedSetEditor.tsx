@@ -123,7 +123,7 @@ export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore,
                       <div className="flex justify-end gap-2">
                         {editing ? (
                           <>
-                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" disabled={saving || Number.isNaN(Number(draftScore))} onClick={() => void onUpdateScore(member, Number(draftScore))}>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" disabled={saving || Number.isNaN(Number(draftScore))} onClick={() => void Promise.resolve(onUpdateScore(member, Number(draftScore))).then(() => setEditingMember(null))}>
                               <Save className="h-3.5 w-3.5" />
                             </Button>
                             <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingMember(null)}>

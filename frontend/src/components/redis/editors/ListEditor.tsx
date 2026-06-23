@@ -104,7 +104,7 @@ export function ListEditor({
                       <div className="flex justify-end gap-2">
                         {editing ? (
                           <>
-                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void onUpdate(index, draftValue)} disabled={saving}>
+                            <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => void Promise.resolve(onUpdate(index, draftValue)).then(() => setEditingIndex(null))} disabled={saving}>
                               <Save className="h-3.5 w-3.5" />
                             </Button>
                             <Button type="button" size="icon" variant="outline" className="h-8 w-8" onClick={() => setEditingIndex(null)}>
