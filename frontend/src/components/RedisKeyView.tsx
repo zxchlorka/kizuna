@@ -99,6 +99,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         (link) =>
           link.source_conn_id === connId &&
           link.source_kind === 'redis' &&
+          // member links are per-element (right-click a row), not key-level —
+          // they have no single key value, so keep them out of the header menu.
+          link.source_extract !== 'member' &&
           redisKeyMatchesPattern(link.source_scope, object)
       ),
     [links, connId, object]
