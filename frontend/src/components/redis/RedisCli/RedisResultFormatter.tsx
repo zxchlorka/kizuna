@@ -1,4 +1,4 @@
-import { useState, type MouseEvent } from 'react'
+import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RedisResultTable } from '@/components/redis/RedisCli/RedisResultTable'
@@ -6,7 +6,6 @@ import type { ExecResult } from '@/types/api'
 
 interface RedisResultFormatterProps {
   result: ExecResult
-  onCellContextMenu?: (value: string, event: MouseEvent) => void
 }
 
 function renderValue(value: unknown, prettyJson: boolean) {
@@ -29,7 +28,7 @@ function renderValue(value: unknown, prettyJson: boolean) {
   return String(value)
 }
 
-export function RedisResultFormatter({ result, onCellContextMenu }: RedisResultFormatterProps) {
+export function RedisResultFormatter({ result }: RedisResultFormatterProps) {
   const [prettyJson, setPrettyJson] = useState(true)
   const isJson = result.column_types?.[0] === 'json'
 
@@ -40,7 +39,7 @@ export function RedisResultFormatter({ result, onCellContextMenu }: RedisResultF
   // Any reply with two or more columns (hash field/value, zset member/score,
   // list index/value, …) renders as one labelled, expandable table.
   if (result.columns.length >= 2) {
-    return <RedisResultTable result={result} onCellContextMenu={onCellContextMenu} />
+    return <RedisResultTable result={result} />
   }
 
   const scalar = result.rows[0]?.[0]
@@ -59,10 +58,7 @@ export function RedisResultFormatter({ result, onCellContextMenu }: RedisResultF
           {prettyJson ? 'Formatted JSON' : 'Raw JSON'}
         </Button>
       ) : null}
-      <pre
-        className="overflow-x-auto whitespace-pre-wrap rounded-sm border border-border/70 bg-background/60 px-3 py-2 font-mono text-sm text-emerald-600 dark:text-emerald-300"
-        onContextMenu={onCellContextMenu ? (event) => onCellContextMenu(String(scalar), event) : undefined}
-      >
+      <pre className="overflow-x-auto whitespace-pre-wrap rounded-sm border border-border/70 bg-background/60 px-3 py-2 font-mono text-sm text-emerald-600 dark:text-emerald-300">
         {renderValue(scalar, prettyJson)}
       </pre>
     </div>

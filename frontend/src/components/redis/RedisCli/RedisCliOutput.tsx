@@ -1,7 +1,6 @@
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 import { ArrowUpRight, TerminalSquare } from 'lucide-react'
 import { RedisResultFormatter } from '@/components/redis/RedisCli/RedisResultFormatter'
-import { FloatingMenu, FloatingMenuItem } from '@/components/ui/floating-menu'
 import { parseRedisKeyFromCommand } from '@/lib/redisCommand'
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
@@ -18,7 +17,6 @@ export function RedisCliOutput({ connId, entries }: RedisCliOutputProps) {
   const resolveObjectType = useDataStore((state) => state.resolveObjectType)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const pushToast = useToastStore((state) => state.push)
-  const [cellMenu, setCellMenu] = useState<{ x: number; y: number; value: string } | null>(null)
 
   const openKey = useCallback(
     (value: string) => {
@@ -30,11 +28,6 @@ export function RedisCliOutput({ connId, entries }: RedisCliOutputProps) {
     },
     [connId, resolveObjectType, openTab, pushToast]
   )
-
-  const handleCellContextMenu = (value: string, event: MouseEvent) => {
-    event.preventDefault()
-    setCellMenu({ x: event.clientX, y: event.clientY, value })
-  }
 
   useEffect(() => {
     if (!containerRef.current) {
@@ -87,7 +80,7 @@ export function RedisCliOutput({ connId, entries }: RedisCliOutputProps) {
                   </div>
                 </div>
                 <div className="mt-2">
-                  <RedisResultFormatter result={entry.result} onCellContextMenu={handleCellContextMenu} />
+                  <RedisResultFormatter result={entry.result} />
                 </div>
                 {entry.result.truncated ? (
                   <div className="mt-1.5 font-mono text-[11px] text-amber-600 dark:text-amber-400">
@@ -98,18 +91,6 @@ export function RedisCliOutput({ connId, entries }: RedisCliOutputProps) {
             )
           })}
         </div>
-      )}
-      {cellMenu && (
-        <FloatingMenu x={cellMenu.x} y={cellMenu.y} onClose={() => setCellMenu(null)}>
-          <FloatingMenuItem
-            onClick={() => {
-              openKey(cellMenu.value)
-              setCellMenu(null)
-            }}
-          >
-            Open as Redis key: {cellMenu.value}
-          </FloatingMenuItem>
-        </FloatingMenu>
       )}
     </div>
   )
