@@ -18,7 +18,7 @@ type SortKey = 'score' | 'member'
 
 export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore, onDelete, onInsert, onElementContextMenu }: SortedSetEditorProps) {
   const [sortKey, setSortKey] = useState<SortKey>('score')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [editingMember, setEditingMember] = useState<string | null>(null)
   const [draftScore, setDraftScore] = useState('')
   const [newMember, setNewMember] = useState('')
