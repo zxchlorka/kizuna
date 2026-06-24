@@ -1,4 +1,4 @@
-# InfraView
+# Kizuna
 
 Веб-приложение для просмотра и управления данными в PostgreSQL.
 Один инструмент вместо разрозненных утилит для подключения, просмотра схем и работы с таблицами.
@@ -27,7 +27,7 @@
 ## Структура проекта
 
 ```
-cmd/infraview/main.go              — entrypoint
+cmd/kizuna/main.go              — entrypoint
 internal/
   config/
     config.go                      — загрузка/сохранение config.json
@@ -50,7 +50,7 @@ frontend/
   src/                             — React приложение (Vite)
 frontend.go                        — go:embed для frontend/dist
 Dockerfile                         — multi-stage: frontend → backend → final/debug
-Compose configuration              — infraview + infraview-debug + postgres
+Compose configuration              — kizuna + kizuna-debug + postgres
 ```
 
 ## REST API
@@ -78,7 +78,7 @@ GET    /api/connections/:id/objects/:name/schema
 make compose-rebuild
 
 # Эквивалент напрямую через Docker Compose
-docker compose up --build -d postgres infraview
+docker compose up --build -d postgres kizuna
 
 # Только postgres (для локальной разработки)
 docker compose up postgres
@@ -89,7 +89,7 @@ docker compose up postgres
 ### С отладчиком (Delve remote)
 
 ```bash
-docker compose up infraview-debug
+docker compose up kizuna-debug
 ```
 
 Затем в GoLand: `Run → Edit Configurations → + → Go Remote → localhost:2345`
@@ -104,7 +104,7 @@ docker compose up postgres
 cd frontend && npm install && npm run build && cd ..
 
 # 3. Запустить backend
-go run ./cmd/infraview
+go run ./cmd/kizuna
 ```
 
 Config сохраняется в `./config.json` (создаётся автоматически при первом запуске).
