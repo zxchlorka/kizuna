@@ -104,14 +104,13 @@ export default function ConnectionListPage() {
                 strokeLinecap="round"
                 strokeLinejoin="round"
               >
-                <polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5" />
-                <polyline points="12 2 12 22" />
-                <polyline points="2 8.5 22 8.5" />
-                <polyline points="2 15.5 22 15.5" />
+                <circle cx="6" cy="18" r="3" />
+                <circle cx="18" cy="6" r="3" />
+                <path d="M8 16 C 11 12, 13 12, 16 8" />
               </svg>
             </div>
             <span className="select-none font-mono text-[15px] font-bold tracking-tight">
-              Infra<span className="text-amber-500">View</span>
+              Kizu<span className="text-amber-500">na</span>
             </span>
           </div>
 
