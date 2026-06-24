@@ -53,7 +53,7 @@ volumes:
 
 networks:
   default:
-  # External network of the Kafka stack so InfraView can resolve the broker
+  # External network of the Kafka stack so Kizuna can resolve the broker
   # hostname (e.g. "kafka:9092"). Points at the Kafka compose project's network.
   kafka:
     external: true

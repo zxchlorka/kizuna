@@ -341,7 +341,7 @@ func (c *RedisConnector) deleteFromKey(ctx context.Context, keyType string, op c
 		if err != nil {
 			return 0, fmt.Errorf("%w: list index is required", connector.ErrBadRequest)
 		}
-		marker := fmt.Sprintf("__infraview_delete__:%d", time.Now().UnixNano())
+		marker := fmt.Sprintf("__kizuna_delete__:%d", time.Now().UnixNano())
 		if err := c.client.LSet(ctx, op.Object, index, marker).Err(); err != nil {
 			return 0, normalizeRedisError(err)
 		}
