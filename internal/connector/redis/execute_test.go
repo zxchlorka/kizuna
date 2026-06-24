@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
 	goredis "github.com/redis/go-redis/v9"
 )
 

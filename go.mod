@@ -1,4 +1,4 @@
-module github.com/qsnake66/infraview
+module github.com/qsnake66/kizuna
 
 go 1.26.0
 

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 const completionCacheTTL = 5 * time.Minute

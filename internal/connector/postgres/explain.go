@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 type explainEnvelope struct {

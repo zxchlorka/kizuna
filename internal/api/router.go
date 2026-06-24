@@ -3,10 +3,10 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/qsnake66/infraview/internal/api/handlers"
-	apimiddleware "github.com/qsnake66/infraview/internal/api/middleware"
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/api/handlers"
+	apimiddleware "github.com/qsnake66/kizuna/internal/api/middleware"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.Router {

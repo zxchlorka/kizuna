@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 func TestMapConnectorErrorStatuses(t *testing.T) {

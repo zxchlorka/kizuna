@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 	goredis "github.com/redis/go-redis/v9"
 )
 

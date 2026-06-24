@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qsnake66/infraview/internal/config"
+	"github.com/qsnake66/kizuna/internal/config"
 )
 
 type testManagerConnector struct {
