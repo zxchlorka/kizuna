@@ -37,7 +37,7 @@ export function DeleteConnectionDialog({
                 Delete connection
               </DialogTitle>
               <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
-                This removes <span className="font-mono text-foreground">{connectionName}</span> from InfraView. The
+                This removes <span className="font-mono text-foreground">{connectionName}</span> from Kizuna. The
                 saved access settings for this connection will be deleted.
               </DialogDescription>
             </div>

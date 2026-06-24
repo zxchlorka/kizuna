@@ -20,7 +20,7 @@ interface ConnectionHealthStore {
   refreshStale: (ids: string[]) => Promise<void>
 }
 
-const STORAGE_KEY = 'infraview-connection-health'
+const STORAGE_KEY = 'kizuna-connection-health'
 const HEALTH_TTL_MS = 60_000
 // Cap concurrent health checks so a large connection list refreshes fast without
 // dialing every datasource at once. Each check is bounded by fetchWithTimeout on
