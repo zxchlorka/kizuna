@@ -7,9 +7,6 @@ services:
       - kizuna-data:/data
     environment:
       CONFIG_PATH: /data/config.json
-    networks:
-      - default
-      - kafka
 
   kizuna-debug:
     build:
@@ -24,39 +21,11 @@ services:
       - kizuna-data:/data
     environment:
       CONFIG_PATH: /data/config.json
-    depends_on:
-      - postgres
     security_opt:
       - "seccomp:unconfined"
     cap_add:
       - SYS_PTRACE
 
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: dev
-      POSTGRES_PASSWORD: dev
-      POSTGRES_DB: devdb
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-  redis:
-    image: redis:7-alpine
-    ports:
-      - "6379:6379"
-
 volumes:
   kizuna-data:
     name: kizuna-data
-  pgdata:
-    name: kizuna-pgdata
-
-networks:
-  default:
-  # External network of the Kafka stack so Kizuna can resolve the broker
-  # hostname (e.g. "kafka:9092"). Points at the Kafka compose project's network.
-  kafka:
-    external: true
-    name: dmp-profile_default
