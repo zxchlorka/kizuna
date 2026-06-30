@@ -49,7 +49,9 @@ services:
 
 volumes:
   kizuna-data:
+    name: kizuna-data
   pgdata:
+    name: kizuna-pgdata
 
 networks:
   default:
