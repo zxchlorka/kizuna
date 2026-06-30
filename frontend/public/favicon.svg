@@ -1,9 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Kizuna">
   <rect width="64" height="64" rx="14" fill="#0E1116"/>
-  <!-- bond linking two data sources -->
-  <path d="M22 42 C 27 31, 37 33, 42 22" fill="none" stroke="#F97316" stroke-width="5" stroke-linecap="round"/>
-  <!-- node A (solid) -->
-  <circle cx="22" cy="42" r="7.5" fill="#F97316"/>
-  <!-- node B (ring) -->
-  <circle cx="42" cy="22" r="7.5" fill="#0E1116" stroke="#F97316" stroke-width="5"/>
+  <g fill="none" stroke-width="5.5" stroke-linecap="round">
+    <circle cx="26" cy="32" r="13" stroke="#E7E9EE"/>
+    <circle cx="38" cy="32" r="13" stroke="#F97316"/>
+  </g>
 </svg>
