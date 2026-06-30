@@ -97,14 +97,16 @@ export default function ConnectionListPage() {
               <div className="absolute inset-0 animate-pulse-slow rounded-md border border-amber-500/30 bg-amber-500/5" />
               <svg
                 viewBox="0 0 24 24"
-                className="relative z-10 h-[18px] w-[18px] text-foreground"
+                className="relative z-10 h-[18px] w-[18px] text-amber-500"
                 fill="none"
                 stroke="currentColor"
-                strokeWidth="2.3"
+                strokeWidth="2.2"
                 strokeLinecap="round"
+                strokeLinejoin="round"
               >
-                <circle cx="8.5" cy="12" r="5" />
-                <circle cx="15.5" cy="12" r="5" stroke="#F97316" />
+                <path d="M8 16 C 11 12, 13 12, 16 8" />
+                <circle cx="6" cy="18" r="2.8" fill="currentColor" stroke="none" />
+                <circle cx="18" cy="6" r="2.8" />
               </svg>
             </div>
             <div className="flex flex-col leading-none">
