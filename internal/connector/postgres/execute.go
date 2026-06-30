@@ -109,6 +109,8 @@ func (p *PostgresConnector) executeWithExecutor(ctx context.Context, exec sqlExe
 
 	return &connector.ExecResult{
 		Statement:    command,
+		Columns:      []string{},
+		Rows:         [][]any{},
 		RowsAffected: tag.RowsAffected(),
 		DurationMs:   time.Since(startedAt).Milliseconds(),
 	}, nil
