@@ -66,9 +66,9 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
 
   const sortedRows = useMemo(() => {
     if (!activeResult || activeResult.kind !== 'execute' || !sortState) {
-      return activeResult?.kind === 'execute' ? activeResult.result.rows : []
+      return activeResult?.kind === 'execute' ? (activeResult.result.rows ?? []) : []
     }
-    return [...activeResult.result.rows].sort((left, right) => {
+    return [...(activeResult.result.rows ?? [])].sort((left, right) => {
       const comparison = compareValues(left[sortState.columnIndex], right[sortState.columnIndex])
       return sortState.direction === 'asc' ? comparison : -comparison
     })
@@ -125,7 +125,7 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
               This statement was skipped because a previous statement failed in the same batch.
             </p>
           </div>
-        ) : activeResult.result.columns.length > 0 ? (
+        ) : (activeResult.result.columns?.length ?? 0) > 0 ? (
           <div className="flex h-full flex-col overflow-hidden">
             {activeExecuteResult?.truncated && (
               <div className="mx-3 mt-3 rounded-sm border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">
