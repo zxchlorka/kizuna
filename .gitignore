@@ -30,3 +30,6 @@ docs/tmp/
 *.png
 *.jpg
 *.jpeg
+
+# Superpowers brainstorm sessions
+.superpowers/
