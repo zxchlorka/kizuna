@@ -93,28 +93,8 @@ export default function ConnectionListPage() {
       <header className="sticky top-0 z-50 border-b border-border/60 bg-background/90 backdrop-blur-md">
         <div className="flex h-14 items-center justify-between px-6">
           <div className="flex items-center gap-2.5 animate-fade-in-up" style={{ animationDelay: '0ms', animationFillMode: 'both' }}>
-            <div className="relative flex h-8 w-8 shrink-0 items-center justify-center">
-              <div className="absolute inset-0 animate-pulse-slow rounded-md border border-amber-500/30 bg-amber-500/5" />
-              <svg
-                viewBox="0 0 24 24"
-                className="relative z-10 h-[18px] w-[18px] text-amber-500"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M8 16 C 11 12, 13 12, 16 8" />
-                <circle cx="6" cy="18" r="2.8" fill="currentColor" stroke="none" />
-                <circle cx="18" cy="6" r="2.8" />
-              </svg>
-            </div>
-            <div className="flex flex-col leading-none">
-              <span className="select-none text-[9px] font-medium leading-none text-amber-500/70">絆</span>
-              <span className="mt-[3px] select-none font-sans text-[17px] font-semibold lowercase tracking-tight">
-                <span className="text-amber-500">ki</span>zuna
-              </span>
-            </div>
+            <span className="select-none text-[26px] leading-none text-amber-500">絆</span>
+            <span className="select-none font-sans text-[22px] font-medium lowercase leading-none tracking-[-0.01em]">kizuna</span>
           </div>
 
           <div className="flex items-center gap-2 animate-fade-in-up" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
