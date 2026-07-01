@@ -31,5 +31,8 @@ docs/tmp/
 *.jpg
 *.jpeg
 
+# README assets are the one image set that belongs in the repo
+!.github/assets/*.png
+
 # Superpowers brainstorm sessions
 .superpowers/
