@@ -13,7 +13,7 @@ export function classifyDataLoadError(message: string): ClassifiedDataLoadError 
     return {
       title: 'System view is not available',
       description:
-        'This PostgreSQL view exists, but the server has not loaded the required extension in shared_preload_libraries. This is a database configuration issue, not an InfraView error.',
+        'This PostgreSQL view exists, but the server has not loaded the required extension in shared_preload_libraries. This is a database configuration issue, not a Kizuna error.',
       bannerMessage: 'This system view requires shared_preload_libraries on the PostgreSQL server.',
     }
   }

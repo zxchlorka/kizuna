@@ -1,133 +1,91 @@
-# InfraView
+<div align="center">
 
-Веб-приложение для просмотра и управления данными в PostgreSQL.
-Один инструмент вместо разрозненных утилит для подключения, просмотра схем и работы с таблицами.
+# 絆 kizuna
 
-## Возможности
+**One web UI for PostgreSQL, Redis and Kafka — browse, edit and analyze your data.**
 
-- Добавлять PostgreSQL подключения через UI (имя, хост, порт, БД, логин, пароль)
-- Тестировать соединение с замером latency
-- Просматривать дерево объектов: схемы → таблицы (с количеством строк)
-- Просматривать структуру таблицы: колонки, типы, PK/FK
-- Переходить по foreign key в один клик с автоматическим фильтром и breadcrumb-навигацией
-- Открывать reverse FK связи через `Referenced By`
-- Скрывать системные и ненужные схемы через schema filter
-- Шифровать пароли подключений (AES-256-GCM)
-- Тёмная/светлая/системная тема
+Replaces pgAdmin + Redis Desktop Manager + Kafka UI with a single lightweight container.
 
-## Стек
+[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
+[![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 
-| Слой | Технологии |
-|------|-----------|
-| Backend | Go 1.26, Chi v5, pgx/v5 |
-| Frontend | React 18, TypeScript, Vite, shadcn/ui, Zustand, TanStack Table |
-| Deploy | Docker multi-stage, go:embed (один бинарь) |
-| Порт | 9090 |
+English | [Русский](README.ru.md)
 
-## Структура проекта
+![Connections](.github/assets/connections.png)
 
-```
-cmd/infraview/main.go              — entrypoint
-internal/
-  config/
-    config.go                      — загрузка/сохранение config.json
-    crypto.go                      — AES-256-GCM шифрование паролей
-  connector/
-    connector.go                   — Connector interface + общие типы
-    manager.go                     — ConnectionManager (lazy init pool)
-    postgres/
-      postgres.go                  — PostgreSQL коннектор (Ping, GetInfo)
-      schema.go                    — ListObjects, GetSchema
-  api/
-    router.go                      — Chi роутер, все маршруты
-    handlers/
-      health.go                    — GET /api/health
-      connections.go               — CRUD подключений + /test + /info
-      objects.go                   — /objects, /objects/:name/schema
-  server/
-    server.go                      — HTTP сервер + SPA fallback
-frontend/
-  src/                             — React приложение (Vite)
-frontend.go                        — go:embed для frontend/dist
-Dockerfile                         — multi-stage: frontend → backend → final/debug
-Compose configuration              — infraview + infraview-debug + postgres
-```
+</div>
 
-## REST API
-
-```
-GET    /api/health
-GET    /api/connections
-POST   /api/connections
-PUT    /api/connections/:id
-DELETE /api/connections/:id
-POST   /api/connections/:id/test       → {ok, latency_ms}
-GET    /api/connections/:id/info
-GET    /api/connections/:id/objects?path=
-GET    /api/connections/:id/objects/:name/schema
-```
-
-Все ошибки: `{"error": "message"}` + соответствующий HTTP код.
-
-## Как запустить
-
-### Docker (рекомендуется)
+## Quick Start
 
 ```bash
-# Рекомендуемый workflow: пересобрать и поднять рабочий стек приложения
-make compose-rebuild
-
-# Эквивалент напрямую через Docker Compose
-docker compose up --build -d postgres infraview
-
-# Только postgres (для локальной разработки)
-docker compose up postgres
+git clone https://github.com/qsnake66/kizuna.git
+cd kizuna
+docker compose up -d --build
 ```
 
-Приложение доступно на [http://localhost:9090](http://localhost:9090)
+Open **http://localhost:9090** and add your first connection.
 
-### С отладчиком (Delve remote)
+Config lives in the `kizuna-data` Docker volume. Connection passwords are encrypted with AES-256-GCM.
 
-```bash
-docker compose up infraview-debug
-```
+<details>
+<summary><b>Run from source (without Docker)</b></summary>
 
-Затем в GoLand: `Run → Edit Configurations → + → Go Remote → localhost:2345`
-
-### Локально (без Docker)
+Requires Go 1.26+ and Node 20+.
 
 ```bash
-# 1. Поднять postgres
-docker compose up postgres
-
-# 2. Собрать фронт
 cd frontend && npm install && npm run build && cd ..
-
-# 3. Запустить backend
-go run ./cmd/infraview
+go run ./cmd/kizuna
 ```
 
-Config сохраняется в `./config.json` (создаётся автоматически при первом запуске).
+The frontend is embedded into a single Go binary; everything is served on port 9090.
 
-## Переменные окружения
+</details>
 
-| Переменная | По умолчанию | Описание |
-|-----------|-------------|---------|
-| `CONFIG_PATH` | `./config.json` | Путь к файлу конфигурации |
+## Features
 
-В Docker `CONFIG_PATH=/data/config.json` задан через `ENV` в Dockerfile.
+### PostgreSQL
 
-## Архитектура
+![PostgreSQL table view](.github/assets/postgres-table.png)
 
-Ключевой принцип — **единый Connector interface**. API-слой не знает тип источника данных, получает `Connector` из `ConnectionManager` и вызывает методы. Инициализация подключений выполняется лениво, по запросу.
+- Schema tree with tables, views, indexes and row counts
+- Browse data with filters, sorting and pagination
+- Edit cells inline, add and delete rows — single or bulk
+- Follow foreign keys in one click, jump back through breadcrumbs; **Referenced By** opens reverse FKs
+- DDL actions and an index inspector
 
-```
-HTTP Request
-    → Chi Router
-    → Handler (connections/objects)
-    → ConnectionManager.Get(id)   ← lazy init
-    → Connector (Postgres)
-    → Response JSON
-```
+![SQL console](.github/assets/sql-console.png)
 
-Пароли шифруются перед записью в `config.json` и расшифровываются при создании коннектора.
+- SQL console with autocomplete, multi-statement scripts and query history
+- One-click **EXPLAIN** / **EXPLAIN ANALYZE**
+
+### Redis
+
+![Redis key view](.github/assets/redis-keys.png)
+
+- Namespace tree grouped by key prefix
+- Typed editors for String, Hash, List and Sorted Set
+- TTL management, key creation, bulk operations
+- Built-in CLI console
+
+### Kafka
+
+![Kafka message browser](.github/assets/kafka-messages.png)
+
+- Topics with partitions and consumer groups
+- Message browser with JSON view and search by message field
+- Produce messages right from the UI
+
+### Cross-source links
+
+Link data across sources — a Postgres column to a Redis key pattern, a Kafka message field to a Postgres row — and jump between them in one click. That's the 絆 (kizuna, "bond") the app is named after.
+
+### And also
+
+- Dark / light / system theme
+- AES-256-GCM encrypted connection passwords
+- Single Go binary with the frontend embedded — one container, one port
+
+## License
+
+[MIT](LICENSE)

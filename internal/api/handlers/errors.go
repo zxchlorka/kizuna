@@ -4,18 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 func writeJSON(w http.ResponseWriter, code int, data any) {
+	// Marshal up front so an encoding failure surfaces as a 500 instead of a
+	// silent empty 200 (headers already flushed).
+	body, err := json.Marshal(data)
+	if err != nil {
+		slog.Error("failed to encode response", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to encode response")
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(data)
+	_, _ = w.Write(body)
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
@@ -37,6 +46,8 @@ func mapConnectorError(err error) (int, string) {
 	case errors.Is(err, connector.ErrBadRequest):
 		return http.StatusBadRequest, err.Error()
 	case errors.Is(err, connector.ErrForbidden):
+		return http.StatusForbidden, err.Error()
+	case errors.Is(err, connector.ErrReadOnly):
 		return http.StatusForbidden, err.Error()
 	case errors.Is(err, connector.ErrRelationNotFound):
 		return http.StatusNotFound, err.Error()

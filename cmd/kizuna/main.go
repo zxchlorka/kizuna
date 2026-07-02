@@ -12,12 +12,14 @@ import (
 	"syscall"
 	"time"
 
-	infraview "github.com/qsnake66/infraview"
-	"github.com/qsnake66/infraview/internal/api"
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
-	"github.com/qsnake66/infraview/internal/connector/postgres"
-	"github.com/qsnake66/infraview/internal/server"
+	kizuna "github.com/qsnake66/kizuna"
+	"github.com/qsnake66/kizuna/internal/api"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector/kafka"
+	"github.com/qsnake66/kizuna/internal/connector/postgres"
+	redisconnector "github.com/qsnake66/kizuna/internal/connector/redis"
+	"github.com/qsnake66/kizuna/internal/server"
 )
 
 func main() {
@@ -51,12 +53,14 @@ func main() {
 	// Set up ConnectionManager with factories
 	manager := connector.NewConnectionManager(cfg)
 	manager.RegisterFactory("postgres", postgres.NewFactory())
+	manager.RegisterFactory("redis", redisconnector.NewFactory())
+	manager.RegisterFactory("kafka", kafka.NewFactory())
 	defer manager.CloseAll()
 
 	router := api.NewRouter(cfg, manager)
 
 	// Create sub-filesystem rooted at frontend/dist
-	frontendRoot, err := fs.Sub(infraview.FrontendFS, "frontend/dist")
+	frontendRoot, err := fs.Sub(kizuna.FrontendFS, "frontend/dist")
 	if err != nil {
 		slog.Error("failed to create frontend sub-fs", "error", err)
 		os.Exit(1)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 func TestIsRowReturningStatement(t *testing.T) {
@@ -190,5 +191,34 @@ func TestRowFetchPolicyForStatement(t *testing.T) {
 				t.Fatalf("unexpected policy: got %#v want %#v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestBuildColumnSources(t *testing.T) {
+	keys := []oidAttn{
+		{oid: 100, attnum: 1},
+		{oid: 0, attnum: 0},
+		{oid: 100, attnum: 2},
+	}
+	lookup := map[oidAttn]connector.ColumnSource{
+		{oid: 100, attnum: 1}: {Table: "public.users", Column: "id"},
+		{oid: 100, attnum: 2}: {Table: "public.users", Column: "email"},
+	}
+
+	got := buildColumnSources(keys, lookup)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 entries, got %d", len(got))
+	}
+	if got[0] == nil || got[0].Table != "public.users" || got[0].Column != "id" {
+		t.Fatalf("col 0 = %#v", got[0])
+	}
+	if got[1] != nil {
+		t.Fatalf("col 1 (expression, TableOID=0) should be nil, got %#v", got[1])
+	}
+	if got[2] == nil || got[2].Column != "email" {
+		t.Fatalf("col 2 = %#v", got[2])
+	}
+	if buildColumnSources([]oidAttn{{oid: 0, attnum: 0}}, lookup) != nil {
+		t.Fatalf("all-expression result should yield nil")
 	}
 }

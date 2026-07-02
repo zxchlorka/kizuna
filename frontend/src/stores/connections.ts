@@ -5,6 +5,7 @@ import type { Connection, ConnectionInput, TestResult } from '@/types/api'
 interface ConnectionStore {
   connections: Connection[]
   loading: boolean
+  loadedOnce: boolean
   error: string | null
   fetch: () => Promise<void>
   create: (input: ConnectionInput) => Promise<Connection>
@@ -15,24 +16,40 @@ interface ConnectionStore {
   testConfig: (input: Partial<ConnectionInput> & { id?: string }) => Promise<TestResult>
 }
 
+let pendingConnectionsFetch: Promise<void> | null = null
+
 export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   connections: [],
   loading: false,
+  loadedOnce: false,
   error: null,
 
   fetch: async () => {
-    set({ loading: true, error: null })
-    try {
-      const res = await fetchWithTimeout('/api/connections')
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
-      const connections: Connection[] = await res.json()
-      set({ connections, loading: false })
-    } catch (e) {
-      set({ error: (e as Error).message, loading: false })
+    if (pendingConnectionsFetch) {
+      return pendingConnectionsFetch
     }
+    if (get().loading) {
+      return
+    }
+
+    pendingConnectionsFetch = (async () => {
+      set({ loading: true, error: null })
+      try {
+        const res = await fetchWithTimeout('/api/connections')
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: res.statusText }))
+          throw new Error(body.error || res.statusText)
+        }
+        const connections: Connection[] = await res.json()
+        set({ connections, loading: false, loadedOnce: true })
+      } catch (e) {
+        set({ error: (e as Error).message, loading: false, loadedOnce: true })
+      } finally {
+        pendingConnectionsFetch = null
+      }
+    })()
+
+    return pendingConnectionsFetch
   },
 
   create: async (input: ConnectionInput) => {

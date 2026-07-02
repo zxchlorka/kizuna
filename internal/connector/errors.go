@@ -14,6 +14,9 @@ var ErrNotFound = errors.New("not found")
 // ErrForbidden is returned when the data source denies the requested operation.
 var ErrForbidden = errors.New("forbidden")
 
+// ErrReadOnly is returned when a write is attempted on a read-only connection.
+var ErrReadOnly = errors.New("connection is read-only")
+
 // ErrTimeout is returned when the data source times out while serving a request.
 var ErrTimeout = errors.New("timeout")
 

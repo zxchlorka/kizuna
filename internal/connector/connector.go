@@ -30,11 +30,65 @@ type ConnInfo struct {
 }
 
 type Object struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Schema     string `json:"schema"`
-	RowCount   int64  `json:"row_count"`
-	ParentName string `json:"parent_name,omitempty"`
+	Name       string         `json:"name"`
+	Type       string         `json:"type"`
+	Schema     string         `json:"schema"`
+	RowCount   int64          `json:"row_count"`
+	ParentName string         `json:"parent_name,omitempty"`
+	Path       string         `json:"path,omitempty"`
+	TTLSeconds *int64         `json:"ttl_seconds,omitempty"`
+	Meta       map[string]any `json:"meta,omitempty"`
+}
+
+// ObjectPageOpts selects one page of an incremental object listing.
+// Cursor is an opaque token from a previous page ("" = first page).
+// Node optionally pins the listing to a single cluster node.
+type ObjectPageOpts struct {
+	Path   string
+	Cursor string
+	Node   string
+}
+
+type ObjectPage struct {
+	Objects    []Object `json:"objects"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+	Truncated  bool     `json:"truncated"`
+}
+
+// PagedObjectLister is an optional capability for connectors whose keyspace is
+// too large to list in one shot (e.g. Redis). Connectors that implement it get
+// cursor-based tree loading; others keep the plain ListObjects contract.
+type PagedObjectLister interface {
+	ListObjectsPage(ctx context.Context, opts ObjectPageOpts) (*ObjectPage, error)
+}
+
+// KafkaProduceMessage is one already-expanded message to publish. Loop/multi
+// template expansion happens client-side; the backend just publishes the batch.
+type KafkaProduceMessage struct {
+	Key     string            `json:"key,omitempty"`
+	Value   string            `json:"value"`
+	Headers map[string]string `json:"headers,omitempty"`
+}
+
+// KafkaProduceRequest publishes a batch to one topic. Partition pins all
+// messages to a single partition; nil uses the default key-hash partitioner.
+type KafkaProduceRequest struct {
+	Topic     string                `json:"topic"`
+	Partition *int32                `json:"partition,omitempty"`
+	Messages  []KafkaProduceMessage `json:"messages"`
+}
+
+type KafkaProduceResult struct {
+	Produced   int            `json:"produced"`
+	Failed     int            `json:"failed"`
+	Errors     []string       `json:"errors,omitempty"`
+	Partitions map[string]int `json:"partitions,omitempty"`
+}
+
+// KafkaProducer is an optional capability for connectors that can publish
+// messages (Kafka). The API exposes it via POST /produce.
+type KafkaProducer interface {
+	Produce(ctx context.Context, req KafkaProduceRequest) (*KafkaProduceResult, error)
 }
 
 type ObjectInfo struct {
@@ -50,8 +104,10 @@ type ObjectInfo struct {
 }
 
 type Schema struct {
-	Columns      []ColumnMeta `json:"columns"`
-	ReferencedBy []FKRef      `json:"referenced_by,omitempty"`
+	ObjectType   string         `json:"object_type,omitempty"`
+	Columns      []ColumnMeta   `json:"columns"`
+	ReferencedBy []FKRef        `json:"referenced_by,omitempty"`
+	Meta         map[string]any `json:"meta,omitempty"`
 }
 
 type FKRef struct {
@@ -69,6 +125,7 @@ type ColumnMeta struct {
 	IsFK     bool    `json:"is_fk"`
 	FKTable  string  `json:"fk_table,omitempty"`
 	FKColumn string  `json:"fk_column,omitempty"`
+	Editable bool    `json:"editable,omitempty"`
 }
 
 type DataOpts struct {
@@ -90,6 +147,7 @@ type DataResult struct {
 	Rows    []map[string]any `json:"rows"`
 	Total   int64            `json:"total"`
 	HasMore bool             `json:"has_more"`
+	Meta    map[string]any   `json:"meta,omitempty"`
 }
 
 type MutateOp struct {
@@ -107,18 +165,26 @@ type DDLOp struct {
 	Params map[string]any `json:"params"`
 }
 
+// ColumnSource is the origin table/column of a SQL result column, when it maps
+// to a real table column (not an expression/aggregate).
+type ColumnSource struct {
+	Table  string `json:"table"` // schema.table
+	Column string `json:"column"`
+}
+
 type ExecResult struct {
-	Columns      []string `json:"columns"`
-	ColumnTypes  []string `json:"column_types,omitempty"`
-	Rows         [][]any  `json:"rows"`
-	RowsAffected int64    `json:"rows_affected"`
-	Statement    string   `json:"statement,omitempty"`
-	Error        string   `json:"error,omitempty"`
-	DurationMs   int64    `json:"duration_ms"`
-	RowsReturned int      `json:"rows_returned"`
-	Truncated    bool     `json:"truncated,omitempty"`
-	AppliedLimit int      `json:"applied_limit,omitempty"`
-	Skipped      bool     `json:"skipped,omitempty"`
+	Columns       []string        `json:"columns"`
+	ColumnTypes   []string        `json:"column_types,omitempty"`
+	Rows          [][]any         `json:"rows"`
+	RowsAffected  int64           `json:"rows_affected"`
+	Statement     string          `json:"statement,omitempty"`
+	Error         string          `json:"error,omitempty"`
+	DurationMs    int64           `json:"duration_ms"`
+	RowsReturned  int             `json:"rows_returned"`
+	Truncated     bool            `json:"truncated,omitempty"`
+	AppliedLimit  int             `json:"applied_limit,omitempty"`
+	ColumnSources []*ColumnSource `json:"column_sources,omitempty"` // aligned to Columns; nil for expressions
+	Skipped       bool            `json:"skipped,omitempty"`
 }
 
 type MutateResult struct {
@@ -130,6 +196,11 @@ type BulkMutateOp struct {
 	Schema     string     `json:"schema"`
 	Object     string     `json:"object"`
 	Operations []MutateOp `json:"operations"`
+	Pattern    string     `json:"pattern,omitempty"`
+	Preview    bool       `json:"preview,omitempty"`
+	Execute    bool       `json:"execute,omitempty"`
+	ConfirmAll bool       `json:"confirm_all,omitempty"`
+	BatchSize  int        `json:"batch_size,omitempty"`
 }
 
 type BulkMutateResult struct {

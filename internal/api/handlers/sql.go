@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
-	"github.com/qsnake66/infraview/internal/history"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/qsnake66/kizuna/internal/history"
 )
 
 type SQLHandler struct {
@@ -185,9 +185,9 @@ func (h *SQLHandler) Completions(w http.ResponseWriter, r *http.Request) {
 		Table:   r.URL.Query().Get("table"),
 	}
 	switch req.Context {
-	case "table", "column", "function", "keyword", "":
+	case "table", "column", "function", "keyword", "command", "key", "":
 	default:
-		writeError(w, http.StatusBadRequest, "context must be one of table, column, function, keyword")
+		writeError(w, http.StatusBadRequest, "context must be one of table, column, function, keyword, command, key")
 		return
 	}
 

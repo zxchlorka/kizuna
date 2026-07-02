@@ -1,29 +1,120 @@
-export type ObjectType = 'table' | 'view' | 'index'
+export type ConnectionType = 'postgres' | 'redis' | 'kafka'
+export type RedisMode = 'standalone' | 'cluster' | 'sentinel'
+export type KafkaSASLMechanism = '' | 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512'
+
+export interface KafkaConfig {
+  brokers: string[]
+  sasl_mechanism?: string
+  tls_enabled?: boolean
+  schema_registry_url?: string
+}
+export interface RedisConfig {
+  mode?: RedisMode
+  address?: string
+  addresses?: string[]
+  sentinel_addrs?: string[]
+  master_name?: string
+  separator?: string
+  database?: number
+  username?: string
+  tls_enabled?: boolean
+}
+
+export type RedisObjectType =
+  | 'redis_string'
+  | 'redis_hash'
+  | 'redis_list'
+  | 'redis_set'
+  | 'redis_zset'
+  | 'redis_stream'
+  | 'redis_json'
+
+export type KafkaObjectType = 'kafka_topic' | 'kafka_partition' | 'kafka_consumer_group'
+
+export type ObjectType = 'table' | 'view' | 'index' | 'namespace' | RedisObjectType | KafkaObjectType
 export type ObjectItemType = ObjectType | 'schema'
 
 export interface Connection {
   id: string
   name: string
-  type: string
-  host: string
-  port: number
-  database: string
-  username: string
+  type: ConnectionType
+  host?: string
+  port?: number
+  database?: string | number
+  username?: string
+  password?: string
+  mode?: RedisMode
+  separator?: string
+  tlsEnabled?: boolean
+  masterName?: string
+  clusterAddresses?: string[]
+  sentinelAddresses?: string[]
+  redis_config?: RedisConfig
+  kafka_config?: KafkaConfig
   tags?: string[]
+  read_only?: boolean
   visible_schemas: string[] | null
 }
 
-export interface ConnectionInput {
+export interface PostgresConnectionInput {
   name: string
-  type: string
+  type: 'postgres'
   host: string
   port: number
   database: string
   username: string
   password: string
   tags: string[]
+  read_only?: boolean
   visible_schemas?: string[] | null
 }
+
+export interface RedisConnectionInput {
+  name: string
+  type: 'redis'
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  tags: string[]
+  read_only?: boolean
+  redis_config: RedisConfig
+}
+
+export interface KafkaProduceMessage {
+  key?: string
+  value: string
+  headers?: Record<string, string>
+}
+
+export interface KafkaProduceRequest {
+  topic: string
+  partition?: number | null
+  messages: KafkaProduceMessage[]
+}
+
+export interface KafkaProduceResult {
+  produced: number
+  failed: number
+  errors?: string[]
+  partitions?: Record<string, number>
+}
+
+export interface KafkaConnectionInput {
+  name: string
+  type: 'kafka'
+  host: string
+  port: number
+  database: string
+  username: string
+  password: string
+  tags: string[]
+  read_only?: boolean
+  kafka_config: KafkaConfig
+}
+
+export type ConnectionInput = PostgresConnectionInput | RedisConnectionInput | KafkaConnectionInput
 
 export interface TestResult {
   ok: boolean
@@ -37,6 +128,15 @@ export interface ObjectItem {
   schema: string
   row_count: number
   parent_name?: string
+  path?: string
+  ttl_seconds?: number
+  meta?: Record<string, unknown>
+}
+
+export interface ObjectPageResponse {
+  objects: ObjectItem[]
+  next_cursor?: string
+  truncated: boolean
 }
 
 export interface ObjectInfo {
@@ -60,6 +160,7 @@ export interface ColumnMeta {
   is_fk: boolean
   fk_table: string
   fk_column: string
+  editable?: boolean
 }
 
 export interface FKRef {
@@ -69,8 +170,10 @@ export interface FKRef {
 }
 
 export interface Schema {
+  object_type?: ObjectType
   columns: ColumnMeta[]
   referenced_by: FKRef[]
+  meta?: Record<string, unknown>
 }
 
 export type TableRow = Record<string, unknown>
@@ -80,6 +183,12 @@ export interface DataResult {
   rows: TableRow[]
   total: number
   has_more: boolean
+  meta?: Record<string, unknown>
+}
+
+export interface ColumnSource {
+  table: string
+  column: string
 }
 
 export interface ExecResult {
@@ -93,6 +202,7 @@ export interface ExecResult {
   rows_returned: number
   truncated?: boolean
   applied_limit?: number
+  column_sources?: (ColumnSource | null)[]
   skipped?: boolean
 }
 
@@ -131,7 +241,7 @@ export interface ExplainResult {
 
 export interface CompletionItem {
   label: string
-  type: 'table' | 'column' | 'function' | 'keyword'
+  type: 'table' | 'column' | 'function' | 'keyword' | 'command' | 'key'
   detail?: string
 }
 
@@ -176,6 +286,11 @@ export interface BulkMutateOp {
   schema: string
   object: string
   operations: MutateOp[]
+  pattern?: string
+  preview?: boolean
+  execute?: boolean
+  confirm_all?: boolean
+  batch_size?: number
 }
 
 export interface BulkMutateResult {
@@ -213,3 +328,26 @@ export interface DDLResult {
   schema: string
   object: string
 }
+
+export type LinkKind = 'kafka' | 'redis' | 'postgres'
+export type LinkTargetKind = LinkKind
+export type RedisExtract = 'value_field' | 'key_capture' | 'string_value' | 'member'
+
+export interface LinkRecord {
+  id: string
+  name?: string
+  source_conn_id: string
+  source_kind: LinkKind
+  source_scope: string
+  source_field?: string
+  source_extract?: RedisExtract
+  target_conn_id: string
+  target_kind: LinkTargetKind
+  target_topic?: string
+  target_field?: string
+  key_pattern?: string
+  table?: string
+  column?: string
+}
+
+export type LinkInput = Omit<LinkRecord, 'id'>

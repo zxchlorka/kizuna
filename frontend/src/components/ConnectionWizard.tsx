@@ -1,10 +1,21 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import * as Dialog from '@radix-ui/react-dialog'
-import { ArrowLeft, CheckCircle2, Database, Loader2, X, XCircle } from 'lucide-react'
+import { ArrowLeft, CheckCircle2, Database, Loader2, Server, ShieldCheck, X, XCircle } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
+import { KafkaConnectionForm } from '@/components/ConnectionWizard/KafkaConnectionForm'
+import { PostgresConnectionForm } from '@/components/ConnectionWizard/PostgresConnectionForm'
+import { RedisConnectionForm } from '@/components/ConnectionWizard/RedisConnectionForm'
+import {
+  buildConnectionInput,
+  createConnectionForm,
+  createConnectionFormFromConnection,
+  validateConnectionForm,
+  type ConnectionFormValues,
+} from '@/lib/connectionForms'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import type { Connection, ConnectionInput } from '@/types/api'
+import type { Connection, ConnectionInput, PostgresConnectionInput } from '@/types/api'
 
 interface ConnectionWizardProps {
   open: boolean
@@ -12,41 +23,61 @@ interface ConnectionWizardProps {
   editConnection?: Connection
 }
 
-const blankForm: ConnectionInput = {
-  name: '',
-  type: 'postgres',
-  host: 'localhost',
-  port: 5432,
-  database: '',
-  username: '',
-  password: '',
-  tags: [],
-}
-
 const unchangedPasswordToken = '__keep_existing_password__'
 
-function buildConnectionTestKey(form: ConnectionInput, isEdit: boolean) {
-  const passwordKey = isEdit && form.password === '' ? unchangedPasswordToken : form.password
+function buildConnectionTestKey(form: ConnectionFormValues, isEdit: boolean) {
+  const input = buildConnectionInput(form)
+  const passwordKey = isEdit && input.password === '' ? unchangedPasswordToken : input.password
 
   return JSON.stringify({
-    type: form.type,
-    host: form.host.trim(),
-    port: form.port,
-    database: form.database.trim(),
-    username: form.username.trim(),
+    type: input.type,
+    host: input.host.trim(),
+    port: input.port,
+    database: String(input.database).trim(),
+    username: input.username.trim(),
     password: passwordKey,
+    read_only: input.read_only ?? false,
+    redis_config:
+      input.type === 'redis'
+        ? {
+            mode: input.redis_config.mode ?? 'standalone',
+            addresses: input.redis_config.addresses ?? [],
+            sentinel_addrs: input.redis_config.sentinel_addrs ?? [],
+            master_name: input.redis_config.master_name ?? '',
+            separator: input.redis_config.separator ?? ':',
+            tls_enabled: input.redis_config.tls_enabled ?? false,
+          }
+        : null,
+    kafka_config:
+      input.type === 'kafka'
+        ? {
+            brokers: input.kafka_config.brokers,
+            sasl_mechanism: input.kafka_config.sasl_mechanism ?? '',
+            tls_enabled: input.kafka_config.tls_enabled ?? false,
+          }
+        : null,
   })
 }
 
-function buildExistingConnectionTestKey(connection: Connection) {
-  return JSON.stringify({
-    type: connection.type,
-    host: connection.host.trim(),
-    port: connection.port,
-    database: connection.database.trim(),
-    username: connection.username.trim(),
-    password: unchangedPasswordToken,
-  })
+function toUpdatePayload(form: ConnectionFormValues, editConnection: Connection): Partial<ConnectionInput> {
+  const input = buildConnectionInput(form)
+
+  if (input.type === 'postgres') {
+    const payload: Partial<PostgresConnectionInput> = {
+      ...input,
+      visible_schemas: editConnection.visible_schemas ?? null,
+    }
+    if (!payload.password) {
+      delete payload.password
+    }
+    return payload
+  }
+
+  const payload: Partial<ConnectionInput> = { ...input }
+  if (!payload.password) {
+    delete payload.password
+  }
+  return payload
 }
 
 export function ConnectionWizard({ open, onOpenChange, editConnection }: ConnectionWizardProps) {
@@ -54,16 +85,20 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
   const store = useConnectionStore()
   const isEdit = !!editConnection
   const [step, setStep] = useState<1 | 2>(1)
-  const [form, setForm] = useState<ConnectionInput>(blankForm)
+  const [form, setForm] = useState<ConnectionFormValues>(() => createConnectionForm('postgres'))
   const [testing, setTesting] = useState(false)
   const [saving, setSaving] = useState(false)
   const [lastSuccessfulTestKey, setLastSuccessfulTestKey] = useState<string | null>(null)
   const [testResult, setTestResult] = useState<{ ok: boolean; latency_ms: number; error?: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const isFormValid = !!(form.name && form.host && form.port && form.database && form.username)
-  const currentTestKey = buildConnectionTestKey(form, isEdit)
-  const baselineTestKey = editConnection ? buildExistingConnectionTestKey(editConnection) : null
+  const validationError = useMemo(() => validateConnectionForm(form, isEdit), [form, isEdit])
+  const isFormValid = validationError === null
+  const currentTestKey = useMemo(() => buildConnectionTestKey(form, isEdit), [form, isEdit])
+  const baselineTestKey = useMemo(
+    () => (editConnection ? buildConnectionTestKey(createConnectionFormFromConnection(editConnection), true) : null),
+    [editConnection]
+  )
   const requiresSuccessfulTest = !isEdit || currentTestKey !== baselineTestKey
   const canSave = isFormValid && !testing && !saving && (!requiresSuccessfulTest || lastSuccessfulTestKey === currentTestKey)
 
@@ -80,49 +115,33 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
 
     if (editConnection) {
       setStep(2)
-      setForm({
-        name: editConnection.name,
-        type: editConnection.type,
-        host: editConnection.host,
-        port: editConnection.port,
-        database: editConnection.database,
-        username: editConnection.username,
-        password: '',
-        tags: editConnection.tags ?? [],
-      })
+      setForm(createConnectionFormFromConnection(editConnection))
       return
     }
 
     setStep(1)
-    setForm(blankForm)
+    setForm(createConnectionForm('postgres'))
   }, [editConnection, open])
 
-  const updateField = <K extends keyof ConnectionInput>(key: K, value: ConnectionInput[K]) => {
-    setForm((prev) => ({ ...prev, [key]: value }))
-
-    if (key === 'type' || key === 'host' || key === 'port' || key === 'database' || key === 'username' || key === 'password') {
-      setTestResult(null)
-    }
-
+  const updateForm = (patch: Partial<ConnectionFormValues>) => {
+    setForm((prev) => ({ ...prev, ...patch }))
+    setTestResult(null)
     setError(null)
   }
 
   const persist = async (): Promise<string> => {
     if (isEdit && editConnection) {
-      const payload: Partial<ConnectionInput> = { ...form }
-      if (!payload.password) {
-        delete payload.password
-      }
-      await store.update(editConnection.id, payload)
+      await store.update(editConnection.id, toUpdatePayload(form, editConnection))
       return editConnection.id
     }
 
-    const connection = await store.create(form)
+    const connection = await store.create(buildConnectionInput(form))
     return connection.id
   }
 
   const handleTest = async () => {
     if (!isFormValid) {
+      setError(validationError)
       return
     }
 
@@ -133,7 +152,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
     try {
       const result = await store.testConfig({
         ...(editConnection ? { id: editConnection.id } : {}),
-        ...form,
+        ...buildConnectionInput(form),
       })
       setTestResult(result)
       setLastSuccessfulTestKey(currentTestKey)
@@ -147,6 +166,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
 
   const handleSave = async () => {
     if (!isFormValid) {
+      setError(validationError)
       return
     }
 
@@ -171,12 +191,10 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
     }
   }
 
-  const inputCls = cn(
-    'w-full rounded-sm border border-input bg-background px-3 py-2 text-sm font-mono outline-none',
-    'placeholder:text-muted-foreground/30',
-    'focus:border-amber-500/60 focus:ring-0 transition-colors duration-150'
-  )
-  const labelCls = 'mb-1 block text-[10px] font-medium text-muted-foreground uppercase tracking-[0.12em]'
+  const selectType = (type: 'postgres' | 'redis' | 'kafka') => {
+    setForm(createConnectionForm(type))
+    setStep(2)
+  }
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -184,7 +202,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/60 data-[state=open]:animate-fade-in" />
         <Dialog.Content
           aria-describedby={undefined}
-          className="fixed inset-0 z-50 m-auto h-fit max-h-[calc(100vh-2rem)] w-full max-w-lg overflow-y-auto rounded-sm border border-border bg-background shadow-2xl data-[state=open]:animate-fade-in"
+          className="fixed inset-0 z-50 m-auto h-fit max-h-[calc(100vh-2rem)] w-full max-w-4xl overflow-y-auto rounded-sm border border-border bg-background shadow-2xl data-[state=open]:animate-fade-in"
         >
           <div className="flex items-center justify-between border-b border-border px-6 py-4">
             <Dialog.Title className="font-mono text-sm font-bold">
@@ -201,12 +219,10 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
           {step === 1 && (
             <div className="space-y-4 px-6 py-5">
               <p className="text-xs text-muted-foreground">Select connection type</p>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid gap-3 sm:grid-cols-3">
                 <button
-                  onClick={() => {
-                    updateField('type', 'postgres')
-                    setStep(2)
-                  }}
+                  type="button"
+                  onClick={() => selectType('postgres')}
                   className="group relative flex flex-col items-center gap-2 rounded-sm border-2 border-amber-500/50 bg-amber-500/5 p-4 transition-colors hover:bg-amber-500/10"
                 >
                   <Database className="h-7 w-7 text-blue-400" />
@@ -216,111 +232,49 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
                   <div className="absolute -left-px -bottom-px h-2 w-2 bg-amber-500" />
                   <div className="absolute -right-px -bottom-px h-2 w-2 bg-amber-500" />
                 </button>
-                <div className="flex cursor-not-allowed select-none flex-col items-center gap-2 rounded-sm border border-border p-4 opacity-35">
-                  <Database className="h-7 w-7 text-red-400" />
+                <button
+                  type="button"
+                  onClick={() => selectType('redis')}
+                  className="group relative flex flex-col items-center gap-2 rounded-sm border border-border bg-background p-4 transition-colors hover:border-red-500/50 hover:bg-red-500/5"
+                >
+                  <Server className="h-7 w-7 text-red-400" />
                   <span className="font-mono text-xs font-medium">Redis</span>
-                  <span className="text-[10px] text-muted-foreground">v0.2</span>
-                </div>
-                <div className="flex cursor-not-allowed select-none flex-col items-center gap-2 rounded-sm border border-border p-4 opacity-35">
+                  <span className="text-[10px] text-muted-foreground">Standalone / Cluster / Sentinel</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => selectType('kafka')}
+                  className="group relative flex flex-col items-center gap-2 rounded-sm border border-border bg-background p-4 transition-colors hover:border-orange-500/50 hover:bg-orange-500/5"
+                >
                   <Database className="h-7 w-7 text-orange-400" />
                   <span className="font-mono text-xs font-medium">Kafka</span>
-                  <span className="text-[10px] text-muted-foreground">v0.3</span>
-                </div>
+                  <span className="text-[10px] text-muted-foreground">Topics / Consumer groups</span>
+                </button>
               </div>
             </div>
           )}
 
           {step === 2 && (
             <div className="space-y-4 px-6 py-5">
-              <div>
-                <label className={labelCls}>Name</label>
-                <input
-                  type="text"
-                  value={form.name}
-                  onChange={(e) => updateField('name', e.target.value)}
-                  placeholder="My Database"
-                  className={inputCls}
-                  autoFocus
-                />
-              </div>
+              {form.type === 'redis' ? (
+                <RedisConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
+              ) : form.type === 'kafka' ? (
+                <KafkaConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
+              ) : (
+                <PostgresConnectionForm form={form} onChange={updateForm} isEdit={isEdit} />
+              )}
 
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className={labelCls}>Host</label>
-                  <input
-                    type="text"
-                    value={form.host}
-                    onChange={(e) => updateField('host', e.target.value)}
-                    placeholder="localhost"
-                    className={inputCls}
-                  />
-                </div>
-                <div className="w-24">
-                  <label className={labelCls}>Port</label>
-                  <input
-                    type="number"
-                    value={form.port}
-                    onChange={(e) => updateField('port', parseInt(e.target.value, 10) || 0)}
-                    className={inputCls}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className={labelCls}>Database</label>
-                <input
-                  type="text"
-                  value={form.database}
-                  onChange={(e) => updateField('database', e.target.value)}
-                  placeholder="mydb"
-                  className={inputCls}
-                />
-              </div>
-
-              <div className="flex gap-3">
-                <div className="flex-1">
-                  <label className={labelCls}>Username</label>
-                  <input
-                    type="text"
-                    value={form.username}
-                    onChange={(e) => updateField('username', e.target.value)}
-                    placeholder="postgres"
-                    className={inputCls}
-                  />
-                </div>
-                <div className="flex-1">
-                  <label className={labelCls}>
-                    Password
-                    {isEdit && <span className="ml-1 normal-case opacity-50">(blank = keep)</span>}
+              <div className="flex items-center justify-between gap-3 rounded-sm border border-border bg-muted/10 px-3 py-3">
+                <div>
+                  <label className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Read-only
                   </label>
-                  <input
-                    type="password"
-                    value={form.password}
-                    onChange={(e) => updateField('password', e.target.value)}
-                    placeholder={isEdit ? '••••••••' : ''}
-                    className={inputCls}
-                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Block every data-modifying command. Use for production connections.
+                  </p>
                 </div>
-              </div>
-
-              <div>
-                <label className={labelCls}>Tags</label>
-                <input
-                  type="text"
-                  value={form.tags.join(', ')}
-                  onChange={(e) =>
-                    updateField(
-                      'tags',
-                      e.target.value
-                        .split(',')
-                        .map((tag) => tag.trim())
-                        .filter(Boolean)
-                    )
-                  }
-                  placeholder="production, reporting"
-                  className={inputCls}
-                />
-                <p className="mt-1 text-[10px] text-muted-foreground">Use explicit tags like `production` to enable safety banners.</p>
+                <Switch checked={form.readOnly} onCheckedChange={(checked) => updateForm({ readOnly: checked })} />
               </div>
 
               {(testing || testResult || error) && (
@@ -363,6 +317,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
                 <div className="flex items-center justify-between">
                   {!isEdit ? (
                     <button
+                      type="button"
                       onClick={() => setStep(1)}
                       className="flex items-center gap-1 rounded-sm px-3 py-2 font-mono text-xs text-muted-foreground transition-colors hover:bg-muted"
                     >
@@ -375,6 +330,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
 
                   <div className="flex items-center gap-2">
                     <button
+                      type="button"
                       onClick={handleTest}
                       disabled={!isFormValid || testing || saving}
                       className={cn(
@@ -395,6 +351,7 @@ export function ConnectionWizard({ open, onOpenChange, editConnection }: Connect
                     </button>
 
                     <button
+                      type="button"
                       onClick={handleSave}
                       disabled={!canSave}
                       className={cn(

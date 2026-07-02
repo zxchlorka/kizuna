@@ -4,16 +4,24 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 type DataHandler struct {
 	cfg     *config.AppConfig
 	manager *connector.ConnectionManager
+}
+
+type CreateKeyRequest struct {
+	Key   string `json:"key"`
+	Type  string `json:"type"`
+	Value any    `json:"value"`
+	TTL   *int64 `json:"ttl,omitempty"`
 }
 
 func NewDataHandler(cfg *config.AppConfig, manager *connector.ConnectionManager) *DataHandler {
@@ -22,7 +30,11 @@ func NewDataHandler(cfg *config.AppConfig, manager *connector.ConnectionManager)
 
 func (h *DataHandler) GetData(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	name := chi.URLParam(r, "name") // "schema.table"
+	name, err := url.PathUnescape(chi.URLParam(r, "name")) // "schema.table" or redis key path
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid object name")
+		return
+	}
 
 	q := r.URL.Query()
 
@@ -80,8 +92,8 @@ func (h *DataHandler) Mutate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if op.Schema == "" || op.Object == "" {
-		writeError(w, http.StatusBadRequest, "schema and object are required")
+	if op.Object == "" {
+		writeError(w, http.StatusBadRequest, "object is required")
 		return
 	}
 
@@ -127,6 +139,82 @@ func (h *DataHandler) MutateBulk(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusConflict, err.Error())
 			return
 		}
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+func (h *DataHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var req CreateKeyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	if req.Key == "" || req.Type == "" {
+		writeError(w, http.StatusBadRequest, "key and type are required")
+		return
+	}
+
+	data := map[string]any{
+		"type":  req.Type,
+		"value": req.Value,
+	}
+	if req.TTL != nil {
+		data["ttl"] = *req.TTL
+	}
+
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	result, err := conn.Mutate(r.Context(), connector.MutateOp{
+		Type:   "insert",
+		Schema: "",
+		Object: req.Key,
+		Data:   data,
+	})
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, result)
+}
+
+// Produce publishes a batch of messages to a Kafka topic. Loop/multi template
+// expansion happens client-side; this endpoint receives the expanded batch.
+func (h *DataHandler) Produce(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var req connector.KafkaProduceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	producer, ok := conn.(connector.KafkaProducer)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "producing is not supported for this connection")
+		return
+	}
+
+	result, err := producer.Produce(r.Context(), req)
+	if err != nil {
 		writeConnectorError(w, err)
 		return
 	}

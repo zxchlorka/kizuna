@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/infraview/internal/config"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 type testSQLConnector struct {
@@ -208,6 +208,25 @@ func TestSQLHandlerCompletionsRejectsInvalidContext(t *testing.T) {
 	handler.Completions(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+}
+
+func TestSQLHandlerCompletionsAcceptsRedisContexts(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestSQLHandler(t, &testSQLConnector{
+		completions: []connector.CompletionItem{{Label: "HGETALL", Type: "command"}},
+	})
+	req := withSQLRouteParams(
+		httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/completions?context=command&prefix=HG", nil),
+		map[string]string{"id": "conn-1"},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.Completions(rec, req)
+
+	if rec.Code != http.StatusOK {
 		t.Fatalf("unexpected status: got %d", rec.Code)
 	}
 }

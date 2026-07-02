@@ -1,5 +1,5 @@
 services:
-  infraview:
+  kizuna:
     build: .
     ports:
       - "9090:9090"

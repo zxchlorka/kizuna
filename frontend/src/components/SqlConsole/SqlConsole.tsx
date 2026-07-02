@@ -219,6 +219,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
               results={tab.results}
               activeResultId={tab.activeResultId}
               onSelectResult={(resultId) => setActiveResult(tabId, resultId)}
+              connId={connId}
             />
           )}
         </div>
