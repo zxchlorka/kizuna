@@ -234,10 +234,10 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
                 className={cn(
                   'rounded-sm border px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-[0.12em]',
                   connection.type === 'redis'
-                    ? 'border-red-500/20 bg-red-500/5 text-red-400/70'
+                    ? 'border-red-500/20 bg-red-500/5 text-red-600 dark:text-red-400/70'
                     : connection.type === 'kafka'
-                      ? 'border-orange-500/20 bg-orange-500/5 text-orange-400/70'
-                      : 'border-blue-500/15 bg-blue-500/5 text-blue-400/60'
+                      ? 'border-orange-500/20 bg-orange-500/5 text-orange-600 dark:text-orange-400/70'
+                      : 'border-blue-500/15 bg-blue-500/5 text-blue-600 dark:text-blue-400/60'
                 )}
               >
                 {connection.type || 'postgres'}
