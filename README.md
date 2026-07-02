@@ -2,21 +2,21 @@
 
 # 絆 kizuna
 
-**One web UI for PostgreSQL, Redis and Kafka — browse, edit and analyze your data.**
+**Один веб-интерфейс для PostgreSQL, Redis и Kafka — просмотр, редактирование и анализ данных.**
 
-Replaces pgAdmin + Redis Desktop Manager + Kafka UI with a single lightweight container.
+Заменяет pgAdmin + Redis Desktop Manager + Kafka UI одним лёгким контейнером.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 
-English | [Русский](README.ru.md)
+Русский | [English](README.en.md)
 
-![Connections](.github/assets/connections.png)
+![Подключения](.github/assets/connections.png)
 
 </div>
 
-## Quick Start
+## Быстрый старт
 
 ```bash
 git clone https://github.com/qsnake66/kizuna.git
@@ -24,68 +24,74 @@ cd kizuna
 docker compose up -d --build
 ```
 
-Open **http://localhost:9090** and add your first connection.
+Откройте **http://localhost:9090** и добавьте первое подключение.
 
-Config lives in the `kizuna-data` Docker volume. Connection passwords are encrypted with AES-256-GCM.
+Конфигурация хранится в Docker-томе `kizuna-data`. Пароли подключений шифруются AES-256-GCM.
 
 <details>
-<summary><b>Run from source (without Docker)</b></summary>
+<summary><b>Запуск из исходников (без Docker)</b></summary>
 
-Requires Go 1.26+ and Node 20+.
+Нужны Go 1.26+ и Node 20+.
 
 ```bash
 cd frontend && npm install && npm run build && cd ..
 go run ./cmd/kizuna
 ```
 
-The frontend is embedded into a single Go binary; everything is served on port 9090.
+Фронтенд встраивается в единый Go-бинарь; всё работает на порту 9090.
 
 </details>
 
-## Features
+## Возможности
 
 ### PostgreSQL
 
-![PostgreSQL table view](.github/assets/postgres-table.png)
+![Просмотр таблицы PostgreSQL](.github/assets/postgres-table.png)
 
-- Schema tree with tables, views, indexes and row counts
-- Browse data with filters, sorting and pagination
-- Edit cells inline, add and delete rows — single or bulk
-- Follow foreign keys in one click, jump back through breadcrumbs; **Referenced By** opens reverse FKs
-- DDL actions and an index inspector
+- Дерево схем: таблицы, представления, индексы, количество строк
+- Просмотр данных с фильтрами, сортировкой и пагинацией
+- Редактирование ячеек на месте, добавление и удаление строк — по одной или пачкой
+- Переход по foreign key в один клик, возврат через breadcrumbs; **Referenced By** открывает обратные связи
+- DDL-операции и инспектор индексов
 
-![SQL console](.github/assets/sql-console.png)
+![SQL-консоль](.github/assets/sql-console.png)
 
-- SQL console with autocomplete, multi-statement scripts and query history
-- One-click **EXPLAIN** / **EXPLAIN ANALYZE**
+- SQL-консоль с автодополнением, многооператорными скриптами и историей запросов
+- **EXPLAIN** / **EXPLAIN ANALYZE** в один клик
 
 ### Redis
 
-![Redis key view](.github/assets/redis-keys.png)
+![Просмотр ключа Redis](.github/assets/redis-keys.png)
 
-- Namespace tree grouped by key prefix
-- Typed editors for String, Hash, List and Sorted Set
-- TTL management, key creation, bulk operations
-- Built-in CLI console
+- Дерево ключей, сгруппированное по префиксам
+- Типизированные редакторы для String, Hash, List и Sorted Set
+- Управление TTL, создание ключей, массовые операции
+- Встроенная CLI-консоль
 
 ### Kafka
 
-![Kafka message browser](.github/assets/kafka-messages.png)
+![Браузер сообщений Kafka](.github/assets/kafka-messages.png)
 
-- Topics with partitions and consumer groups
-- Message browser with JSON view and search by message field
-- Produce messages right from the UI
+- Топики с партициями и consumer groups
+- Браузер сообщений с JSON-представлением и поиском по полям сообщения
+- Отправка сообщений прямо из UI
 
 ### Cross-source links
 
-Link data across sources — a Postgres column to a Redis key pattern, a Kafka message field to a Postgres row — and jump between them in one click. That's the 絆 (kizuna, "bond") the app is named after.
+![Переход по линку](.github/assets/cross-source-link.png)
 
-### And also
+Связывайте данные между источниками — колонку Postgres с паттерном ключей Redis, поле Kafka-сообщения со строкой в Postgres. Правый клик по строке — и связанная запись открывается в один клик.
 
-- Dark / light / system theme
-- AES-256-GCM encrypted connection passwords
-- Single Go binary with the frontend embedded — one container, one port
+![Управление линками в настройках](.github/assets/links-settings.png)
 
-## License
+Редактировать и удалять линки можно в настройках.
+
+### А ещё
+
+- Тёмная / светлая / системная тема
+- Шифрование паролей подключений AES-256-GCM
+- Один Go-бинарь со встроенным фронтендом — один контейнер, один порт
+
+## Лицензия
 
 [MIT](LICENSE)
