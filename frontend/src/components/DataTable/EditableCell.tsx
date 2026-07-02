@@ -149,6 +149,7 @@ export function EditableCell({
   const isJson = JSON_TYPES.has(dataType)
   const isInteger = INTEGER_TYPES.has(dataType)
   const isNumeric = NUMERIC_TYPES.has(dataType)
+  const canEdit = colMeta.editable !== false
 
   const textValue = useMemo(() => toInputValue(value), [value])
   const fullPreviewValue = useMemo(() => toPreviewString(value, isJson), [value, isJson])
@@ -175,7 +176,7 @@ export function EditableCell({
   }, [editMode])
 
   const startEdit = () => {
-    if (!editMode || rowDeleted || isBool) return
+    if (!editMode || rowDeleted || isBool || !canEdit) return
     setInputValue(textValue)
     setError(null)
     setIsEditing(true)
@@ -313,7 +314,7 @@ export function EditableCell({
     return (
       <div className={cellClasses} onDoubleClick={startEdit} title={fkHint ?? undefined}>
         <span className="font-mono text-xs text-muted-foreground">NULL</span>
-        {editMode && !rowDeleted && (
+        {editMode && !rowDeleted && canEdit && (
           <button
             type="button"
             className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -331,7 +332,7 @@ export function EditableCell({
       <div className={cn(cellClasses, 'justify-center px-0')}>
         <TableCheckbox
           checked={Boolean(value)}
-          disabled={!editMode || rowDeleted}
+          disabled={!editMode || rowDeleted || !canEdit}
           onChange={onBoolChange}
         />
       </div>
@@ -387,7 +388,7 @@ export function EditableCell({
           </button>
         )}
 
-        {editMode && !rowDeleted && !isJson && !largeValue && (
+        {editMode && !rowDeleted && canEdit && !isJson && !largeValue && (
           <button
             type="button"
             className="ml-auto rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -408,14 +409,14 @@ export function EditableCell({
         initialValue={value}
         isJson={isJson}
         nullable={colMeta.nullable}
-        readOnly={!editMode || rowDeleted}
+        readOnly={!editMode || rowDeleted || !canEdit}
         onClose={() => setLargeEditorOpen(false)}
         onSave={(newValue) => {
-          if (!editMode || rowDeleted) return
+          if (!editMode || rowDeleted || !canEdit) return
           onChange(newValue)
         }}
         onSetNull={() => {
-          if (!editMode || rowDeleted || !colMeta.nullable) return
+          if (!editMode || rowDeleted || !colMeta.nullable || !canEdit) return
           onChange(null)
         }}
       />

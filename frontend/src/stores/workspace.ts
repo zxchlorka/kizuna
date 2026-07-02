@@ -1,8 +1,9 @@
 import { create } from 'zustand'
 import { fetchWithTimeout } from '@/lib/http'
 import { normalizeFilters, filtersEqual } from '@/lib/table'
+import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
-import type { FilterExpr, ObjectItem, ObjectType } from '@/types/api'
+import type { FilterExpr, ObjectItem, ObjectPageResponse, ObjectType } from '@/types/api'
 
 export interface NavigationTrailItem {
   tabId: string
@@ -25,6 +26,7 @@ export interface ObjectTab {
   object: string
   label: string
   objectType: ObjectType
+  ttlSeconds?: number | null
   initialFilters?: FilterExpr[]
   navigationTrail?: NavigationTrailItem[]
 }
@@ -36,7 +38,14 @@ export interface SqlTab {
   label: string
 }
 
-export type WorkspaceTab = ObjectTab | SqlTab
+export interface RedisCliTab {
+  kind: 'redis-cli'
+  id: string
+  connId: string
+  label: string
+}
+
+export type WorkspaceTab = ObjectTab | SqlTab | RedisCliTab
 
 export interface TreeVisibility {
   showTables: boolean
@@ -49,36 +58,51 @@ export type TreeVisibilityKey = keyof TreeVisibility
 interface WorkspaceStore {
   tabs: WorkspaceTab[]
   activeTabId: string | null
+  activeTabByConnection: Record<string, string>
+  openConnectionIds: string[]
   navigationHistory: NavigationEntry[]
   treeItems: Record<string, ObjectItem[]>
+  treeCursors: Record<string, string>
   treeLoading: boolean
+  treeLoadingByKey: Record<string, boolean>
+  treeErrorByKey: Record<string, string | null>
+  treeLoadedByKey: Record<string, boolean>
   treeErrorsByConnection: Record<string, string | null>
   expandedSchemas: Set<string>
   treeVisibility: TreeVisibility
   visibleSchemasByConnection: Record<string, string[] | null>
   availableSchemasByConnection: Record<string, string[]>
+  selectedNodeByConnection: Record<string, string>
 
   fetchTree: (connId: string, path?: string) => Promise<void>
+  setSelectedNode: (connId: string, node: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
-  toggleSchema: (schema: string) => void
+  toggleSchema: (connId: string, schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   hydrateVisibleSchemas: (connId: string, visibleSchemas: string[] | null | undefined) => void
   setVisibleSchemas: (connId: string, visibleSchemas: string[] | null) => void
-  openTab: (connId: string, object: string, objectType?: ObjectType) => void
+  openTab: (connId: string, object: string, objectType?: ObjectType, options?: { ttlSeconds?: number | null }) => void
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType?: ObjectType) => void
   clearObjectTabFilterState: (tabId: string) => void
   goBackFromTab: (tabId: string) => void
   openSqlTab: (connId: string) => void
+  openRedisCliTab: (connId: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
+  openConnection: (connId: string) => void
+  closeConnection: (connId: string) => void
 }
 
 function buildFilterSignature(filters: FilterExpr[]): string {
   return JSON.stringify(normalizeFilters(filters))
 }
 
-function buildFilteredTabID(connId: string, object: string, filters: FilterExpr[]): string {
-  return `${connId}:${object}:filtered:${buildFilterSignature(filters)}`
+function buildObjectTabID(connId: string, object: string, objectType: ObjectType): string {
+  return `${connId}:${objectType}:${object}`
+}
+
+function buildFilteredTabID(connId: string, object: string, objectType: ObjectType, filters: FilterExpr[]): string {
+  return `${buildObjectTabID(connId, object, objectType)}:filtered:${buildFilterSignature(filters)}`
 }
 
 function buildFilterLabel(filters: FilterExpr[]): string {
@@ -87,12 +111,49 @@ function buildFilterLabel(filters: FilterExpr[]): string {
     .join(', ')
 }
 
+function buildTreeKey(connId: string, path = ''): string {
+  return `${connId}::${path}`
+}
+
+function parseTreeKey(key: string): { connId: string; path: string } {
+  const [connId, path = ''] = key.split('::', 2)
+  return { connId, path }
+}
+
+function isRedisConnection(connId: string): boolean {
+  return useConnectionStore.getState().connections.find((connection) => connection.id === connId)?.type === 'redis'
+}
+
+function buildObjectsQuery(connId: string, path: string, opts: { paged: boolean; cursor?: string; node?: string }): string {
+  const params = new URLSearchParams()
+  if (path) params.set('path', path)
+  if (opts.paged) {
+    params.set('paged', '1')
+    if (opts.cursor) params.set('cursor', opts.cursor)
+    if (opts.node) params.set('node', opts.node)
+  }
+  const query = params.toString()
+  return `/api/connections/${connId}/objects${query ? `?${query}` : ''}`
+}
+
+const treeRequests = new Map<string, Promise<void>>()
+
+function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean {
+  return Object.values(loadingByKey).some(Boolean)
+}
+
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   tabs: [],
   activeTabId: null,
+  activeTabByConnection: {},
+  openConnectionIds: [],
   navigationHistory: [],
   treeItems: {},
+  treeCursors: {},
   treeLoading: false,
+  treeLoadingByKey: {},
+  treeErrorByKey: {},
+  treeLoadedByKey: {},
   treeErrorsByConnection: {},
   expandedSchemas: new Set(),
   treeVisibility: {
@@ -102,58 +163,158 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   },
   visibleSchemasByConnection: {},
   availableSchemasByConnection: {},
+  selectedNodeByConnection: {},
 
   fetchTree: async (connId: string, path?: string) => {
-    set({ treeLoading: true })
-    try {
-      const query = path ? `?path=${encodeURIComponent(path)}` : ''
-      const res = await fetchWithTimeout(`/api/connections/${connId}/objects${query}`)
-      if (!res.ok) throw new Error('Failed to fetch objects')
-      const items: ObjectItem[] = await res.json()
-      const key = path || ''
-      set((state) => ({
-        treeItems: { ...state.treeItems, [key]: items },
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: null,
-        },
-        availableSchemasByConnection: path
-          ? state.availableSchemasByConnection
-          : {
-              ...state.availableSchemasByConnection,
-              [connId]: items
-                .filter((item) => item.type === 'schema')
-                .map((item) => item.name),
-            },
-        treeLoading: false,
-      }))
-    } catch (error) {
-      set((state) => ({
-        treeLoading: false,
-        treeErrorsByConnection: {
-          ...state.treeErrorsByConnection,
-          [connId]: (error as Error).message,
-        },
-      }))
+    const normalizedPath = path || ''
+    const key = buildTreeKey(connId, normalizedPath)
+    const pending = treeRequests.get(key)
+    if (pending) {
+      return pending
     }
+
+    const request = (async () => {
+      set((state) => {
+        const loadingByKey = { ...state.treeLoadingByKey, [key]: true }
+        return {
+          treeLoadingByKey: loadingByKey,
+          treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
+          treeLoading: hasLoadingTreeRequests(loadingByKey),
+        }
+      })
+
+      const paged = isRedisConnection(connId)
+      try {
+        const node = get().selectedNodeByConnection[connId]
+        const res = await fetchWithTimeout(buildObjectsQuery(connId, normalizedPath, { paged, node }))
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({ error: res.statusText }))
+          throw new Error(body.error || 'Failed to fetch objects')
+        }
+
+        let items: ObjectItem[]
+        let nextCursor = ''
+        if (paged) {
+          const page = (await res.json()) as ObjectPageResponse
+          items = page.objects ?? []
+          nextCursor = page.next_cursor ?? ''
+        } else {
+          items = await res.json()
+        }
+
+        set((state) => {
+          const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+          return {
+            treeItems: { ...state.treeItems, [key]: items },
+            treeCursors: { ...state.treeCursors, [key]: nextCursor },
+            treeLoadingByKey: loadingByKey,
+            treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
+            treeLoadedByKey: { ...state.treeLoadedByKey, [key]: true },
+            treeErrorsByConnection: {
+              ...state.treeErrorsByConnection,
+              [connId]: null,
+            },
+            availableSchemasByConnection: normalizedPath
+              ? state.availableSchemasByConnection
+              : {
+                  ...state.availableSchemasByConnection,
+                  [connId]: items
+                    .filter((item) => item.type === 'schema')
+                    .map((item) => item.name),
+                },
+            treeLoading: hasLoadingTreeRequests(loadingByKey),
+          }
+        })
+      } catch (error) {
+        set((state) => {
+          const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+          return {
+            treeLoadingByKey: loadingByKey,
+            treeErrorByKey: { ...state.treeErrorByKey, [key]: (error as Error).message },
+            treeLoadedByKey: { ...state.treeLoadedByKey, [key]: false },
+            treeErrorsByConnection: {
+              ...state.treeErrorsByConnection,
+              [connId]: (error as Error).message,
+            },
+            treeLoading: hasLoadingTreeRequests(loadingByKey),
+          }
+        })
+      } finally {
+        treeRequests.delete(key)
+      }
+    })()
+
+    treeRequests.set(key, request)
+    return request
+  },
+
+  setSelectedNode: async (connId: string, node: string) => {
+    set((state) => ({
+      selectedNodeByConnection: {
+        ...state.selectedNodeByConnection,
+        [connId]: node,
+      },
+    }))
+    await get().refreshTree(connId)
   },
 
   refreshTree: async (connId: string) => {
     const expandedSchemas = Array.from(get().expandedSchemas)
-    set({ treeItems: {}, treeLoading: true })
-    await get().fetchTree(connId)
-    for (const schema of expandedSchemas) {
-      await get().fetchTree(connId, schema)
-    }
+      .filter((key) => parseTreeKey(key).connId === connId)
+      .map((key) => parseTreeKey(key).path)
+
+    set((state) => {
+      const nextTreeItems = { ...state.treeItems }
+      const nextTreeCursors = { ...state.treeCursors }
+      const nextLoadingByKey = { ...state.treeLoadingByKey }
+      const nextErrorByKey = { ...state.treeErrorByKey }
+      const nextLoadedByKey = { ...state.treeLoadedByKey }
+      Object.keys(nextTreeItems).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextTreeItems[key]
+        }
+      })
+      Object.keys(nextTreeCursors).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextTreeCursors[key]
+        }
+      })
+      Object.keys(nextLoadingByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextLoadingByKey[key]
+        }
+      })
+      Object.keys(nextErrorByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextErrorByKey[key]
+        }
+      })
+      Object.keys(nextLoadedByKey).forEach((key) => {
+        if (parseTreeKey(key).connId === connId) {
+          delete nextLoadedByKey[key]
+        }
+      })
+      return {
+        treeItems: nextTreeItems,
+        treeCursors: nextTreeCursors,
+        treeLoadingByKey: nextLoadingByKey,
+        treeErrorByKey: nextErrorByKey,
+        treeLoadedByKey: nextLoadedByKey,
+        treeLoading: false,
+      }
+    })
+
+    await Promise.all([get().fetchTree(connId), ...expandedSchemas.map((schema) => get().fetchTree(connId, schema))])
   },
 
-  toggleSchema: (schema: string) => {
+  toggleSchema: (connId: string, schema: string) => {
     set((state) => {
       const next = new Set(state.expandedSchemas)
-      if (next.has(schema)) {
-        next.delete(schema)
+      const key = buildTreeKey(connId, schema)
+      if (next.has(key)) {
+        next.delete(key)
       } else {
-        next.add(schema)
+        next.add(key)
       }
       return { expandedSchemas: next }
     })
@@ -199,8 +360,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }))
   },
 
-  openTab: (connId: string, object: string, objectType: ObjectType = 'table') => {
-    const id = `${connId}:${object}`
+  openTab: (connId: string, object: string, objectType: ObjectType = 'table', options?: { ttlSeconds?: number | null }) => {
+    const id = buildObjectTabID(connId, object, objectType)
     const { tabs } = get()
     const existing = tabs.find((t) => t.id === id)
     if (existing) {
@@ -215,6 +376,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       object,
       label,
       objectType,
+      ttlSeconds: options?.ttlSeconds ?? null,
       navigationTrail: [{ tabId: id, label: object }],
     }
     set({ tabs: [...tabs, tab], activeTabId: id })
@@ -229,7 +391,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     )
 
     const existing = tabs.find((tab) => {
-      if (tab.kind !== 'object' || tab.connId !== connId || tab.object !== object) {
+      if (tab.kind !== 'object' || tab.connId !== connId || tab.object !== object || tab.objectType !== objectType) {
         return false
       }
       const activeFilters = dataTabs[tab.id]?.opts.filters ?? tab.initialFilters ?? []
@@ -252,7 +414,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       return
     }
 
-    const id = buildFilteredTabID(connId, object, filters)
+    const id = buildFilteredTabID(connId, object, objectType, filters)
     const baseTrail = activeObjectTab?.navigationTrail?.length
       ? activeObjectTab.navigationTrail
       : activeObjectTab
@@ -341,6 +503,25 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     set({ tabs: [...tabs, tab], activeTabId: id })
   },
 
+  openRedisCliTab: (connId: string) => {
+    const { tabs } = get()
+    const existingIDs = new Set(tabs.map((tab) => tab.id))
+    let sequence = 1
+    let id = `${connId}:redis-cli:${sequence}`
+    while (existingIDs.has(id)) {
+      sequence += 1
+      id = `${connId}:redis-cli:${sequence}`
+    }
+
+    const tab: RedisCliTab = {
+      kind: 'redis-cli',
+      id,
+      connId,
+      label: sequence === 1 ? 'Redis CLI' : `Redis CLI ${sequence}`,
+    }
+    set({ tabs: [...tabs, tab], activeTabId: id })
+  },
+
   closeTab: (tabId: string) => {
     const { tabs, activeTabId } = get()
     const idx = tabs.findIndex((t) => t.id === tabId)
@@ -378,4 +559,50 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   setActiveTab: (tabId: string) => {
     set({ activeTabId: tabId })
   },
+
+  openConnection: (connId: string) => {
+    set((state) =>
+      state.openConnectionIds.includes(connId)
+        ? state
+        : { openConnectionIds: [...state.openConnectionIds, connId] }
+    )
+  },
+
+  closeConnection: (connId: string) => {
+    set((state) => {
+      const remainingTabs = state.tabs.filter((tab) => tab.connId !== connId)
+      const activeStillOpen = remainingTabs.some((tab) => tab.id === state.activeTabId)
+      const nextActiveByConnection = { ...state.activeTabByConnection }
+      delete nextActiveByConnection[connId]
+      return {
+        openConnectionIds: state.openConnectionIds.filter((id) => id !== connId),
+        tabs: remainingTabs,
+        activeTabByConnection: nextActiveByConnection,
+        activeTabId: activeStillOpen ? state.activeTabId : null,
+        navigationHistory: state.navigationHistory.filter(
+          (entry) =>
+            !state.tabs.some(
+              (tab) => tab.connId === connId && (tab.id === entry.fromTabId || tab.id === entry.toTabId)
+            )
+        ),
+      }
+    })
+  },
 }))
+
+// Mirror the global activeTabId into a per-connection memory so switching back to
+// a connection (via a chip or a cross-source link) restores the tab that was last
+// active there. Recording in one place means no activation site can be missed.
+useWorkspaceStore.subscribe((state, prev) => {
+  const activeId = state.activeTabId
+  if (!activeId || activeId === prev.activeTabId) {
+    return
+  }
+  const tab = state.tabs.find((item) => item.id === activeId)
+  if (!tab || state.activeTabByConnection[tab.connId] === activeId) {
+    return
+  }
+  useWorkspaceStore.setState((current) => ({
+    activeTabByConnection: { ...current.activeTabByConnection, [tab.connId]: activeId },
+  }))
+})

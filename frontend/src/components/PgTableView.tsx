@@ -10,12 +10,18 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
+import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
 import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { useLinksStore } from '@/stores/links'
+import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
+import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import { canReverse, extractPgColumn, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
@@ -28,7 +34,7 @@ import {
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { ColumnMeta, FKRef, FilterExpr, TableRow } from '@/types/api'
+import type { ColumnMeta, FKRef, FilterExpr, LinkRecord, TableRow } from '@/types/api'
 import type { RowIdentity } from '@/types/table'
 
 interface PgTableViewProps {
@@ -93,8 +99,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const clearObjectTabFilterState = useWorkspaceStore((state) => state.clearObjectTabFilterState)
   const goBackFromTab = useWorkspaceStore((state) => state.goBackFromTab)
   const pushToast = useToastStore((state) => state.push)
+  const links = useLinksStore((state) => state.links)
+  const fetchLinks = useLinksStore((state) => state.fetch)
+  const linksFor = useLinksStore((state) => state.linksFor)
+  const openLinkTarget = useOpenLinkTarget()
 
   const [sorting, setSorting] = useState<SortingState>([])
+  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; row: TableRow } | null>(null)
+  const [createLinkOpen, setCreateLinkOpen] = useState(false)
   const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -109,8 +121,35 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const { schema: schemaName, table: tableName } = useMemo(() => parseObjectName(object), [object])
 
   useEffect(() => {
-    void fetchSchema(connId, object, tabId)
-    void fetchData(connId, object, tabId)
+    void fetchLinks().catch(() => undefined)
+  }, [fetchLinks])
+
+  const tableLinks = useMemo(
+    () => linksFor(connId, object).filter((link) => link.source_kind === 'postgres'),
+    [linksFor, links, connId, object]
+  )
+
+  const openLinkSource = useOpenLinkSource()
+  const reverseLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'postgres' &&
+          link.table === object &&
+          canReverse(link)
+      ),
+    [links, connId, object]
+  )
+
+  useEffect(() => {
+    void (async () => {
+      await fetchData(connId, object, tabId)
+      const current = useDataStore.getState().tabs[tabId]
+      if (!current?.dataError) {
+        await fetchSchema(connId, object, tabId)
+      }
+    })()
     setSelectedRows(new Map())
     setSorting([])
     setEditMode(false)
@@ -121,12 +160,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [clearDrafts, connId, fetchData, fetchSchema, object, tabId])
 
   const columns = tabData?.columns ?? EMPTY_COLUMNS
+  const columnNames = useMemo(() => columns.map((c) => c.name), [columns])
   const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
   const opts = tabData?.opts
   const isLoading = tabData?.loading ?? false
   const error = tabData?.error ?? null
   const total = tabData?.total ?? 0
+  const hasMore = tabData?.hasMore ?? false
   const draftUpdates = tabData?.draftUpdates ?? EMPTY_DRAFT_UPDATES
   const draftDeletes = tabData?.draftDeletes ?? EMPTY_DRAFT_DELETES
   const draftInserts = tabData?.draftInserts ?? EMPTY_INSERTS
@@ -202,32 +243,37 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleSortChange = useCallback(
     (column: string, direction: 'asc' | 'desc' | null) => {
+      const nextOpts = direction === null
+        ? { order_by: '', order_dir: 'asc' as const, offset: 0 }
+        : { order_by: column, order_dir: direction, offset: 0 }
       if (direction === null) {
         setSorting([])
-        setOpts(tabId, { order_by: '', order_dir: 'asc', offset: 0 })
       } else {
         setSorting([{ id: column, desc: direction === 'desc' }])
-        setOpts(tabId, { order_by: column, order_dir: direction, offset: 0 })
       }
-      void fetchData(connId, object, tabId)
+      setOpts(tabId, nextOpts)
+      void fetchData(connId, object, tabId, nextOpts)
     },
     [connId, fetchData, object, setOpts, tabId]
   )
 
   const handleNext = useCallback(() => {
-    setOpts(tabId, { offset: currentOffset + currentLimit })
-    void fetchData(connId, object, tabId)
+    const nextOpts = { offset: currentOffset + currentLimit }
+    setOpts(tabId, nextOpts)
+    void fetchData(connId, object, tabId, nextOpts)
   }, [connId, currentLimit, currentOffset, fetchData, object, setOpts, tabId])
 
   const handlePrev = useCallback(() => {
-    setOpts(tabId, { offset: Math.max(0, currentOffset - currentLimit) })
-    void fetchData(connId, object, tabId)
+    const nextOpts = { offset: Math.max(0, currentOffset - currentLimit) }
+    setOpts(tabId, nextOpts)
+    void fetchData(connId, object, tabId, nextOpts)
   }, [connId, currentLimit, currentOffset, fetchData, object, setOpts, tabId])
 
   const handlePageSizeChange = useCallback(
     (limit: number) => {
-      setOpts(tabId, { limit, offset: 0 })
-      void fetchData(connId, object, tabId)
+      const nextOpts = { limit, offset: 0 }
+      setOpts(tabId, nextOpts)
+      void fetchData(connId, object, tabId, nextOpts)
     },
     [connId, fetchData, object, setOpts, tabId]
   )
@@ -305,11 +351,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     }
 
     const timeout = window.setTimeout(() => {
-      void fetchData(connId, object, tabId)
+      void fetchData(connId, object, tabId, { filters: activeFilters, offset: 0 })
     }, FILTER_DEBOUNCE_MS)
 
     return () => window.clearTimeout(timeout)
-  }, [connId, fetchData, filterSignature, object, tabId])
+  }, [activeFilters, connId, fetchData, filterSignature, object, tabId])
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -428,7 +474,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             object: tableName,
             where,
           },
-          tabId
+          tabId,
+          { reload: false }
         )
       }
       setSelectedRows(new Map())
@@ -467,7 +514,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setIsSaving(true)
     setLocalError(null)
     try {
-      await mutateBulk(connId, payload, tabId)
+      await mutateBulk(connId, payload, tabId, { reload: false })
       clearDrafts(tabId)
       setSelectedRows(new Map())
       setEditMode(false)
@@ -499,7 +546,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             object: tableName,
             data,
           },
-          tabId
+          tabId,
+          { reload: false }
         )
         setShowAddDialog(false)
         await fetchData(connId, object, tabId)
@@ -733,6 +781,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             getDraftValue={getDraftValue}
             isDirtyCell={isDirtyCell}
             onNavigateToFk={handleNavigateToFk}
+            onRowContextMenu={(row, event) => {
+              event.preventDefault()
+              setLinkMenu({ x: event.clientX, y: event.clientY, row })
+            }}
           />
         )}
       </div>
@@ -762,7 +814,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         </div>
       )}
 
-      <PaginationBar offset={currentOffset} limit={currentLimit} total={total} onPrev={handlePrev} onNext={handleNext} />
+      <PaginationBar
+        offset={currentOffset}
+        limit={currentLimit}
+        total={total}
+        hasMore={hasMore}
+        onPrev={handlePrev}
+        onNext={handleNext}
+      />
 
       <ReferencedByDialog
         open={showReferencedByDialog}
@@ -837,6 +896,63 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         saving={isSaving}
         onOpenChange={(open) => setActiveDDLDialog(open ? 'drop_column' : null)}
         onConfirm={(target) => submitDangerousDDL('drop_column', target)}
+      />
+
+      {linkMenu && (
+        <FloatingMenu x={linkMenu.x} y={linkMenu.y} onClose={() => setLinkMenu(null)}>
+          <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
+          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
+          {tableLinks.map((link: LinkRecord) => {
+            const value = extractPgColumn(columns, linkMenu.row, link.source_field ?? '')
+            return (
+              <FloatingMenuItem
+                key={link.id}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) openLinkTarget(link, value)
+                  setLinkMenu(null)
+                }}
+              >
+                {value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          {reverseLinks.length > 0 && <FloatingMenuSeparator />}
+          {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
+          {reverseLinks.map((link: LinkRecord) => {
+            const value = extractPgColumn(columns, linkMenu.row, link.column ?? '')
+            return (
+              <FloatingMenuItem
+                key={`rev-${link.id}`}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) openLinkSource(link, value)
+                  setLinkMenu(null)
+                }}
+              >
+                {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          <FloatingMenuSeparator />
+          <FloatingMenuItem
+            onClick={() => {
+              setLinkMenu(null)
+              setCreateLinkOpen(true)
+            }}
+          >
+            + Create link…
+          </FloatingMenuItem>
+        </FloatingMenu>
+      )}
+
+      <CreateLinkDialog
+        open={createLinkOpen}
+        sourceConnId={connId}
+        sourceKind="postgres"
+        sourceScope={object}
+        sourceFieldOptions={columnNames}
+        onOpenChange={setCreateLinkOpen}
       />
     </div>
   )

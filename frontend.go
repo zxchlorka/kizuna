@@ -1,4 +1,4 @@
-package infraview
+package kizuna
 
 import "embed"
 

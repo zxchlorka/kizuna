@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 func TestMapConnectorErrorStatuses(t *testing.T) {
@@ -18,6 +18,7 @@ func TestMapConnectorErrorStatuses(t *testing.T) {
 	}{
 		{name: "bad request", err: connector.ErrBadRequest, status: http.StatusBadRequest},
 		{name: "forbidden", err: connector.ErrForbidden, status: http.StatusForbidden},
+		{name: "read only", err: connector.ErrReadOnly, status: http.StatusForbidden},
 		{name: "relation not found", err: connector.ErrRelationNotFound, status: http.StatusNotFound},
 		{name: "conflict", err: connector.ErrConflict, status: http.StatusConflict},
 		{name: "timeout", err: connector.ErrTimeout, status: http.StatusRequestTimeout},

@@ -1,14 +1,14 @@
 services:
-  infraview:
+  kizuna:
     build: .
     ports:
       - "9090:9090"
     volumes:
-      - infraview-data:/data
+      - kizuna-data:/data
     environment:
       CONFIG_PATH: /data/config.json
 
-  infraview-debug:
+  kizuna-debug:
     build:
       context: .
       target: debug
@@ -18,27 +18,14 @@ services:
       - "9091:9090"
       - "2345:2345"
     volumes:
-      - infraview-data:/data
+      - kizuna-data:/data
     environment:
       CONFIG_PATH: /data/config.json
-    depends_on:
-      - postgres
     security_opt:
       - "seccomp:unconfined"
     cap_add:
       - SYS_PTRACE
 
-  postgres:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_USER: dev
-      POSTGRES_PASSWORD: dev
-      POSTGRES_DB: devdb
-    ports:
-      - "5432:5432"
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
 volumes:
-  infraview-data:
-  pgdata:
+  kizuna-data:
+    name: kizuna-data

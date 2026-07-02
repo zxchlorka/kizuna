@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/qsnake66/infraview/internal/connector"
+	"github.com/qsnake66/kizuna/internal/connector"
 )
 
 var (
@@ -60,6 +60,8 @@ func (p *PostgresConnector) DDL(ctx context.Context, op connector.DDLOp) error {
 	if _, err := p.pool.Exec(ctx, statement); err != nil {
 		return normalizePostgresError(err)
 	}
+	p.invalidateObjectCache()
+	p.invalidateSchemaCache()
 	p.invalidateCompletionCache()
 	return nil
 }
