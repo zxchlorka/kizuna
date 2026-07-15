@@ -6,6 +6,7 @@ export interface KafkaConfig {
   brokers: string[]
   sasl_mechanism?: string
   tls_enabled?: boolean
+  tls_ca_pem?: string
   schema_registry_url?: string
 }
 export interface RedisConfig {

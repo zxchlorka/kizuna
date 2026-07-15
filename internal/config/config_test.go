@@ -90,6 +90,44 @@ func TestAppConfigRedisRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAppConfigKafkaTLSCARoundTrip(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	const caPEM = "-----BEGIN CERTIFICATE-----\nexample\n-----END CERTIFICATE-----"
+	cfg := &AppConfig{
+		Connections: []ConnectionConfig{
+			{
+				ID:   "kafka-1",
+				Name: "production kafka",
+				Type: "kafka",
+				KafkaConfig: &KafkaConfig{
+					Brokers:       []string{"broker.example:9094"},
+					SASLMechanism: KafkaSASLScramSHA256,
+					TLSEnabled:    true,
+					TLSCAPEM:      caPEM,
+				},
+			},
+		},
+	}
+
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+
+	loaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	got, ok := loaded.GetConnection("kafka-1")
+	if !ok || got.KafkaConfig == nil {
+		t.Fatal("expected kafka config to round-trip")
+	}
+	if got.KafkaConfig.TLSCAPEM != caPEM {
+		t.Fatalf("unexpected TLS CA PEM: %q", got.KafkaConfig.TLSCAPEM)
+	}
+}
+
 func TestLinkConfigCRUDAndPersistence(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")

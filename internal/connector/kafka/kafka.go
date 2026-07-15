@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,6 +32,7 @@ type kafkaSettings struct {
 	username      string
 	password      string
 	tlsEnabled    bool
+	tlsCAPEM      string
 }
 
 type KafkaConnector struct {
@@ -115,6 +117,7 @@ func resolveKafkaSettings(cfg config.ConnectionConfig, encKey string) (kafkaSett
 		username:      strings.TrimSpace(cfg.Username),
 		password:      password,
 		tlsEnabled:    kafkaCfg.TLSEnabled,
+		tlsCAPEM:      kafkaCfg.TLSCAPEM,
 	}
 
 	switch settings.saslMechanism {
@@ -147,10 +150,32 @@ func buildClientOpts(settings kafkaSettings) ([]kgo.Opt, error) {
 	}
 
 	if settings.tlsEnabled {
-		opts = append(opts, kgo.DialTLSConfig(&tls.Config{MinVersion: tls.VersionTLS12}))
+		tlsConfig, err := buildTLSConfig(settings.tlsCAPEM)
+		if err != nil {
+			return nil, fmt.Errorf("%w: invalid kafka TLS CA certificate: %v", connector.ErrBadRequest, err)
+		}
+		opts = append(opts, kgo.DialTLSConfig(tlsConfig))
 	}
 
 	return opts, nil
+}
+
+func buildTLSConfig(caPEM string) (*tls.Config, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if strings.TrimSpace(caPEM) == "" {
+		return tlsConfig, nil
+	}
+
+	rootCAs, err := x509.SystemCertPool()
+	if err != nil {
+		rootCAs = x509.NewCertPool()
+	}
+	if ok := rootCAs.AppendCertsFromPEM([]byte(caPEM)); !ok {
+		return nil, errors.New("PEM data does not contain a valid certificate")
+	}
+
+	tlsConfig.RootCAs = rootCAs
+	return tlsConfig, nil
 }
 
 func resolveKafkaBrokers(brokers []string) []string {

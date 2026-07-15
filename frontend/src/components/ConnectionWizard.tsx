@@ -54,6 +54,7 @@ function buildConnectionTestKey(form: ConnectionFormValues, isEdit: boolean) {
             brokers: input.kafka_config.brokers,
             sasl_mechanism: input.kafka_config.sasl_mechanism ?? '',
             tls_enabled: input.kafka_config.tls_enabled ?? false,
+            tls_ca_pem: input.kafka_config.tls_ca_pem ?? '',
           }
         : null,
   })

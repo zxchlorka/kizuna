@@ -2,7 +2,12 @@ package kafka
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/qsnake66/kizuna/internal/config"
@@ -44,10 +49,21 @@ func TestResolveKafkaSettings(t *testing.T) {
 		{
 			name: "sasl with username",
 			cfg: config.ConnectionConfig{
-				Username:    "app",
-				KafkaConfig: &config.KafkaConfig{Brokers: []string{"b:9092"}, SASLMechanism: "scram-sha-256"},
+				Username: "app",
+				KafkaConfig: &config.KafkaConfig{
+					Brokers:       []string{"b:9092"},
+					SASLMechanism: "scram-sha-256",
+					TLSEnabled:    true,
+					TLSCAPEM:      "  test-ca  ",
+				},
 			},
-			want: kafkaSettings{brokers: []string{"b:9092"}, saslMechanism: config.KafkaSASLScramSHA256, username: "app"},
+			want: kafkaSettings{
+				brokers:       []string{"b:9092"},
+				saslMechanism: config.KafkaSASLScramSHA256,
+				username:      "app",
+				tlsEnabled:    true,
+				tlsCAPEM:      "test-ca",
+			},
 		},
 		{
 			name: "sasl without username fails",
@@ -95,6 +111,12 @@ func TestResolveKafkaSettings(t *testing.T) {
 			if got.username != tc.want.username {
 				t.Fatalf("unexpected username: got %q want %q", got.username, tc.want.username)
 			}
+			if got.tlsEnabled != tc.want.tlsEnabled {
+				t.Fatalf("unexpected tls enabled: got %t want %t", got.tlsEnabled, tc.want.tlsEnabled)
+			}
+			if got.tlsCAPEM != tc.want.tlsCAPEM {
+				t.Fatalf("unexpected TLS CA PEM: got %q want %q", got.tlsCAPEM, tc.want.tlsCAPEM)
+			}
 		})
 	}
 }
@@ -128,6 +150,61 @@ func TestBuildClientOptsCoversAuthModes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildTLSConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("system trust store", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := buildTLSConfig("")
+		if err != nil {
+			t.Fatalf("build TLS config: %v", err)
+		}
+		if got.MinVersion != tls.VersionTLS12 {
+			t.Fatalf("unexpected minimum TLS version: %d", got.MinVersion)
+		}
+		if got.RootCAs != nil {
+			t.Fatalf("expected nil RootCAs to use the system trust store")
+		}
+	})
+
+	t.Run("custom CA is trusted", func(t *testing.T) {
+		t.Parallel()
+
+		server := httptest.NewTLSServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer server.Close()
+
+		certificate := server.Certificate()
+		caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw})
+		got, err := buildTLSConfig(string(caPEM))
+		if err != nil {
+			t.Fatalf("build TLS config: %v", err)
+		}
+		if got.RootCAs == nil {
+			t.Fatal("expected custom root CA pool")
+		}
+		if got.InsecureSkipVerify {
+			t.Fatal("hostname verification must remain enabled")
+		}
+		if _, err := certificate.Verify(x509.VerifyOptions{Roots: got.RootCAs}); err != nil {
+			t.Fatalf("custom CA certificate is not trusted: %v", err)
+		}
+	})
+
+	t.Run("invalid PEM", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := buildClientOpts(kafkaSettings{
+			brokers:    []string{"b:9092"},
+			tlsEnabled: true,
+			tlsCAPEM:   "not a certificate",
+		})
+		if !errors.Is(err, connector.ErrBadRequest) {
+			t.Fatalf("expected bad request, got %v", err)
+		}
+	})
 }
 
 func TestParsePartitionFilter(t *testing.T) {
