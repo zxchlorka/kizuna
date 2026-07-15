@@ -114,6 +114,28 @@ export function KafkaConnectionForm({ form, onChange, isEdit }: KafkaConnectionF
           </div>
           <Switch checked={form.tlsEnabled} onCheckedChange={(checked) => onChange({ tlsEnabled: checked })} />
         </div>
+
+        {form.tlsEnabled && (
+          <div>
+            <label
+              htmlFor="kafka-tls-ca-pem"
+              className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+            >
+              CA certificate (PEM)
+            </label>
+            <Textarea
+              id="kafka-tls-ca-pem"
+              value={form.kafkaTlsCaPem}
+              onChange={(event) => onChange({ kafkaTlsCaPem: event.target.value })}
+              placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+              className="min-h-32 resize-y font-mono text-xs"
+              spellCheck={false}
+            />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Optional CA bundle used in addition to the system trust store. Leave blank for system CAs only.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )

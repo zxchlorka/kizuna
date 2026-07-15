@@ -17,6 +17,7 @@ type KafkaConfig struct {
 	Brokers           []string `json:"brokers"`
 	SASLMechanism     string   `json:"sasl_mechanism,omitempty"` // "" (no auth) | PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
 	TLSEnabled        bool     `json:"tls_enabled,omitempty"`
+	TLSCAPEM          string   `json:"tls_ca_pem,omitempty"`
 	SchemaRegistryURL string   `json:"schema_registry_url,omitempty"` // reserved for a future slice
 }
 
@@ -46,5 +47,6 @@ func (k KafkaConfig) Normalize() KafkaConfig {
 	}
 	clone.Brokers = brokers
 	clone.SASLMechanism = strings.ToUpper(strings.TrimSpace(k.SASLMechanism))
+	clone.TLSCAPEM = strings.TrimSpace(k.TLSCAPEM)
 	return clone
 }

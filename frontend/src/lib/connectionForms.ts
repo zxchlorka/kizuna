@@ -27,6 +27,7 @@ export interface ConnectionFormValues {
   sentinelAddressesText: string
   kafkaBrokersText: string
   kafkaSaslMechanism: string
+  kafkaTlsCaPem: string
   readOnly: boolean
 }
 
@@ -47,6 +48,7 @@ const postgresDefaults: ConnectionFormValues = {
   sentinelAddressesText: '',
   kafkaBrokersText: '',
   kafkaSaslMechanism: '',
+  kafkaTlsCaPem: '',
   readOnly: false,
 }
 
@@ -149,6 +151,7 @@ export function createConnectionFormFromConnection(connection?: Connection): Con
     sentinelAddressesText: connection.sentinelAddresses?.join('\n') ?? redisConfig?.sentinel_addrs?.join('\n') ?? '',
     kafkaBrokersText: connection.kafka_config?.brokers?.join('\n') ?? '',
     kafkaSaslMechanism: connection.kafka_config?.sasl_mechanism ?? '',
+    kafkaTlsCaPem: connection.kafka_config?.tls_ca_pem ?? '',
     readOnly: connection.read_only ?? false,
   }
 
@@ -217,6 +220,7 @@ export function buildConnectionInput(form: ConnectionFormValues): ConnectionInpu
       brokers,
       sasl_mechanism: form.kafkaSaslMechanism,
       tls_enabled: form.tlsEnabled,
+      tls_ca_pem: form.kafkaTlsCaPem.trim(),
     }
 
     const kafkaInput: KafkaConnectionInput = {
