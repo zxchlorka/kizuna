@@ -51,6 +51,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Post("/explain", sqlHandler.Explain)
 			r.Post("/analyze", sqlHandler.Analyze)
 			r.Get("/completions", sqlHandler.Completions)
+			r.Get("/sql-catalog", sqlHandler.SQLCatalog)
 			r.Get("/history", sqlHandler.History)
 			r.Delete("/history", sqlHandler.ClearHistory)
 		})

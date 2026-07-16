@@ -30,7 +30,7 @@ export function SqlStatusBar({ activeResult, totalResults }: SqlStatusBarProps) 
     ? 'Execution failed'
     : result.truncated
       ? `Showing first ${result.applied_limit ?? result.rows_returned} rows`
-    : result.rows_returned > 0
+    : result.row_returning || result.rows_returned > 0
       ? `${result.rows_returned} row${result.rows_returned === 1 ? '' : 's'}`
       : `${result.rows_affected} row${result.rows_affected === 1 ? '' : 's'} affected`
 

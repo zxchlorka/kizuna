@@ -227,4 +227,6 @@ func (p *PostgresConnector) invalidateCompletionCache() {
 	p.tableCache = nil
 	p.tableCacheUntil = time.Time{}
 	p.columnCache = make(map[string]completionCacheBucket)
+	p.catalogCache = nil
+	p.catalogCacheUntil = time.Time{}
 }

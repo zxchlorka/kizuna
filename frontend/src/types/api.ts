@@ -201,10 +201,22 @@ export interface ExecResult {
   error?: string
   duration_ms: number
   rows_returned: number
+  row_returning?: boolean
   truncated?: boolean
   applied_limit?: number
   column_sources?: (ColumnSource | null)[]
   skipped?: boolean
+}
+
+export interface SqlCatalogColumn {
+  name: string
+  type: string
+}
+
+export interface SqlCatalog {
+  schemas: Record<string, Record<string, SqlCatalogColumn[]>>
+  default_schema?: string
+  truncated?: boolean
 }
 
 export interface ExecuteRequest {

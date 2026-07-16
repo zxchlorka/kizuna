@@ -9,6 +9,7 @@ import { SqlStatusBar } from '@/components/SqlConsole/SqlStatusBar'
 import { SqlToolbar } from '@/components/SqlConsole/SqlToolbar'
 import { getSqlStatements } from '@/lib/sqlStatements'
 import { useConnectionStore } from '@/stores/connections'
+import { useSqlCatalogStore } from '@/stores/sqlCatalog'
 import { useSqlConsoleStore } from '@/stores/sqlConsole'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { SqlCatalogTable } from '@/components/SqlConsole/SqlAutocomplete'
@@ -66,9 +67,16 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
     [catalogTables]
   )
 
+  const sqlCatalog = useSqlCatalogStore((state) => state.catalogs[connId] ?? null)
+  const fetchSqlCatalog = useSqlCatalogStore((state) => state.fetch)
+
   useEffect(() => {
     ensureTab(tabId)
   }, [ensureTab, tabId])
+
+  useEffect(() => {
+    void fetchSqlCatalog(connId)
+  }, [connId, fetchSqlCatalog])
 
   useEffect(() => {
     if (connections.length === 0) {
@@ -196,6 +204,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
             onHistoryNavigate={(direction) => void navigateHistory(connId, tabId, direction)}
             catalogTables={catalogTables}
             catalogSchemas={catalogSchemas}
+            catalog={sqlCatalog}
           />
         </div>
 

@@ -231,6 +231,16 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
             )}
             </div>
           </div>
+        ) : activeResult.result.row_returning ? (
+          <div className="m-3 rounded-sm border border-border bg-muted/20 p-4">
+            <div className="flex items-center gap-2 font-mono text-sm text-foreground">
+              <Rows3 className="h-4 w-4 text-amber-500" />
+              Statement {activeResult.statementIndex + 1} returned {activeResult.result.rows_returned} row{activeResult.result.rows_returned === 1 ? '' : 's'} with no columns
+            </div>
+            <p className="mt-2 font-mono text-xs text-muted-foreground">
+              The SELECT list is empty, so PostgreSQL returned rows without any columns. Did you mean SELECT * or specific columns?
+            </p>
+          </div>
         ) : (
           <div className="m-3 rounded-sm border border-border bg-muted/20 p-4">
             <div className="flex items-center gap-2 font-mono text-sm text-foreground">

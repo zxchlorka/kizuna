@@ -29,10 +29,12 @@ type PostgresConnector struct {
 	pool   *pgxpool.Pool
 	config config.ConnectionConfig
 
-	completionMu    sync.RWMutex
-	tableCache      []completionCacheItem
-	tableCacheUntil time.Time
-	columnCache     map[string]completionCacheBucket
+	completionMu      sync.RWMutex
+	tableCache        []completionCacheItem
+	tableCacheUntil   time.Time
+	columnCache       map[string]completionCacheBucket
+	catalogCache      *connector.SQLCatalog
+	catalogCacheUntil time.Time
 
 	objectCacheMu    sync.RWMutex
 	rootObjectCache  objectCacheBucket
