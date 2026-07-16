@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { KafkaFieldPathPicker } from '@/components/links/KafkaFieldPathPicker'
 import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
@@ -15,6 +16,7 @@ interface CreateLinkDialogProps {
   sourceKind?: LinkKind
   sourceScope?: string
   sourceFieldOptions?: string[]
+  sourceFieldValue?: Record<string, unknown>
   // edit mode: pre-fill from an existing link and PUT on save
   editLink?: LinkRecord
 }
@@ -30,6 +32,7 @@ export function CreateLinkDialog({
   sourceKind,
   sourceScope,
   sourceFieldOptions = [],
+  sourceFieldValue,
   editLink,
 }: CreateLinkDialogProps) {
   const connections = useConnectionStore((state) => state.connections)
@@ -192,7 +195,11 @@ export function CreateLinkDialog({
           {needsSourceField && (
             <div className="space-y-1">
               <label className={labelClass}>{srcKind === 'postgres' ? 'Source column' : 'Source field'}</label>
-              {fieldControl(sourceField, setSourceField, srcKind === 'postgres' ? 'Pick a column' : 'Field name / JSON path')}
+              {srcKind === 'kafka' && !isEdit && sourceFieldValue ? (
+                <KafkaFieldPathPicker open={open} rootValue={sourceFieldValue} value={sourceField} onChange={setSourceField} />
+              ) : (
+                fieldControl(sourceField, setSourceField, srcKind === 'postgres' ? 'Pick a column' : 'Field name / JSON path')
+              )}
             </div>
           )}
 
