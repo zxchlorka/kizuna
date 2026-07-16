@@ -48,12 +48,11 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const deepScan = useKafkaStore((state) => state.deepScan)
   const cancelDeepScan = useKafkaStore((state) => state.cancelDeepScan)
   const fetchLinks = useLinksStore((state) => state.fetch)
-  const linksFor = useLinksStore((state) => state.linksFor)
   const links = useLinksStore((state) => state.links)
   const openLinkTarget = useOpenLinkTarget()
   const openLinkSource = useOpenLinkSource()
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
-  const [createLinkFields, setCreateLinkFields] = useState<string[]>([])
+  const [createLinkValue, setCreateLinkValue] = useState<Record<string, unknown> | undefined>()
 
   useEffect(() => {
     void fetchMessages(connId, topic, tabId).finally(() => {
@@ -83,7 +82,10 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
     void fetchMessages(connId, topic, tabId)
   }
 
-  const topicLinks = useMemo(() => linksFor(connId, topic), [linksFor, links, connId, topic])
+  const topicLinks = useMemo(
+    () => links.filter((link) => link.source_conn_id === connId && link.source_scope === topic),
+    [links, connId, topic]
+  )
   const reverseLinks = useMemo(
     () =>
       links.filter(
@@ -101,16 +103,16 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   }
 
   const handleCreateLink = (message: KafkaMessageRow) => {
-    let fields: string[] = []
+    let parsedMessage: Record<string, unknown> | undefined
     try {
       const parsed = JSON.parse(message.value)
       if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        fields = Object.keys(parsed)
+        parsedMessage = parsed as Record<string, unknown>
       }
     } catch {
-      fields = []
+      parsedMessage = undefined
     }
-    setCreateLinkFields(fields)
+    setCreateLinkValue(parsedMessage)
     setCreateLinkOpen(true)
   }
 
@@ -247,7 +249,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
         sourceConnId={connId}
         sourceKind="kafka"
         sourceScope={topic}
-        sourceFieldOptions={createLinkFields}
+        sourceFieldValue={createLinkValue}
         onOpenChange={setCreateLinkOpen}
       />
     </div>
