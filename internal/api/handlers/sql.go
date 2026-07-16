@@ -206,6 +206,30 @@ func (h *SQLHandler) Completions(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, items)
 }
 
+func (h *SQLHandler) SQLCatalog(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	conn, err := h.manager.Get(r.Context(), id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	provider, ok := conn.(connector.SQLCatalogProvider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "sql catalog is not supported for this connection type")
+		return
+	}
+
+	catalog, err := provider.SQLCatalog(r.Context())
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, catalog)
+}
+
 func (h *SQLHandler) History(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	limit := 50

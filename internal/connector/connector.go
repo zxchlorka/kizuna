@@ -62,6 +62,27 @@ type PagedObjectLister interface {
 	ListObjectsPage(ctx context.Context, opts ObjectPageOpts) (*ObjectPage, error)
 }
 
+// SQLCatalogColumn is one column of a table in the SQL catalog snapshot.
+type SQLCatalogColumn struct {
+	Name string `json:"name"`
+	Type string `json:"type"`
+}
+
+// SQLCatalog is a schema → table → columns snapshot of a SQL database, used by
+// editors for schema-aware autocomplete. Truncated is set when the database has
+// more columns than the connector's cap and the snapshot is incomplete.
+type SQLCatalog struct {
+	Schemas       map[string]map[string][]SQLCatalogColumn `json:"schemas"`
+	DefaultSchema string                                   `json:"default_schema,omitempty"`
+	Truncated     bool                                     `json:"truncated,omitempty"`
+}
+
+// SQLCatalogProvider is an optional capability for connectors that can expose
+// a full SQL schema catalog (currently Postgres only).
+type SQLCatalogProvider interface {
+	SQLCatalog(ctx context.Context) (*SQLCatalog, error)
+}
+
 // KafkaProduceMessage is one already-expanded message to publish. Loop/multi
 // template expansion happens client-side; the backend just publishes the batch.
 type KafkaProduceMessage struct {
@@ -181,6 +202,7 @@ type ExecResult struct {
 	Error         string          `json:"error,omitempty"`
 	DurationMs    int64           `json:"duration_ms"`
 	RowsReturned  int             `json:"rows_returned"`
+	RowReturning  bool            `json:"row_returning,omitempty"` // statement produced a result set (even with zero columns/rows)
 	Truncated     bool            `json:"truncated,omitempty"`
 	AppliedLimit  int             `json:"applied_limit,omitempty"`
 	ColumnSources []*ColumnSource `json:"column_sources,omitempty"` // aligned to Columns; nil for expressions
