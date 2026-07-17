@@ -130,11 +130,6 @@ export default function SettingsPage() {
             }}
           />
         </div>
-
-        <div className="mt-4 rounded-sm border border-border bg-card p-6">
-          <p className="text-sm font-semibold text-foreground">Version</p>
-          <p className="mt-2 font-mono text-xs text-muted-foreground">Kizuna v0.4.1</p>
-        </div>
       </main>
     </div>
   )
