@@ -11,7 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 type sqlExecutor interface {

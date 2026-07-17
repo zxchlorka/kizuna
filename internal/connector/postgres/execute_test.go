@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func TestIsRowReturningStatement(t *testing.T) {

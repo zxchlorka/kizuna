@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const maxEntriesPerConnection = 100

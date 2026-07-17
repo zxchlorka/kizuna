@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 type testHealthConnector struct {

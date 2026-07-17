@@ -366,7 +366,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     }
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
-      selection: view.state.selection,
+      // Clamp the cursor to the new document: reusing the previous selection
+      // as-is throws RangeError when the inserted value is shorter, which
+      // unmounts the whole React tree.
+      selection: EditorSelection.cursor(Math.min(view.state.selection.main.head, value.length)),
     })
   }, [value])
 

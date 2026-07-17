@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 // resolveHost replaces localhost/127.0.0.1 with host.docker.internal when

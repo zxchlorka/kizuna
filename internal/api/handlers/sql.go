@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
-	"github.com/qsnake66/kizuna/internal/history"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/history"
 )
 
 type SQLHandler struct {

@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func buildResultRow(columns []connector.ColumnMeta, values []any) map[string]any {
