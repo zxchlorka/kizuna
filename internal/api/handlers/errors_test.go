@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func TestMapConnectorErrorStatuses(t *testing.T) {

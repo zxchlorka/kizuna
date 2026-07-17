@@ -9,6 +9,7 @@ import { SqlStatusBar } from '@/components/SqlConsole/SqlStatusBar'
 import { SqlToolbar } from '@/components/SqlConsole/SqlToolbar'
 import { getSqlStatements } from '@/lib/sqlStatements'
 import { useConnectionStore } from '@/stores/connections'
+import { useSqlCatalogStore } from '@/stores/sqlCatalog'
 import { useSqlConsoleStore } from '@/stores/sqlConsole'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { SqlCatalogTable } from '@/components/SqlConsole/SqlAutocomplete'
@@ -20,7 +21,7 @@ interface SqlConsoleProps {
 
 export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   const editorRef = useRef<SqlEditorHandle | null>(null)
-  const containerRef = useRef<HTMLDivElement | null>(null)
+  const splitRef = useRef<HTMLDivElement | null>(null)
   const [analyzeDialogOpen, setAnalyzeDialogOpen] = useState(false)
   const [pendingAnalyzeStatement, setPendingAnalyzeStatement] = useState('')
   const connections = useConnectionStore((state) => state.connections)
@@ -66,9 +67,16 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
     [catalogTables]
   )
 
+  const sqlCatalog = useSqlCatalogStore((state) => state.catalogs[connId] ?? null)
+  const fetchSqlCatalog = useSqlCatalogStore((state) => state.fetch)
+
   useEffect(() => {
     ensureTab(tabId)
   }, [ensureTab, tabId])
+
+  useEffect(() => {
+    void fetchSqlCatalog(connId)
+  }, [connId, fetchSqlCatalog])
 
   useEffect(() => {
     if (connections.length === 0) {
@@ -150,15 +158,23 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   }
 
   const handleStartResize = (event: React.MouseEvent<HTMLDivElement>) => {
-    const container = containerRef.current
+    const container = splitRef.current
     if (!container) {
       return
     }
     const bounds = container.getBoundingClientRect()
+    // Keep both panes tall enough in pixels that the drag handle can never be
+    // covered by the editor (min-h-[180px]) or pushed out of the container.
+    const minEditorPx = 180
+    const minResultsPx = 120
+    const handlePx = 12
 
     const onMove = (moveEvent: MouseEvent) => {
-      const next = ((moveEvent.clientY - bounds.top) / bounds.height) * 100
-      setSplitSize(tabId, next)
+      const editorPx = Math.min(
+        Math.max(moveEvent.clientY - bounds.top, minEditorPx),
+        bounds.height - handlePx - minResultsPx
+      )
+      setSplitSize(tabId, (editorPx / bounds.height) * 100)
     }
 
     const onUp = () => {
@@ -172,7 +188,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   }
 
   return (
-    <div ref={containerRef} className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
+    <div className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
       <SqlToolbar
         running={tab.running}
         connectionLabel={connectionLabel}
@@ -183,8 +199,8 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         onToggleHistory={() => toggleHistory(tabId)}
       />
 
-      <div className="relative flex-1 overflow-hidden">
-        <div style={{ height: `${tab.splitSize}%` }} className="border-b border-border bg-muted/10">
+      <div ref={splitRef} className="relative flex-1 overflow-hidden">
+        <div style={{ height: `${tab.splitSize}%` }} className="overflow-hidden border-b border-border bg-muted/10">
           <SqlEditor
             ref={editorRef}
             connId={connId}
@@ -196,6 +212,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
             onHistoryNavigate={(direction) => void navigateHistory(connId, tabId, direction)}
             catalogTables={catalogTables}
             catalogSchemas={catalogSchemas}
+            catalog={sqlCatalog}
           />
         </div>
 

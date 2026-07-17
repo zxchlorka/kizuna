@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const completionCacheTTL = 5 * time.Minute
@@ -227,4 +227,6 @@ func (p *PostgresConnector) invalidateCompletionCache() {
 	p.tableCache = nil
 	p.tableCacheUntil = time.Time{}
 	p.columnCache = make(map[string]completionCacheBucket)
+	p.catalogCache = nil
+	p.catalogCacheUntil = time.Time{}
 }

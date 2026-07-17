@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/connector"
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const (

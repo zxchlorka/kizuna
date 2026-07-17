@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func (p *PostgresConnector) GetObjectInfo(ctx context.Context, object string) (*connector.ObjectInfo, error) {

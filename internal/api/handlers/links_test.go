@@ -10,7 +10,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/config"
 )
 
 func newLinksTestConfig(t *testing.T) *config.AppConfig {

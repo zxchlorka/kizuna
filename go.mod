@@ -1,4 +1,4 @@
-module github.com/qsnake66/kizuna
+module github.com/zxchlorka/kizuna
 
 go 1.26.0
 

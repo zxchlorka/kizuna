@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/config"
 )
 
 // ConnectorFactory creates a Connector from a connection config.

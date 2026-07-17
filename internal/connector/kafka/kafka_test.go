@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func TestResolveKafkaSettings(t *testing.T) {
@@ -507,5 +509,26 @@ func TestTopicMessageEstimate(t *testing.T) {
 	got := topicMessageEstimate("orders", []int32{0, 1}, starts, ends)
 	if got != 140 {
 		t.Fatalf("unexpected estimate: got %d want 140", got)
+	}
+}
+
+// Ping must perform real network I/O: kadm.BrokerMetadata is answered from the
+// client's in-memory cache and reported healthy clusters that were unreachable.
+func TestPingFailsWhenBrokersUnreachable(t *testing.T) {
+	t.Parallel()
+
+	client, err := kgo.NewClient(kgo.SeedBrokers("127.0.0.1:1"))
+	if err != nil {
+		t.Fatalf("failed to create kafka client: %v", err)
+	}
+	defer client.Close()
+
+	conn := &KafkaConnector{client: client, admin: kadm.NewClient(client)}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	if err := conn.Ping(ctx); err == nil {
+		t.Fatal("expected ping to fail for an unreachable broker")
 	}
 }

@@ -3,7 +3,7 @@ package postgres
 import (
 	"testing"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func TestBuildResultRow(t *testing.T) {

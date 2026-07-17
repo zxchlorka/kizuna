@@ -25,6 +25,8 @@ interface ParsedCompletionContext {
   schema?: string
   sources: SqlSourceRef[]
   allowAutomatic: boolean
+  /** Cursor is completing a dotted path (alias., schema., schema.table.). */
+  qualified: boolean
 }
 
 const CLAUSE_RE = /\b(group\s+by|order\s+by|delete\s+from|from|join|update|into|select|where|having|on|set|returning)\b/gi
@@ -212,6 +214,7 @@ export function detectSqlCompletionContext(
         table: source.qualifiedName,
         sources,
         allowAutomatic: true,
+        qualified: true,
       }
     }
 
@@ -223,6 +226,7 @@ export function detectSqlCompletionContext(
         table: qualifier,
         sources,
         allowAutomatic: true,
+        qualified: true,
       }
     }
 
@@ -235,6 +239,7 @@ export function detectSqlCompletionContext(
         schema: qualifier,
         sources,
         allowAutomatic: true,
+        qualified: true,
       }
     }
 
@@ -245,6 +250,7 @@ export function detectSqlCompletionContext(
       prefix: tablePrefix,
       sources,
       allowAutomatic: clause === 'table',
+      qualified: true,
     }
   }
 
@@ -257,6 +263,7 @@ export function detectSqlCompletionContext(
     prefix: wordPrefix,
     sources,
     allowAutomatic,
+    qualified: false,
   }
 }
 
@@ -265,6 +272,7 @@ function toCompletionOptions(items: CompletionItem[]) {
     label: item.label,
     type: item.type,
     detail: item.detail,
+    boost: item.type === 'column' ? 2 : item.type === 'table' ? 1 : 0,
   }))
 }
 
@@ -274,7 +282,8 @@ export function createSqlCompletionSource(
     signal?: AbortSignal
   ) => Promise<CompletionItem[]>,
   getCatalogTables: () => SqlCatalogTable[],
-  getCatalogSchemas: () => string[]
+  getCatalogSchemas: () => string[],
+  hasSchemaCatalog: () => boolean = () => false
 ) {
   let activeController: AbortController | null = null
 
@@ -283,6 +292,13 @@ export function createSqlCompletionSource(
     const catalogSchemas = getCatalogSchemas()
     const parsed = detectSqlCompletionContext(context.state.doc.toString(), context.pos, catalogTables, catalogSchemas)
     const hasPrefix = parsed.prefix.trim().length > 0
+
+    // Dotted paths (alias., schema., schema.table.) are handled by lang-sql's
+    // schemaCompletionSource once the full catalog is loaded — it resolves
+    // aliases through the syntax tree instead of regexes.
+    if (hasSchemaCatalog() && parsed.qualified) {
+      return null
+    }
 
     if (!context.explicit && !parsed.allowAutomatic) {
       return null

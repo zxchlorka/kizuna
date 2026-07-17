@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func (c *RedisConnector) GetObjectInfo(ctx context.Context, object string) (*connector.ObjectInfo, error) {
