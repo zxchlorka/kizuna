@@ -3,8 +3,8 @@ package kafka
 import (
 	"context"
 
-	"github.com/qsnake66/kizuna/internal/connector"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 type partitionLag struct {

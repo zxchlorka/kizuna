@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 type fakeRedisClient struct {

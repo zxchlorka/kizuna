@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const (

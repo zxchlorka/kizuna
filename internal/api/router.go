@@ -3,10 +3,10 @@ package api
 import (
 	"github.com/go-chi/chi/v5"
 	chimiddleware "github.com/go-chi/chi/v5/middleware"
-	"github.com/qsnake66/kizuna/internal/api/handlers"
-	apimiddleware "github.com/qsnake66/kizuna/internal/api/middleware"
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/api/handlers"
+	apimiddleware "github.com/zxchlorka/kizuna/internal/api/middleware"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.Router {
@@ -51,6 +51,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Post("/explain", sqlHandler.Explain)
 			r.Post("/analyze", sqlHandler.Analyze)
 			r.Get("/completions", sqlHandler.Completions)
+			r.Get("/sql-catalog", sqlHandler.SQLCatalog)
 			r.Get("/history", sqlHandler.History)
 			r.Delete("/history", sqlHandler.ClearHistory)
 		})

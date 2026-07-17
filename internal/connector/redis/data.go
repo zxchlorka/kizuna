@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/connector"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func (c *RedisConnector) GetData(ctx context.Context, object string, opts connector.DataOpts) (*connector.DataResult, error) {

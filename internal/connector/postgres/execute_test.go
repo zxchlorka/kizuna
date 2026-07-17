@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func TestIsRowReturningStatement(t *testing.T) {
@@ -20,6 +20,14 @@ func TestIsRowReturningStatement(t *testing.T) {
 		{name: "insert returning", statement: "INSERT INTO users(id) VALUES (1) RETURNING id", want: true},
 		{name: "update no returning", statement: "UPDATE users SET name = 'a'", want: false},
 		{name: "ddl", statement: "CREATE TABLE demo(id integer)", want: false},
+		{name: "select empty list multiline", statement: "SELECT\nFROM cch.office\nLIMIT 10", want: true},
+		{name: "select with tab", statement: "SELECT\tid FROM users", want: true},
+		{name: "select star no space", statement: "select*from users", want: true},
+		{name: "parenthesized select", statement: "(SELECT 1) UNION (SELECT 2)", want: true},
+		{name: "table statement", statement: "TABLE users", want: true},
+		{name: "values no space", statement: "VALUES(1),(2)", want: true},
+		{name: "call procedure", statement: "CALL select_totals()", want: false},
+		{name: "identifier prefix collision", statement: "selectivity_report()", want: false},
 	}
 
 	for _, tc := range tests {

@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func (c *RedisConnector) getJSONData(ctx context.Context, key string, ttl int64, opts connector.DataOpts) (*connector.DataResult, error) {

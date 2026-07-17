@@ -2,6 +2,7 @@ import { Fragment, useEffect, useState, type FormEvent, type MouseEvent } from '
 import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
+import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -74,6 +75,7 @@ export function KafkaMessageBrowser({
   onOpenReverse,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
@@ -194,17 +196,20 @@ export function KafkaMessageBrowser({
           }
         />
       ) : (
-        <div className="overflow-x-auto rounded-sm border border-border/70">
-          <table className="min-w-full divide-y divide-border text-sm">
+        <div className="rounded-sm border border-border/70">
+          {/* Fixed layout: CSS ignores max-width on auto-layout table cells, so a
+              single-line JSON value would otherwise stretch the table (and the
+              expanded detail row with it) far past the viewport. */}
+          <table className="w-full table-fixed divide-y divide-border text-sm">
             <thead className="bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
               <tr>
                 <th className="w-8 px-2 py-2" />
-                <th className="px-3 py-2">Part</th>
-                <th className="px-3 py-2">Offset</th>
-                <th className="px-3 py-2">Timestamp</th>
-                <th className="px-3 py-2">Key</th>
+                <th className="w-14 px-3 py-2">Part</th>
+                <th className="w-32 px-3 py-2">Offset</th>
+                <th className="w-52 px-3 py-2">Timestamp</th>
+                <th className="w-48 px-3 py-2">Key</th>
                 <th className="px-3 py-2">Value</th>
-                <th className="px-3 py-2">Format</th>
+                <th className="w-20 px-3 py-2">Format</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
@@ -222,12 +227,12 @@ export function KafkaMessageBrowser({
                         {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                       </td>
                       <td className="px-3 py-2 font-mono text-xs">{message.partition}</td>
-                      <td className="px-3 py-2 font-mono text-xs">{message.offset}</td>
-                      <td className="whitespace-nowrap px-3 py-2 font-mono text-xs text-muted-foreground">{message.timestamp}</td>
-                      <td className="max-w-40 truncate px-3 py-2 font-mono text-xs text-cyan-700 dark:text-cyan-300">
+                      <td className="truncate px-3 py-2 font-mono text-xs">{message.offset}</td>
+                      <td className="truncate px-3 py-2 font-mono text-xs text-muted-foreground">{message.timestamp}</td>
+                      <td className="truncate px-3 py-2 font-mono text-xs text-cyan-700 dark:text-cyan-300">
                         {message.key || <span className="text-muted-foreground">—</span>}
                       </td>
-                      <td className="max-w-md truncate px-3 py-2 font-mono text-xs">{valuePreview(message.value)}</td>
+                      <td className="truncate px-3 py-2 font-mono text-xs">{valuePreview(message.value)}</td>
                       <td className="px-3 py-2">
                         <KafkaFormatBadge format={message.format} />
                       </td>
@@ -235,7 +240,7 @@ export function KafkaMessageBrowser({
                     {isExpanded && (
                       <tr>
                         <td colSpan={7} className="p-0">
-                          <KafkaMessageDetail message={message} />
+                          <KafkaMessageDetail message={message} onExpand={() => setModalMessage(message)} />
                         </td>
                       </tr>
                     )}
@@ -266,6 +271,8 @@ export function KafkaMessageBrowser({
               : 'Load older messages'}
         </Button>
       )}
+
+      <KafkaMessageModal message={modalMessage} onClose={() => setModalMessage(null)} />
 
       {menu && (
         <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>

@@ -12,14 +12,14 @@ import (
 	"syscall"
 	"time"
 
-	kizuna "github.com/qsnake66/kizuna"
-	"github.com/qsnake66/kizuna/internal/api"
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
-	"github.com/qsnake66/kizuna/internal/connector/kafka"
-	"github.com/qsnake66/kizuna/internal/connector/postgres"
-	redisconnector "github.com/qsnake66/kizuna/internal/connector/redis"
-	"github.com/qsnake66/kizuna/internal/server"
+	kizuna "github.com/zxchlorka/kizuna"
+	"github.com/zxchlorka/kizuna/internal/api"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector/kafka"
+	"github.com/zxchlorka/kizuna/internal/connector/postgres"
+	redisconnector "github.com/zxchlorka/kizuna/internal/connector/redis"
+	"github.com/zxchlorka/kizuna/internal/server"
 )
 
 func main() {

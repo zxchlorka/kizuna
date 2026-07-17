@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/twmb/franz-go/pkg/sasl/plain"
 	"github.com/twmb/franz-go/pkg/sasl/scram"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const (
@@ -206,8 +206,10 @@ func (c *KafkaConnector) Ping(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, pingTimeout)
 	defer cancel()
 
-	_, err := c.admin.BrokerMetadata(ctx)
-	return normalizeKafkaError(err)
+	// kadm.BrokerMetadata is served from the client's in-memory cache and
+	// never touches the network, so it cannot detect an unreachable cluster.
+	// kgo's Ping issues a real broker-only Metadata request over the wire.
+	return normalizeKafkaError(c.client.Ping(ctx))
 }
 
 func (c *KafkaConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, error) {

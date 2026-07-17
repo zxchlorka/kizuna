@@ -11,7 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 var (
@@ -170,6 +170,7 @@ func (p *PostgresConnector) executeQuery(ctx context.Context, exec sqlExecutor, 
 		ColumnTypes:   columnTypes,
 		Rows:          resultRows,
 		RowsReturned:  len(resultRows),
+		RowReturning:  true,
 		RowsAffected:  rowsAffected,
 		Truncated:     truncated,
 		AppliedLimit:  policy.appliedLimit,
@@ -287,20 +288,20 @@ func columnTypeNames(fields []pgconn.FieldDescription) []string {
 }
 
 func isRowReturningStatement(statement string) bool {
-	trimmed := strings.ToLower(leadingCommentRE.ReplaceAllString(statement, ""))
-	switch {
-	case strings.HasPrefix(trimmed, "select "),
-		strings.HasPrefix(trimmed, "select\n"),
-		strings.HasPrefix(trimmed, "values "),
-		strings.HasPrefix(trimmed, "values\n"),
-		strings.HasPrefix(trimmed, "show "),
-		strings.HasPrefix(trimmed, "show\n"),
-		strings.HasPrefix(trimmed, "with "),
-		strings.HasPrefix(trimmed, "with\n"):
-		return true
-	default:
-		return returningClauseRE.MatchString(trimmed)
+	trimmed := leadingCommentRE.ReplaceAllString(statement, "")
+	// Parenthesized set operations like (SELECT ...) UNION (SELECT ...) still
+	// return rows; classify by the first keyword inside the parens.
+	for len(trimmed) > 0 && trimmed[0] == '(' {
+		trimmed = leadingCommentRE.ReplaceAllString(trimmed[1:], "")
 	}
+	if len(trimmed) > 0 && isSQLIdentStart(trimmed[0]) {
+		token, _ := readSQLIdentifier(trimmed, 0)
+		switch strings.ToLower(token) {
+		case "select", "values", "show", "with", "table":
+			return true
+		}
+	}
+	return returningClauseRE.MatchString(trimmed)
 }
 
 func isSchemaChangingStatement(statement string) bool {

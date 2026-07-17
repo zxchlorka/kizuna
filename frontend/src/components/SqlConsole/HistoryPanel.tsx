@@ -32,7 +32,7 @@ export function HistoryPanel({
   }
 
   return (
-    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-sm border-l border-border bg-background/98 shadow-2xl">
+    <div className="absolute inset-y-0 right-0 z-20 w-full max-w-sm border-l border-border bg-background shadow-2xl">
       <div className="flex h-full flex-col">
         <div className="flex items-center justify-between border-b border-border px-3 py-2">
           <div>

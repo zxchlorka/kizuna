@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/qsnake66/kizuna/internal/connector"
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 func (c *KafkaConnector) ListObjects(ctx context.Context, path string) ([]connector.Object, error) {

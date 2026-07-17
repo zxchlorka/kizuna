@@ -6,7 +6,7 @@
 
 Replaces pgAdmin + Redis Desktop Manager + Kafka UI with a single lightweight container.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-f59e0b.svg)](LICENSE)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-f59e0b.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)](https://go.dev)
 [![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=black)](https://react.dev)
 
@@ -19,7 +19,7 @@ Replaces pgAdmin + Redis Desktop Manager + Kafka UI with a single lightweight co
 ## Quick Start
 
 ```bash
-git clone https://github.com/qsnake66/kizuna.git
+git clone https://github.com/zxchlorka/kizuna.git
 cd kizuna
 docker compose up -d --build
 ```
@@ -94,4 +94,4 @@ Links can be edited or removed in Settings.
 
 ## License
 
-[MIT](LICENSE)
+[Apache 2.0](LICENSE)

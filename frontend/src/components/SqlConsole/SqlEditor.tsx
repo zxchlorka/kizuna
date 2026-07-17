@@ -5,19 +5,26 @@ import {
   useMemo,
   useRef,
 } from 'react'
-import { autocompletion, closeBrackets, completionKeymap } from '@codemirror/autocomplete'
+import {
+  autocompletion,
+  closeBrackets,
+  completionKeymap,
+  type Completion,
+  type CompletionSource,
+} from '@codemirror/autocomplete'
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { searchKeymap } from '@codemirror/search'
 import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
-import { PostgreSQL, keywordCompletionSource, sql } from '@codemirror/lang-sql'
+import { PostgreSQL, keywordCompletionSource, schemaCompletionSource, sql, type SQLNamespace } from '@codemirror/lang-sql'
 import { basicSetup } from 'codemirror'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
 import { getSqlStatementAtPosition } from '@/lib/sqlStatements'
 import { createSqlCompletionSource, type SqlCatalogTable } from '@/components/SqlConsole/SqlAutocomplete'
 import { useAutocomplete } from '@/hooks/useAutocomplete'
+import type { SqlCatalog } from '@/types/api'
 
 export interface SqlEditorHandle {
   focus: () => void
@@ -35,54 +42,44 @@ interface SqlEditorProps {
   onHistoryNavigate: (direction: 'previous' | 'next') => void
   catalogTables: SqlCatalogTable[]
   catalogSchemas: string[]
+  catalog: SqlCatalog | null
   className?: string
 }
 
-function basicFormatSql(text: string): string {
-  const tokens = [
-    'SELECT',
-    'FROM',
-    'WHERE',
-    'GROUP BY',
-    'ORDER BY',
-    'LIMIT',
-    'OFFSET',
-    'RETURNING',
-    'INSERT INTO',
-    'VALUES',
-    'UPDATE',
-    'SET',
-    'DELETE FROM',
-    'LEFT JOIN',
-    'RIGHT JOIN',
-    'INNER JOIN',
-    'OUTER JOIN',
-    'JOIN',
-    'ON',
-    'AND',
-    'OR',
-  ]
-
-  let formatted = text.replace(/\s+/g, ' ').trim()
-  for (const token of tokens) {
-    const pattern = new RegExp(`\\b${token.replace(/\s+/g, '\\s+')}\\b`, 'gi')
-    formatted = formatted.replace(pattern, `\n${token}`)
+function buildSqlNamespace(catalog: SqlCatalog): SQLNamespace {
+  const namespace: Record<string, Record<string, Completion[]>> = {}
+  for (const [schema, tables] of Object.entries(catalog.schemas ?? {})) {
+    const tableNamespace: Record<string, Completion[]> = {}
+    for (const [table, columns] of Object.entries(tables)) {
+      tableNamespace[table] = (columns ?? []).map((column) => ({
+        label: column.name,
+        type: 'property',
+        detail: column.type,
+        boost: 2,
+      }))
+    }
+    namespace[schema] = tableNamespace
   }
+  return namespace
+}
 
-  return formatted
-    .split('\n')
-    .map((line, index) => {
-      const trimmed = line.trim()
-      if (index === 0) {
-        return trimmed
-      }
-      if (/^(AND|OR|ON)\b/.test(trimmed)) {
-        return `  ${trimmed}`
-      }
-      return trimmed
-    })
-    .join('\n')
-    .replace(/\n{2,}/g, '\n')
+async function formatSqlDocument(view: EditorView): Promise<void> {
+  const doc = view.state.doc.toString()
+  if (!doc.trim()) {
+    return
+  }
+  try {
+    const { format } = await import('sql-formatter')
+    const formatted = format(doc, { language: 'postgresql', keywordCase: 'upper' })
+    if (formatted !== doc) {
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: formatted },
+        selection: EditorSelection.cursor(formatted.length),
+      })
+    }
+  } catch {
+    // sql-formatter throws on unparsable input; leave the document untouched.
+  }
 }
 
 function toggleLineComments(view: EditorView): boolean {
@@ -165,7 +162,7 @@ function buildTheme(dark: boolean): Extension {
 }
 
 export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function SqlEditor(
-  { connId, value, onChange, onRun, onExplain, onToggleHistory, onHistoryNavigate, catalogTables, catalogSchemas, className },
+  { connId, value, onChange, onRun, onExplain, onToggleHistory, onHistoryNavigate, catalogTables, catalogSchemas, catalog, className },
   ref
 ) {
   const rootRef = useRef<HTMLDivElement | null>(null)
@@ -182,6 +179,17 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
   const requestCompletionsRef = useRef(requestCompletions)
   const catalogTablesRef = useRef(catalogTables)
   const catalogSchemasRef = useRef(catalogSchemas)
+  const schemaSourceRef = useRef<CompletionSource | null>(null)
+
+  useEffect(() => {
+    schemaSourceRef.current = catalog
+      ? schemaCompletionSource({
+          dialect: PostgreSQL,
+          schema: buildSqlNamespace(catalog),
+          defaultSchema: catalog.default_schema || 'public',
+        })
+      : null
+  }, [catalog])
 
   useEffect(() => {
     onChangeRef.current = onChange
@@ -203,11 +211,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       if (!view) {
         return
       }
-      const formatted = basicFormatSql(view.state.doc.toString())
-      view.dispatch({
-        changes: { from: 0, to: view.state.doc.length, insert: formatted },
-        selection: EditorSelection.cursor(formatted.length),
-      })
+      void formatSqlDocument(view)
     },
     getSelectedTextOrCurrentStatement: () => {
       const view = viewRef.current
@@ -230,9 +234,12 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     const completionSource = createSqlCompletionSource(
       (args, signal) => requestCompletionsRef.current(args, signal),
       () => catalogTablesRef.current,
-      () => catalogSchemasRef.current
+      () => catalogSchemasRef.current,
+      () => schemaSourceRef.current !== null
     )
     const keywordSource = keywordCompletionSource(PostgreSQL, true)
+    const schemaSource: CompletionSource = (completionContext) =>
+      schemaSourceRef.current ? schemaSourceRef.current(completionContext) : null
     const keyBindings = keymap.of([
       ...defaultKeymap,
       ...historyKeymap,
@@ -284,11 +291,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
           if (!view) {
             return false
           }
-          const formatted = basicFormatSql(view.state.doc.toString())
-          view.dispatch({
-            changes: { from: 0, to: view.state.doc.length, insert: formatted },
-            selection: EditorSelection.cursor(formatted.length),
-          })
+          void formatSqlDocument(view)
           return true
         },
       },
@@ -320,7 +323,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
         themeCompartment.of(buildTheme(resolvedTheme === 'dark')),
         autocompleteCompartment.of(
           autocompletion({
-            override: [completionSource, keywordSource],
+            override: [schemaSource, completionSource, keywordSource],
             activateOnTyping: true,
           })
         ),
@@ -363,7 +366,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
     }
     view.dispatch({
       changes: { from: 0, to: view.state.doc.length, insert: value },
-      selection: view.state.selection,
+      // Clamp the cursor to the new document: reusing the previous selection
+      // as-is throws RangeError when the inserted value is shorter, which
+      // unmounts the whole React tree.
+      selection: EditorSelection.cursor(Math.min(view.state.selection.main.head, value.length)),
     })
   }, [value])
 

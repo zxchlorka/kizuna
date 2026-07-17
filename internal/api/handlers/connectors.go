@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 const connectionAcquireTimeout = 6 * time.Second

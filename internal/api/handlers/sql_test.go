@@ -10,8 +10,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/qsnake66/kizuna/internal/config"
-	"github.com/qsnake66/kizuna/internal/connector"
+	"github.com/zxchlorka/kizuna/internal/config"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
 type testSQLConnector struct {
@@ -26,6 +26,15 @@ type testSQLConnector struct {
 	analyzeResult  *connector.ExplainResult
 	analyzeErr     error
 	completions    []connector.CompletionItem
+	catalog        *connector.SQLCatalog
+	catalogErr     error
+}
+
+// connectorWithoutCatalog hides the SQLCatalog capability: the embedded
+// interface is connector.Connector, so the promoted method set never
+// satisfies connector.SQLCatalogProvider.
+type connectorWithoutCatalog struct {
+	connector.Connector
 }
 
 func (c *testSQLConnector) Ping(context.Context) error { return nil }
@@ -92,6 +101,10 @@ func (c *testSQLConnector) Analyze(context.Context, string) (*connector.ExplainR
 
 func (c *testSQLConnector) Completions(context.Context, connector.CompletionRequest) ([]connector.CompletionItem, error) {
 	return c.completions, nil
+}
+
+func (c *testSQLConnector) SQLCatalog(context.Context) (*connector.SQLCatalog, error) {
+	return c.catalog, c.catalogErr
 }
 
 func (c *testSQLConnector) Mutate(context.Context, connector.MutateOp) (*connector.MutateResult, error) {
@@ -269,5 +282,63 @@ func TestSQLHandlerAnalyzeReturnsResult(t *testing.T) {
 	}
 	if payload.Mode != "analyze" {
 		t.Fatalf("unexpected mode: %q", payload.Mode)
+	}
+}
+
+func TestSQLHandlerSQLCatalogReturnsCatalog(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestSQLHandler(t, &testSQLConnector{
+		catalog: &connector.SQLCatalog{
+			Schemas: map[string]map[string][]connector.SQLCatalogColumn{
+				"cch": {
+					"office": {
+						{Name: "id", Type: "integer"},
+						{Name: "name", Type: "text"},
+					},
+				},
+			},
+			DefaultSchema: "public",
+		},
+	})
+	req := withSQLRouteParams(
+		httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/sql-catalog", nil),
+		map[string]string{"id": "conn-1"},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.SQLCatalog(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d body %s", rec.Code, rec.Body.String())
+	}
+
+	var payload connector.SQLCatalog
+	if err := json.NewDecoder(rec.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if payload.DefaultSchema != "public" {
+		t.Fatalf("unexpected default schema: %q", payload.DefaultSchema)
+	}
+	columns := payload.Schemas["cch"]["office"]
+	if len(columns) != 2 || columns[0].Name != "id" || columns[1].Type != "text" {
+		t.Fatalf("unexpected columns: %+v", columns)
+	}
+}
+
+func TestSQLHandlerSQLCatalogUnsupportedConnector(t *testing.T) {
+	t.Parallel()
+
+	handler := newTestSQLHandler(t, connectorWithoutCatalog{&testSQLConnector{}})
+	req := withSQLRouteParams(
+		httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/sql-catalog", nil),
+		map[string]string{"id": "conn-1"},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.SQLCatalog(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unexpected status: got %d", rec.Code)
 	}
 }
