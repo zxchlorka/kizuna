@@ -23,6 +23,9 @@ export interface ObjectTab {
   kind: 'object'
   id: string
   connId: string
+  // Page the tab is shown on when it queries a sibling database; connId stays
+  // the data source. Unset means the tab lives on its own connection's page.
+  anchorConnId?: string
   object: string
   label: string
   objectType: ObjectType
@@ -35,6 +38,7 @@ export interface SqlTab {
   kind: 'sql'
   id: string
   connId: string
+  anchorConnId?: string
   label: string
 }
 
@@ -42,10 +46,17 @@ export interface RedisCliTab {
   kind: 'redis-cli'
   id: string
   connId: string
+  anchorConnId?: string
   label: string
 }
 
 export type WorkspaceTab = ObjectTab | SqlTab | RedisCliTab
+
+// Page a tab belongs to: its anchor when it targets a sibling database,
+// otherwise its own connection.
+export function tabPageId(tab: WorkspaceTab): string {
+  return tab.anchorConnId ?? tab.connId
+}
 
 export interface TreeVisibility {
   showTables: boolean
@@ -73,6 +84,7 @@ interface WorkspaceStore {
   visibleSchemasByConnection: Record<string, string[] | null>
   availableSchemasByConnection: Record<string, string[]>
   selectedNodeByConnection: Record<string, string>
+  treeConnByPage: Record<string, string>
 
   fetchTree: (connId: string, path?: string) => Promise<void>
   setSelectedNode: (connId: string, node: string) => Promise<void>
@@ -81,7 +93,14 @@ interface WorkspaceStore {
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
   hydrateVisibleSchemas: (connId: string, visibleSchemas: string[] | null | undefined) => void
   setVisibleSchemas: (connId: string, visibleSchemas: string[] | null) => void
-  openTab: (connId: string, object: string, objectType?: ObjectType, options?: { ttlSeconds?: number | null }) => void
+  openTab: (
+    connId: string,
+    object: string,
+    objectType?: ObjectType,
+    options?: { ttlSeconds?: number | null; anchorConnId?: string }
+  ) => void
+  setTreeConn: (pageConnId: string, viewConnId: string) => void
+  rebindSqlTab: (tabId: string, connId: string) => void
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType?: ObjectType) => void
   clearObjectTabFilterState: (tabId: string) => void
   goBackFromTab: (tabId: string) => void
@@ -164,6 +183,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   visibleSchemasByConnection: {},
   availableSchemasByConnection: {},
   selectedNodeByConnection: {},
+  treeConnByPage: {},
 
   fetchTree: async (connId: string, path?: string) => {
     const normalizedPath = path || ''
@@ -360,7 +380,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     }))
   },
 
-  openTab: (connId: string, object: string, objectType: ObjectType = 'table', options?: { ttlSeconds?: number | null }) => {
+  openTab: (
+    connId: string,
+    object: string,
+    objectType: ObjectType = 'table',
+    options?: { ttlSeconds?: number | null; anchorConnId?: string }
+  ) => {
     const id = buildObjectTabID(connId, object, objectType)
     const { tabs } = get()
     const existing = tabs.find((t) => t.id === id)
@@ -368,18 +393,54 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       set({ activeTabId: id })
       return
     }
-    const label = object
+    const anchorConnId = options?.anchorConnId !== connId ? options?.anchorConnId : undefined
+    let label = object
+    if (anchorConnId) {
+      const database = useConnectionStore.getState().connections.find((conn) => conn.id === connId)?.database
+      if (database) {
+        label = `${object} · ${database}`
+      }
+    }
     const tab: ObjectTab = {
       kind: 'object',
       id,
       connId,
+      anchorConnId,
       object,
       label,
       objectType,
       ttlSeconds: options?.ttlSeconds ?? null,
-      navigationTrail: [{ tabId: id, label: object }],
+      navigationTrail: [{ tabId: id, label }],
     }
     set({ tabs: [...tabs, tab], activeTabId: id })
+  },
+
+  setTreeConn: (pageConnId: string, viewConnId: string) => {
+    set((state) => {
+      const next = { ...state.treeConnByPage }
+      if (viewConnId === pageConnId) {
+        delete next[pageConnId]
+      } else {
+        next[pageConnId] = viewConnId
+      }
+      return { treeConnByPage: next }
+    })
+  },
+
+  rebindSqlTab: (tabId: string, connId: string) => {
+    set((state) => ({
+      tabs: state.tabs.map((tab) => {
+        if (tab.id !== tabId || tab.kind !== 'sql') {
+          return tab
+        }
+        const page = tabPageId(tab)
+        return {
+          ...tab,
+          connId,
+          anchorConnId: connId === page ? undefined : page,
+        }
+      }),
+    }))
   },
 
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType: ObjectType = 'table') => {
@@ -570,7 +631,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
 
   closeConnection: (connId: string) => {
     set((state) => {
-      const remainingTabs = state.tabs.filter((tab) => tab.connId !== connId)
+      const remainingTabs = state.tabs.filter((tab) => tabPageId(tab) !== connId)
       const activeStillOpen = remainingTabs.some((tab) => tab.id === state.activeTabId)
       const nextActiveByConnection = { ...state.activeTabByConnection }
       delete nextActiveByConnection[connId]

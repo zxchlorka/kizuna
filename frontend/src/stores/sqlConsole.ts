@@ -33,6 +33,7 @@ interface SqlTabState {
   running: boolean
   error: string | null
   splitSize: number
+  resultsCollapsed: boolean
   historyOpen: boolean
   history: HistoryEntry[]
   historyLoading: boolean
@@ -46,6 +47,7 @@ interface SqlConsoleStore {
   ensureTab: (tabId: string) => void
   setEditorValue: (tabId: string, value: string) => void
   setSplitSize: (tabId: string, splitSize: number) => void
+  setResultsCollapsed: (tabId: string, collapsed: boolean) => void
   toggleHistory: (tabId: string) => void
   setHistoryOpen: (tabId: string, open: boolean) => void
   setHistorySearch: (tabId: string, search: string) => void
@@ -66,6 +68,7 @@ const defaultTabState = (): SqlTabState => ({
   running: false,
   error: null,
   splitSize: 42,
+  resultsCollapsed: false,
   historyOpen: false,
   history: [],
   historyLoading: false,
@@ -128,6 +131,21 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           [tabId]: {
             ...tab,
             splitSize: Math.max(25, Math.min(75, splitSize)),
+          },
+        },
+      }
+    })
+  },
+
+  setResultsCollapsed: (tabId, collapsed) => {
+    set((state) => {
+      const tab = ensureState(state.tabs, tabId)
+      return {
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...tab,
+            resultsCollapsed: collapsed,
           },
         },
       }
@@ -357,6 +375,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             error: null,
             results: [],
             activeResultId: null,
+            resultsCollapsed: false,
           },
         },
       }
@@ -467,6 +486,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             error: null,
             results: [],
             activeResultId: null,
+            resultsCollapsed: false,
           },
         },
       }
@@ -561,6 +581,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             error: null,
             results: [],
             activeResultId: null,
+            resultsCollapsed: false,
           },
         },
       }

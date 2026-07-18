@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/EmptyState'
 import { AnalyzeWarningDialog } from '@/components/SqlConsole/AnalyzeWarningDialog'
 import { HistoryPanel } from '@/components/SqlConsole/HistoryPanel'
@@ -31,6 +32,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   const ensureTab = useSqlConsoleStore((state) => state.ensureTab)
   const setEditorValue = useSqlConsoleStore((state) => state.setEditorValue)
   const setSplitSize = useSqlConsoleStore((state) => state.setSplitSize)
+  const setResultsCollapsed = useSqlConsoleStore((state) => state.setResultsCollapsed)
   const toggleHistory = useSqlConsoleStore((state) => state.toggleHistory)
   const setHistoryOpen = useSqlConsoleStore((state) => state.setHistoryOpen)
   const setHistorySearch = useSqlConsoleStore((state) => state.setHistorySearch)
@@ -191,6 +193,8 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
     <div className="relative flex h-full flex-1 flex-col overflow-hidden bg-background">
       <SqlToolbar
         running={tab.running}
+        connId={connId}
+        tabId={tabId}
         connectionLabel={connectionLabel}
         onRun={() => void handleRun()}
         onExplain={() => void handleExplain()}
@@ -200,7 +204,10 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
       />
 
       <div ref={splitRef} className="relative flex-1 overflow-hidden">
-        <div style={{ height: `${tab.splitSize}%` }} className="overflow-hidden border-b border-border bg-muted/10">
+        <div
+          style={{ height: tab.resultsCollapsed ? 'calc(100% - 12px)' : `${tab.splitSize}%` }}
+          className="overflow-hidden border-b border-border bg-muted/10"
+        >
           <SqlEditor
             ref={editorRef}
             connId={connId}
@@ -219,27 +226,42 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         <div
           role="separator"
           aria-orientation="horizontal"
-          onMouseDown={handleStartResize}
-          className="flex h-3 cursor-row-resize items-center justify-center bg-background"
+          onMouseDown={tab.resultsCollapsed ? undefined : handleStartResize}
+          className={cn(
+            'relative flex h-3 items-center justify-center bg-background',
+            !tab.resultsCollapsed && 'cursor-row-resize'
+          )}
         >
           <div className="h-1 w-28 rounded-full bg-border/80" />
+          <button
+            type="button"
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={() => setResultsCollapsed(tabId, !tab.resultsCollapsed)}
+            title={tab.resultsCollapsed ? 'Show results' : 'Hide results'}
+            aria-label={tab.resultsCollapsed ? 'Show results' : 'Hide results'}
+            className="absolute right-2 top-1/2 z-10 -translate-y-1/2 rounded-sm bg-background p-0.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            {tab.resultsCollapsed ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
         </div>
 
-        <div style={{ height: `calc(${100 - tab.splitSize}% - 12px)` }} className="overflow-hidden">
-          {tab.running ? (
-            <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Running statement
-            </div>
-          ) : (
-            <SqlResultsArea
-              results={tab.results}
-              activeResultId={tab.activeResultId}
-              onSelectResult={(resultId) => setActiveResult(tabId, resultId)}
-              connId={connId}
-            />
-          )}
-        </div>
+        {!tab.resultsCollapsed && (
+          <div style={{ height: `calc(${100 - tab.splitSize}% - 12px)` }} className="overflow-hidden">
+            {tab.running ? (
+              <div className="flex h-full items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Running statement
+              </div>
+            ) : (
+              <SqlResultsArea
+                results={tab.results}
+                activeResultId={tab.activeResultId}
+                onSelectResult={(resultId) => setActiveResult(tabId, resultId)}
+                connId={connId}
+              />
+            )}
+          </div>
+        )}
 
         <HistoryPanel
           open={tab.historyOpen}

@@ -2,7 +2,7 @@ import { Activity, Braces, CircleDot, Database, Eye, Folder, Hash, List, ListOrd
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import { useWorkspaceStore } from '@/stores/workspace'
+import { tabPageId, useWorkspaceStore } from '@/stores/workspace'
 import { isRedisObjectType } from '@/lib/objectTypes'
 import type { ObjectType } from '@/types/api'
 
@@ -54,7 +54,7 @@ export function TabBar({ connId }: TabBarProps) {
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const isRedis = connection?.type === 'redis'
   const isKafka = connection?.type === 'kafka'
-  const visibleTabs = tabs.filter((tab) => tab.connId === connId)
+  const visibleTabs = tabs.filter((tab) => tabPageId(tab) === connId)
 
   return (
     <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-border bg-muted/30 pr-2">

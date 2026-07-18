@@ -1,8 +1,11 @@
 import { AlertTriangle, FileCode2, History, Play, Sparkles } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { DatabaseSwitcher } from '@/components/SqlConsole/DatabaseSwitcher'
 
 interface SqlToolbarProps {
   running: boolean
+  connId: string
+  tabId: string
   connectionLabel: string
   onRun: () => void
   onExplain: () => void
@@ -13,6 +16,8 @@ interface SqlToolbarProps {
 
 export function SqlToolbar({
   running,
+  connId,
+  tabId,
   connectionLabel,
   onRun,
   onExplain,
@@ -44,9 +49,7 @@ export function SqlToolbar({
           History
         </Button>
       </div>
-      <div className="rounded-sm border border-border bg-muted/30 px-2.5 py-1 font-mono text-[11px] text-muted-foreground">
-        {connectionLabel}
-      </div>
+      <DatabaseSwitcher key={connId} connId={connId} tabId={tabId} connectionLabel={connectionLabel} />
     </div>
   )
 }

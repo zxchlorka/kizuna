@@ -15,13 +15,14 @@ import {
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { bracketMatching, foldGutter, indentOnInput } from '@codemirror/language'
 import { searchKeymap } from '@codemirror/search'
-import { Compartment, EditorSelection, EditorState, type Extension } from '@codemirror/state'
+import { Compartment, EditorSelection, EditorState, Prec, type Extension } from '@codemirror/state'
 import { EditorView, drawSelection, highlightActiveLine, keymap, lineNumbers } from '@codemirror/view'
 import { PostgreSQL, keywordCompletionSource, schemaCompletionSource, sql, type SQLNamespace } from '@codemirror/lang-sql'
 import { basicSetup } from 'codemirror'
 import { useTheme } from 'next-themes'
 import { cn } from '@/lib/utils'
 import { getSqlStatementAtPosition } from '@/lib/sqlStatements'
+import { statementHighlight } from '@/components/SqlConsole/statementHighlight'
 import { createSqlCompletionSource, type SqlCatalogTable } from '@/components/SqlConsole/SqlAutocomplete'
 import { useAutocomplete } from '@/hooks/useAutocomplete'
 import type { SqlCatalog } from '@/types/api'
@@ -156,6 +157,17 @@ function buildTheme(dark: boolean): Extension {
         border: dark ? '1px solid rgba(71, 85, 105, 0.8)' : '1px solid rgba(203, 213, 225, 0.9)',
         backgroundColor: dark ? '#0f172a' : '#ffffff',
       },
+      '.cm-activeStatement': {
+        backgroundColor: dark ? 'rgba(245, 158, 11, 0.05)' : 'rgba(245, 158, 11, 0.07)',
+        borderLeft: dark ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid rgba(217, 119, 6, 0.4)',
+        borderRight: dark ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid rgba(217, 119, 6, 0.4)',
+      },
+      '.cm-activeStatement-first': {
+        borderTop: dark ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid rgba(217, 119, 6, 0.4)',
+      },
+      '.cm-activeStatement-last': {
+        borderBottom: dark ? '1px solid rgba(245, 158, 11, 0.35)' : '1px solid rgba(217, 119, 6, 0.4)',
+      },
     },
     { dark }
   )
@@ -245,6 +257,10 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
       ...historyKeymap,
       ...searchKeymap,
       ...completionKeymap,
+    ])
+    // Prec.high so these win over defaultKeymap, which also binds Mod-Enter
+    // (insertBlankLine), Mod-ArrowUp/Down (doc start/end), and Mod-/.
+    const appKeymap = Prec.high(keymap.of([
       {
         key: 'Mod-Enter',
         run: () => {
@@ -295,7 +311,7 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
           return true
         },
       },
-    ])
+    ]))
 
     const state = EditorState.create({
       doc: value,
@@ -313,6 +329,8 @@ export const SqlEditor = forwardRef<SqlEditorHandle, SqlEditorProps>(function Sq
           dialect: PostgreSQL,
           upperCaseKeywords: true,
         }),
+        statementHighlight(),
+        appKeymap,
         keyBindings,
         EditorView.lineWrapping,
         EditorView.updateListener.of((update) => {

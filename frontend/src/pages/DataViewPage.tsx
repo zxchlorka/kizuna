@@ -8,7 +8,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ProductionBanner } from '@/components/ProductionBanner'
 import { RedisKeyView } from '@/components/RedisKeyView'
 import { useConnectionStore } from '@/stores/connections'
-import { useWorkspaceStore } from '@/stores/workspace'
+import { tabPageId, useWorkspaceStore } from '@/stores/workspace'
 import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
 import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
@@ -32,7 +32,7 @@ export default function DataViewPage() {
   const activeTabByConnection = useWorkspaceStore((state) => state.activeTabByConnection)
   const setActiveTab = useWorkspaceStore((state) => state.setActiveTab)
   const currentConnection = connections.find((connection) => connection.id === id)
-  const connectionTabs = tabs.filter((tab) => tab.connId === id)
+  const connectionTabs = tabs.filter((tab) => tabPageId(tab) === id)
   // Prefer the globally-active tab when it belongs to this connection; otherwise
   // fall back to this connection's last-active tab (or its most recent tab), so
   // switching back to a connection never shows a blank pane.
