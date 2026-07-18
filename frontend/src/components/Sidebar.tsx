@@ -8,6 +8,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { SchemaFilterButton } from '@/components/Sidebar/SchemaFilterButton'
 import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
+import { TreeDatabaseSwitcher } from '@/components/Sidebar/TreeDatabaseSwitcher'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { fetchWithTimeout } from '@/lib/http'
@@ -34,8 +35,10 @@ export function Sidebar({ connId }: SidebarProps) {
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const pushToast = useToastStore((state) => state.push)
   const treeVisibility = useWorkspaceStore((state) => state.treeVisibility)
-  const availableSchemas = useWorkspaceStore((state) => state.availableSchemasByConnection[connId] ?? [])
-  const visibleSchemas = useWorkspaceStore((state) => state.visibleSchemasByConnection[connId] ?? null)
+  // The tree can view a sibling database of the same server; page stays put.
+  const viewConnId = useWorkspaceStore((state) => state.treeConnByPage[connId] ?? connId)
+  const availableSchemas = useWorkspaceStore((state) => state.availableSchemasByConnection[viewConnId] ?? [])
+  const visibleSchemas = useWorkspaceStore((state) => state.visibleSchemasByConnection[viewConnId] ?? null)
   const hydrateVisibleSchemas = useWorkspaceStore((state) => state.hydrateVisibleSchemas)
   const setTreeVisibility = useWorkspaceStore((state) => state.setTreeVisibility)
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
@@ -46,14 +49,15 @@ export function Sidebar({ connId }: SidebarProps) {
   const [clusterNodes, setClusterNodes] = useState<string[]>([])
 
   const currentConnection = connections.find((connection) => connection.id === connId)
+  const viewConnection = connections.find((connection) => connection.id === viewConnId)
   const isRedisConnection = currentConnection?.type === 'redis'
   const isKafkaConnection = currentConnection?.type === 'kafka'
   const isClusterConnection = isRedisConnection && currentConnection?.mode === 'cluster'
   const readOnly = currentConnection?.read_only ?? false
 
   useEffect(() => {
-    hydrateVisibleSchemas(connId, currentConnection?.visible_schemas)
-  }, [connId, currentConnection?.visible_schemas, hydrateVisibleSchemas])
+    hydrateVisibleSchemas(viewConnId, viewConnection?.visible_schemas)
+  }, [viewConnId, viewConnection?.visible_schemas, hydrateVisibleSchemas])
 
   useEffect(() => {
     if (!isClusterConnection) {
@@ -93,13 +97,13 @@ export function Sidebar({ connId }: SidebarProps) {
 
   const handleSaveVisibleSchemas = async (nextVisibleSchemas: string[] | null) => {
     setSchemaFilterSaving(true)
-    setVisibleSchemas(connId, nextVisibleSchemas)
+    setVisibleSchemas(viewConnId, nextVisibleSchemas)
 
     try {
-      await updateVisibleSchemas(connId, nextVisibleSchemas)
+      await updateVisibleSchemas(viewConnId, nextVisibleSchemas)
       setSchemaDialogOpen(false)
     } catch (error) {
-      setVisibleSchemas(connId, currentConnection?.visible_schemas ?? null)
+      setVisibleSchemas(viewConnId, viewConnection?.visible_schemas ?? null)
       pushToast({
         tone: 'error',
         title: 'Schema filter save failed',
@@ -311,7 +315,10 @@ export function Sidebar({ connId }: SidebarProps) {
             </div>
           )}
           {currentConnection && isRedisConnection && <RedisKeyLookup connId={connId} />}
-          {currentConnection && <ObjectTree connId={connId} />}
+          {currentConnection && !isRedisConnection && !isKafkaConnection && (
+            <TreeDatabaseSwitcher key={viewConnId} pageConnId={connId} viewConnId={viewConnId} />
+          )}
+          {currentConnection && <ObjectTree connId={viewConnId} anchorConnId={connId} />}
           {currentConnection && !isRedisConnection && (
             <SchemaFilterDialog
               open={schemaDialogOpen}
