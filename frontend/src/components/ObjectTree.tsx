@@ -45,6 +45,8 @@ interface SchemaChildGroup {
 
 interface ObjectTreeProps {
   connId: string
+  // Page the opened tabs should stay on when the tree views a sibling database.
+  anchorConnId?: string
 }
 
 function buildTreeKey(connId: string, path = ''): string {
@@ -169,7 +171,7 @@ function getIcon(type: string, expanded?: boolean) {
   }
 }
 
-export function ObjectTree({ connId }: ObjectTreeProps) {
+export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const connections = useConnectionStore((state) => state.connections)
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
@@ -297,7 +299,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
     <button
       key={`${item.schema}.${item.name}`}
       type="button"
-      onClick={() => openTab(connId, `${item.schema}.${item.name}`, 'index')}
+      onClick={() => openTab(connId, `${item.schema}.${item.name}`, 'index', { anchorConnId })}
       className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground ${nested ? 'pl-3' : ''}`}
       title={item.parent_name ? `${item.name} on ${item.parent_name}` : item.name}
     >
@@ -317,7 +319,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       <div key={objectKey}>
         <button
           type="button"
-      onClick={() => openTab(connId, objectKey, item.type as ObjectType)}
+      onClick={() => openTab(connId, objectKey, item.type as ObjectType, { anchorConnId })}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
         >
           {getIcon(item.type)}
@@ -423,7 +425,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       <button
         key={`${item.type}:${objectKey}`}
         type="button"
-        onClick={() => openTab(connId, objectKey, item.type as ObjectType, { ttlSeconds: item.ttl_seconds })}
+        onClick={() => openTab(connId, objectKey, item.type as ObjectType, { ttlSeconds: item.ttl_seconds, anchorConnId })}
         className={`flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted ${nested ? 'pl-3' : ''}`}
         title={objectKey}
       >
@@ -527,7 +529,7 @@ export function ObjectTree({ connId }: ObjectTreeProps) {
       <button
         key={`topic:${item.name}`}
         type="button"
-        onClick={() => openTab(connId, item.path ?? item.name, 'kafka_topic')}
+        onClick={() => openTab(connId, item.path ?? item.name, 'kafka_topic', { anchorConnId })}
         className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
         title={item.name}
       >
