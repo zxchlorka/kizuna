@@ -55,9 +55,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const [createLinkValue, setCreateLinkValue] = useState<Record<string, unknown> | undefined>()
 
   useEffect(() => {
-    void fetchMessages(connId, topic, tabId).finally(() => {
-      void fetchTopicChildren(connId, topic, tabId)
-    })
+    void fetchMessages(connId, topic, tabId)
+    void fetchTopicChildren(connId, topic, tabId)
   }, [connId, fetchMessages, fetchTopicChildren, tabId, topic])
 
   useEffect(() => {

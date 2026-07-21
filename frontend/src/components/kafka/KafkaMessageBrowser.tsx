@@ -139,7 +139,9 @@ export function KafkaMessageBrowser({
         <input
           value={fieldInput}
           onChange={(event) => setFieldInput(event.target.value)}
-          placeholder="JSON field (e.g. product_id, user.id)"
+          placeholder="JSON path (e.g. events[].name)"
+          aria-label="JSON field path"
+          title="Nested paths and arrays are supported, for example events[].name"
           spellCheck={false}
           autoComplete="off"
           className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
@@ -148,6 +150,7 @@ export function KafkaMessageBrowser({
           value={valueInput}
           onChange={(event) => setValueInput(event.target.value)}
           placeholder="equals value"
+          aria-label="Expected JSON field value"
           spellCheck={false}
           autoComplete="off"
           className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"

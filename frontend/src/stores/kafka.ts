@@ -139,7 +139,9 @@ async function requestMessages(
   }
 
   const res = await fetchWithTimeout(
-    `/api/connections/${connId}/objects/${encodeURIComponent(topic)}/data?${params.toString()}`
+    `/api/connections/${connId}/objects/${encodeURIComponent(topic)}/data?${params.toString()}`,
+    undefined,
+    search ? 22000 : 18000
   )
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }))

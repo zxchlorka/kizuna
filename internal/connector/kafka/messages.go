@@ -12,12 +12,13 @@ import (
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/zxchlorka/kizuna/internal/connector"
+	"golang.org/x/sync/errgroup"
 )
 
 const (
 	defaultMessageLimit = 50
 	maxMessageLimit     = 500
-	consumeTimeout      = 4 * time.Second
+	consumeTimeout      = 6 * time.Second
 
 	// Content-search scan budget for one "Scan more" step. A single step
 	// examines at most maxScanMessages records (across scoped partitions) within
@@ -29,6 +30,12 @@ const (
 type partitionWindow struct {
 	from  int64
 	upper int64 // exclusive
+}
+
+type consumeResult struct {
+	rows      []map[string]any
+	completed map[int32]bool
+	timedOut  bool
 }
 
 // GetData reads one page of messages, newest first. Filters:
@@ -58,12 +65,23 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	metaCtx, cancelMeta := context.WithTimeout(ctx, metadataTimeout)
 	defer cancelMeta()
 
-	starts, err := c.admin.ListStartOffsets(metaCtx, topic)
-	if err != nil {
-		return nil, normalizeKafkaError(err)
-	}
-	ends, err := c.admin.ListEndOffsets(metaCtx, topic)
-	if err != nil {
+	var starts, ends kadm.ListedOffsets
+	group, groupCtx := errgroup.WithContext(metaCtx)
+	group.Go(func() error {
+		listed, err := c.admin.ListStartOffsets(groupCtx, topic)
+		if err == nil {
+			starts = listed
+		}
+		return err
+	})
+	group.Go(func() error {
+		listed, err := c.admin.ListEndOffsets(groupCtx, topic)
+		if err == nil {
+			ends = listed
+		}
+		return err
+	})
+	if err := group.Wait(); err != nil {
 		return nil, normalizeKafkaError(err)
 	}
 	endsByPartition, ok := ends[topic]
@@ -86,15 +104,11 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		return nil, fmt.Errorf("%w: partition %d not found in topic %q", connector.ErrBadRequest, partitionFilter, topic)
 	}
 
-	// In scan mode the window is sized by the scan budget (not the page limit):
-	// we examine a large slice and filter it down to matches.
 	budget := limit
+	perPartition := normalPartitionWindow(limit)
 	if scanning {
 		budget = maxScanMessages
-	}
-	perPartition := int64(budget)
-	if len(scoped) > 1 {
-		perPartition = int64((budget + len(scoped) - 1) / len(scoped))
+		perPartition = dividedWindow(budget, len(scoped))
 	}
 
 	windows := make(map[int32]partitionWindow, len(scoped))
@@ -118,38 +132,31 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if scanning {
 		timeout = scanTimeBudget
 	}
-	rows, err := c.consumeWindows(ctx, topic, windows, timeout)
+	consumed, err := c.consumeWindows(ctx, topic, windows, budget, timeout)
 	if err != nil {
 		return nil, err
 	}
-
-	sort.SliceStable(rows, func(i, j int) bool {
-		left, _ := rows[i]["timestamp"].(string)
-		right, _ := rows[j]["timestamp"].(string)
-		if left == right {
-			lo, _ := rows[i]["offset"].(int64)
-			ro, _ := rows[j]["offset"].(int64)
-			return lo > ro
+	rows := consumed.rows
+	if !scanning {
+		rows = selectNewestPrefixes(rows, limit)
+		if consumed.timedOut {
+			return nil, fmt.Errorf("%w: kafka did not finish reading every partition before the read deadline", connector.ErrTimeout)
 		}
-		return left > right
-	})
+	}
 
-	// Advance the cursor by how far we actually consumed. In scan mode a large
-	// window may not be fully drained within the time budget, so using the
-	// lowest consumed offset (instead of the requested window floor) guarantees
-	// "Scan more" never skips unread messages.
+	sortRowsNewest(rows)
+
+	// Advance only partitions whose rows are actually returned to the caller.
+	// Unread partitions keep their prior upper offset, so partial broker replies
+	// never create pagination gaps.
 	frontier := make(map[int32]int64, len(windows))
 	for id, window := range windows {
-		frontier[id] = window.from
+		frontier[id] = window.upper
 	}
-	if scanning {
-		reached := lowestConsumedOffsets(rows)
-		for id, window := range windows {
-			if off, ok := reached[id]; ok {
-				frontier[id] = off
-			} else {
-				frontier[id] = window.upper // consumed nothing: no progress
-			}
+	reached := lowestConsumedOffsets(rows)
+	for id, off := range reached {
+		if !scanning || consumed.completed[id] {
+			frontier[id] = off
 		}
 	}
 
@@ -168,6 +175,9 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if scanning {
 		meta["scanning"] = true
 		meta["scanned"] = len(rows)
+		if consumed.timedOut {
+			meta["partial_scan"] = true
+		}
 		rows = filterMatches(rows, matchField, matchValue)
 		meta["matched"] = len(rows)
 	}
@@ -192,50 +202,60 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	}, nil
 }
 
-// consumeWindows reads the requested offset windows with a dedicated
-// short-lived consumer client, so the shared admin client never carries
-// consume state. Only the requested offsets are fetched — never the topic.
-func (c *KafkaConnector) consumeWindows(ctx context.Context, topic string, windows map[int32]partitionWindow, timeout time.Duration) ([]map[string]any, error) {
-	rows := make([]map[string]any, 0, 64)
+// consumeWindows temporarily assigns exact offset windows to the connector's
+// long-lived franz-go client. Reusing the client keeps broker metadata and
+// TCP/TLS/SASL connections warm; consumeMu protects the client's direct
+// assignment state from overlapping message requests.
+func (c *KafkaConnector) consumeWindows(
+	ctx context.Context,
+	topic string,
+	windows map[int32]partitionWindow,
+	target int,
+	timeout time.Duration,
+) (*consumeResult, error) {
+	result := &consumeResult{
+		rows:      make([]map[string]any, 0, target),
+		completed: make(map[int32]bool, len(windows)),
+	}
 	if len(windows) == 0 {
-		return rows, nil
+		return result, nil
 	}
 
 	offsets := make(map[int32]kgo.Offset, len(windows))
-	var needed int64
+	partitionIDs := make([]int32, 0, len(windows))
 	for id, window := range windows {
 		offsets[id] = kgo.NewOffset().At(window.from)
-		needed += window.upper - window.from
+		partitionIDs = append(partitionIDs, id)
 	}
 
-	opts, err := buildClientOpts(c.settings)
-	if err != nil {
-		return nil, err
-	}
-	opts = append(opts, kgo.ConsumePartitions(map[string]map[int32]kgo.Offset{topic: offsets}))
+	c.consumeMu.Lock()
+	defer c.consumeMu.Unlock()
 
-	client, err := kgo.NewClient(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create kafka consumer: %w", err)
-	}
-	defer client.Close()
+	c.client.AddConsumePartitions(map[string]map[int32]kgo.Offset{topic: offsets})
+	defer func() {
+		c.client.RemoveConsumePartitions(map[string][]int32{topic: partitionIDs})
+		c.client.ResumeFetchPartitions(map[string][]int32{topic: partitionIDs})
+	}()
 
 	consumeCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	collected := int64(0)
-	for collected < needed {
-		fetches := client.PollFetches(consumeCtx)
+	rowsByPartition := make(map[int32][]map[string]any, len(windows))
+	maxSeen := make(map[int32]int64, len(windows))
+	seenPartition := make(map[int32]bool, len(windows))
+	reachedEmptyEnd := make(map[int32]bool, len(windows))
+	for {
+		fetches := c.client.PollFetches(consumeCtx)
 		if fetches.IsClientClosed() {
-			break
+			return nil, fmt.Errorf("%w: kafka consumer closed while reading messages", connector.ErrUnavailable)
 		}
 
 		var fetchErr error
-		for _, err := range fetches.Errors() {
+		for _, fetchError := range fetches.Errors() {
 			if consumeCtx.Err() != nil {
 				continue
 			}
-			fetchErr = err.Err
+			fetchErr = fetchError.Err
 			break
 		}
 		if fetchErr != nil {
@@ -244,19 +264,138 @@ func (c *KafkaConnector) consumeWindows(ctx context.Context, topic string, windo
 
 		fetches.EachRecord(func(record *kgo.Record) {
 			window, ok := windows[record.Partition]
-			if !ok || record.Offset < window.from || record.Offset >= window.upper {
+			if !ok || result.completed[record.Partition] || record.Offset < window.from {
 				return
 			}
-			rows = append(rows, recordRow(record))
-			collected++
+			if record.Offset > maxSeen[record.Partition] {
+				maxSeen[record.Partition] = record.Offset
+			}
+			seenPartition[record.Partition] = true
+			if record.Offset < window.upper {
+				rowsByPartition[record.Partition] = append(rowsByPartition[record.Partition], recordRow(record))
+			}
+		})
+		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
+			window, ok := windows[partition.Partition]
+			if partition.Topic == topic && ok && len(partition.Records) == 0 && partition.HighWatermark >= window.upper {
+				reachedEmptyEnd[partition.Partition] = true
+			}
 		})
 
+		newlyCompleted := make(map[string][]int32)
+		for id, window := range windows {
+			if result.completed[id] || (!reachedEmptyEnd[id] && (!seenPartition[id] || maxSeen[id] < window.upper-1)) {
+				continue
+			}
+			result.completed[id] = true
+			result.rows = append(result.rows, rowsByPartition[id]...)
+			newlyCompleted[topic] = append(newlyCompleted[topic], id)
+		}
+		if len(newlyCompleted[topic]) > 0 {
+			c.client.PauseFetchPartitions(newlyCompleted)
+		}
+
+		if len(result.completed) == len(windows) {
+			break
+		}
 		if consumeCtx.Err() != nil {
+			result.timedOut = true
 			break
 		}
 	}
 
-	return rows, nil
+	if consumeCtx.Err() != nil && len(result.completed) != len(windows) {
+		result.timedOut = true
+	}
+	return result, nil
+}
+
+func dividedWindow(total, partitions int) int64 {
+	if partitions <= 1 {
+		return int64(total)
+	}
+	return int64((total + partitions - 1) / partitions)
+}
+
+// The global newest N can contain all N rows from one partition. Reading the
+// newest N from every scoped partition is therefore the smallest fixed window
+// that can produce an exact cross-partition top N without distribution bias.
+func normalPartitionWindow(limit int) int64 {
+	return int64(limit)
+}
+
+// selectNewestPrefixes performs a k-way merge of per-partition offset-desc
+// streams. Every selected partition contributes a contiguous newest prefix,
+// which makes its minimum selected offset a lossless pagination cursor.
+func selectNewestPrefixes(rows []map[string]any, limit int) []map[string]any {
+	if len(rows) <= limit {
+		sortRowsNewest(rows)
+		return rows
+	}
+
+	grouped := make(map[int32][]map[string]any)
+	for _, row := range rows {
+		id, ok := row["partition"].(int32)
+		if ok {
+			grouped[id] = append(grouped[id], row)
+		}
+	}
+	for id := range grouped {
+		sort.Slice(grouped[id], func(i, j int) bool {
+			left, _ := grouped[id][i]["offset"].(int64)
+			right, _ := grouped[id][j]["offset"].(int64)
+			return left > right
+		})
+	}
+
+	positions := make(map[int32]int, len(grouped))
+	selected := make([]map[string]any, 0, limit)
+	for len(selected) < limit {
+		var bestID int32
+		var best map[string]any
+		found := false
+		for id, partitionRows := range grouped {
+			position := positions[id]
+			if position >= len(partitionRows) {
+				continue
+			}
+			candidate := partitionRows[position]
+			if !found || rowIsNewer(candidate, best) {
+				bestID, best, found = id, candidate, true
+			}
+		}
+		if !found {
+			break
+		}
+		selected = append(selected, best)
+		positions[bestID]++
+	}
+	return selected
+}
+
+func sortRowsNewest(rows []map[string]any) {
+	sort.SliceStable(rows, func(i, j int) bool { return rowIsNewer(rows[i], rows[j]) })
+}
+
+func rowIsNewer(left, right map[string]any) bool {
+	leftTime, _ := left["timestamp"].(string)
+	rightTime, _ := right["timestamp"].(string)
+	if leftTime != rightTime {
+		leftParsed, leftErr := time.Parse(time.RFC3339Nano, leftTime)
+		rightParsed, rightErr := time.Parse(time.RFC3339Nano, rightTime)
+		if leftErr == nil && rightErr == nil {
+			return leftParsed.After(rightParsed)
+		}
+		return leftTime > rightTime
+	}
+	leftOffset, _ := left["offset"].(int64)
+	rightOffset, _ := right["offset"].(int64)
+	if leftOffset != rightOffset {
+		return leftOffset > rightOffset
+	}
+	leftPartition, _ := left["partition"].(int32)
+	rightPartition, _ := right["partition"].(int32)
+	return leftPartition > rightPartition
 }
 
 func recordRow(record *kgo.Record) map[string]any {
@@ -379,9 +518,9 @@ func filterMatches(rows []map[string]any, field string, value string) []map[stri
 	return matches
 }
 
-// messageMatchesField reports whether a message's JSON value has the field
-// (a "." path is followed into nested objects) equal to want. Non-JSON values
-// and missing paths never match.
+// messageMatchesField reports whether a message contains the JSON path equal
+// to want. Paths may start below the root ("events[].name"), and arrays are
+// traversed implicitly, so both "events.name" and "events[].name" work.
 func messageMatchesField(row map[string]any, field string, want string) bool {
 	if field == "" {
 		return true
@@ -397,26 +536,67 @@ func messageMatchesField(row map[string]any, field string, want string) bool {
 	if json.Unmarshal([]byte(raw), &parsed) != nil {
 		return false
 	}
-	leaf, ok := navigateJSONPath(parsed, strings.Split(field, "."))
-	if !ok {
+	parts := normalizeJSONPath(field)
+	if len(parts) == 0 {
 		return false
 	}
-	return jsonLeafEquals(leaf, want)
+	return jsonPathMatchesAnywhere(parsed, parts, want)
 }
 
-func navigateJSONPath(value any, parts []string) (any, bool) {
-	current := value
-	for _, part := range parts {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = object[part]
-		if !ok {
-			return nil, false
+func normalizeJSONPath(field string) []string {
+	field = strings.TrimSpace(field)
+	field = strings.TrimPrefix(field, "$")
+	field = strings.TrimPrefix(field, ".")
+	rawParts := strings.Split(field, ".")
+	parts := make([]string, 0, len(rawParts))
+	for _, part := range rawParts {
+		part = strings.TrimSpace(part)
+		part = strings.TrimSuffix(part, "[*]")
+		part = strings.TrimSuffix(part, "[]")
+		if part != "" {
+			parts = append(parts, part)
 		}
 	}
-	return current, true
+	return parts
+}
+
+func jsonPathMatchesAnywhere(value any, parts []string, want string) bool {
+	if jsonPathMatchesFrom(value, parts, want) {
+		return true
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for _, child := range typed {
+			if jsonPathMatchesAnywhere(child, parts, want) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if jsonPathMatchesAnywhere(child, parts, want) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func jsonPathMatchesFrom(value any, parts []string, want string) bool {
+	if len(parts) == 0 {
+		return jsonLeafEquals(value, want)
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		child, ok := typed[parts[0]]
+		return ok && jsonPathMatchesFrom(child, parts[1:], want)
+	case []any:
+		for _, child := range typed {
+			if jsonPathMatchesFrom(child, parts, want) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // jsonLeafEquals compares a decoded JSON scalar to the entered string. Numbers
