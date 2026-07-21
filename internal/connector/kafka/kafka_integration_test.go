@@ -64,9 +64,9 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 			})
 		}
 	}
-	// A newer burst exists only in one partition. The first global page must
-	// still contain 50 rows from that partition instead of being diluted by a
-	// per-partition quota.
+	// A newer burst exists only in one partition. The fast snapshot reader must
+	// represent that partition in the first page without letting it dominate:
+	// the page is a recent cross-partition snapshot, not an exact global top-N.
 	for index := 0; index < 60; index++ {
 		records = append(records, &kgo.Record{
 			Topic:     topic,
@@ -89,7 +89,7 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 	defer conn.Close()
 
 	firstStart := time.Now()
-	first, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 50})
+	first, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 100})
 	firstElapsed := time.Since(firstStart)
 	if err != nil {
 		t.Fatalf("first page: %v", err)
@@ -99,13 +99,28 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		firstElapsed.Milliseconds(), len(first.Rows), first.Meta["partitions"], first.Meta["has_older"],
 		len(cursorMap(first.Meta["next_before_offsets"])),
 	)
-	if len(first.Rows) != 50 {
-		t.Fatalf("first page returned %d messages, want 50", len(first.Rows))
+	// Fast snapshot semantics: the page is a bounded recent snapshot, not exact
+	// global top-N. Expect 50-100 recent records, not a page filled entirely by
+	// the burst partition.
+	if len(first.Rows) < 50 || len(first.Rows) > 100 {
+		t.Fatalf("first page returned %d messages, want a 50-100 recent snapshot", len(first.Rows))
 	}
-	for index, row := range first.Rows {
-		if partition, _ := row["partition"].(int32); partition != 0 {
-			t.Fatalf("first page row %d came from partition %d, want newest burst in partition 0", index, partition)
+	// The burst partition must be represented in the snapshot, but need not fill
+	// the whole page.
+	burstRepresented := false
+	for _, row := range first.Rows {
+		if partition, _ := row["partition"].(int32); partition == 0 {
+			burstRepresented = true
+			break
 		}
+	}
+	if !burstRepresented {
+		t.Fatal("first page does not represent the burst partition (partition 0) in the snapshot")
+	}
+	// The response must be bounded in time: it returns near the reader budget
+	// rather than waiting out every slow partition (well under the 45s ctx).
+	if firstElapsed > 10*time.Second {
+		t.Fatalf("first page took %v, want a time-bounded fast snapshot", firstElapsed)
 	}
 
 	cursor, ok := first.Meta["next_before_offsets"].(map[string]int64)
@@ -118,7 +133,7 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 	}
 	secondStart := time.Now()
 	second, err := conn.GetData(ctx, topic, connector.DataOpts{
-		Limit: 50,
+		Limit: 100,
 		Filters: []connector.FilterExpr{{
 			Column: "before_offsets",
 			Op:     "eq",
@@ -134,9 +149,15 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		secondElapsed.Milliseconds(), len(second.Rows), second.Meta["partitions"], second.Meta["has_older"],
 		len(cursorMap(second.Meta["next_before_offsets"])),
 	)
-	if len(second.Rows) != 50 {
-		t.Fatalf("second page returned %d messages, want 50", len(second.Rows))
+	// A second recent snapshot below the first page's cursor. Bounded, non-empty.
+	if len(second.Rows) == 0 || len(second.Rows) > 100 {
+		t.Fatalf("second page returned %d messages, want a bounded non-empty snapshot", len(second.Rows))
 	}
+	if secondElapsed > 10*time.Second {
+		t.Fatalf("second page took %v, want a time-bounded fast snapshot", secondElapsed)
+	}
+	// Pagination must stay lossless: no (partition, offset) identity may repeat
+	// across pages.
 	seen := make(map[string]struct{}, len(first.Rows))
 	for _, row := range first.Rows {
 		seen[rowIdentity(row)] = struct{}{}

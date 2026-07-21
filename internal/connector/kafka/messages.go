@@ -32,10 +32,28 @@ type partitionWindow struct {
 	upper int64 // exclusive
 }
 
+// partitionConsumer is the subset of *kgo.Client that consumeWindows drives.
+// Keeping it an interface lets unit tests inject a deterministic fake broker so
+// partial-result, budget-timeout and cancellation behavior can be verified
+// without a live cluster. *kgo.Client satisfies this structurally.
+type partitionConsumer interface {
+	AddConsumePartitions(map[string]map[int32]kgo.Offset)
+	RemoveConsumePartitions(map[string][]int32)
+	PauseFetchPartitions(map[string][]int32) map[string][]int32
+	ResumeFetchPartitions(map[string][]int32)
+	PollFetches(context.Context) kgo.Fetches
+}
+
 type consumeResult struct {
 	rows      []map[string]any
 	completed map[int32]bool
 	timedOut  bool
+	// partial reports that the read budget was exhausted before every scoped
+	// partition finished, yet at least one partition completed with safe rows
+	// that are returned to the caller. Task 2's fast snapshot reader sets this;
+	// Task 3 surfaces it as DataResult.Meta["partial"]. The current reader never
+	// sets it, which is why the partial-result unit tests fail red until Task 2.
+	partial bool
 }
 
 // GetData reads one page of messages, newest first. Filters:
@@ -231,10 +249,10 @@ func (c *KafkaConnector) consumeWindows(
 	c.consumeMu.Lock()
 	defer c.consumeMu.Unlock()
 
-	c.client.AddConsumePartitions(map[string]map[int32]kgo.Offset{topic: offsets})
+	c.consume.AddConsumePartitions(map[string]map[int32]kgo.Offset{topic: offsets})
 	defer func() {
-		c.client.RemoveConsumePartitions(map[string][]int32{topic: partitionIDs})
-		c.client.ResumeFetchPartitions(map[string][]int32{topic: partitionIDs})
+		c.consume.RemoveConsumePartitions(map[string][]int32{topic: partitionIDs})
+		c.consume.ResumeFetchPartitions(map[string][]int32{topic: partitionIDs})
 	}()
 
 	consumeCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -245,7 +263,7 @@ func (c *KafkaConnector) consumeWindows(
 	seenPartition := make(map[int32]bool, len(windows))
 	reachedEmptyEnd := make(map[int32]bool, len(windows))
 	for {
-		fetches := c.client.PollFetches(consumeCtx)
+		fetches := c.consume.PollFetches(consumeCtx)
 		if fetches.IsClientClosed() {
 			return nil, fmt.Errorf("%w: kafka consumer closed while reading messages", connector.ErrUnavailable)
 		}
@@ -292,7 +310,7 @@ func (c *KafkaConnector) consumeWindows(
 			newlyCompleted[topic] = append(newlyCompleted[topic], id)
 		}
 		if len(newlyCompleted[topic]) > 0 {
-			c.client.PauseFetchPartitions(newlyCompleted)
+			c.consume.PauseFetchPartitions(newlyCompleted)
 		}
 
 		if len(result.completed) == len(windows) {
@@ -322,6 +340,19 @@ func dividedWindow(total, partitions int) int64 {
 // that can produce an exact cross-partition top N without distribution bias.
 func normalPartitionWindow(limit int) int64 {
 	return int64(limit)
+}
+
+// initialPartitionQuota returns the per-partition read window for a fast
+// snapshot page: max(1, ceil(pageSize/scopedPartitionCount)). It is the
+// replacement Task 2 wires into GetData in place of normalPartitionWindow so a
+// 100-message page across 54 partitions reads ~2 offsets per partition instead
+// of 100.
+//
+// TODO(task-2): implement the bounded quota and route GetData through it. The
+// placeholder below deliberately keeps today's whole-page behavior so the quota
+// unit test fails red until the real reader lands.
+func initialPartitionQuota(pageSize, scopedPartitionCount int) int64 {
+	return int64(pageSize)
 }
 
 // selectNewestPrefixes performs a k-way merge of per-partition offset-desc
