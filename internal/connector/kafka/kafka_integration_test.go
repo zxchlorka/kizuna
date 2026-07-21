@@ -88,10 +88,17 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 	}
 	defer conn.Close()
 
+	firstStart := time.Now()
 	first, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 50})
+	firstElapsed := time.Since(firstStart)
 	if err != nil {
 		t.Fatalf("first page: %v", err)
 	}
+	t.Logf(
+		"timing call=first_page elapsed_ms=%d rows=%d partitions=%v has_older=%v next_before_offsets_count=%d",
+		firstElapsed.Milliseconds(), len(first.Rows), first.Meta["partitions"], first.Meta["has_older"],
+		len(cursorMap(first.Meta["next_before_offsets"])),
+	)
 	if len(first.Rows) != 50 {
 		t.Fatalf("first page returned %d messages, want 50", len(first.Rows))
 	}
@@ -109,6 +116,7 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal cursor: %v", err)
 	}
+	secondStart := time.Now()
 	second, err := conn.GetData(ctx, topic, connector.DataOpts{
 		Limit: 50,
 		Filters: []connector.FilterExpr{{
@@ -117,9 +125,15 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 			Value:  string(cursorJSON),
 		}},
 	})
+	secondElapsed := time.Since(secondStart)
 	if err != nil {
 		t.Fatalf("second page: %v", err)
 	}
+	t.Logf(
+		"timing call=second_page elapsed_ms=%d rows=%d partitions=%v has_older=%v next_before_offsets_count=%d",
+		secondElapsed.Milliseconds(), len(second.Rows), second.Meta["partitions"], second.Meta["has_older"],
+		len(cursorMap(second.Meta["next_before_offsets"])),
+	)
 	if len(second.Rows) != 50 {
 		t.Fatalf("second page returned %d messages, want 50", len(second.Rows))
 	}
@@ -133,6 +147,7 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		}
 	}
 
+	searchStart := time.Now()
 	search, err := conn.GetData(ctx, topic, connector.DataOpts{
 		Limit: 50,
 		Filters: []connector.FilterExpr{
@@ -140,9 +155,15 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 			{Column: "match_value", Op: "eq", Value: "Auth"},
 		},
 	})
+	searchElapsed := time.Since(searchStart)
 	if err != nil {
 		t.Fatalf("nested search: %v", err)
 	}
+	t.Logf(
+		"timing call=nested_search elapsed_ms=%d rows=%d partitions=%v has_older=%v scanned=%v matched=%v partial_scan=%v",
+		searchElapsed.Milliseconds(), len(search.Rows), search.Meta["partitions"], search.Meta["has_older"],
+		search.Meta["scanned"], search.Meta["matched"], search.Meta["partial_scan"],
+	)
 	if len(search.Rows) != 1 {
 		t.Fatalf("nested search returned %d matches, want 1", len(search.Rows))
 	}
@@ -194,4 +215,12 @@ func integrationAuthPayload(t *testing.T) []byte {
 
 func rowIdentity(row map[string]any) string {
 	return fmt.Sprintf("%v:%v", row["partition"], row["offset"])
+}
+
+// cursorMap safely reads meta["next_before_offsets"] for logging only; it
+// never fails the test, since its sole purpose here is a candidate/partition-
+// completion signal alongside timing output.
+func cursorMap(value any) map[string]int64 {
+	cursor, _ := value.(map[string]int64)
+	return cursor
 }
