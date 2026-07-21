@@ -37,7 +37,12 @@ type kafkaSettings struct {
 }
 
 type KafkaConnector struct {
-	client    *kgo.Client
+	client *kgo.Client
+	// consume is the fetch-loop seam used by consumeWindows. In production it is
+	// the same *kgo.Client as client; tests inject a deterministic fake so
+	// partial/timeout/cancellation reader behavior can be exercised without a
+	// live broker. See partitionConsumer in messages.go.
+	consume   partitionConsumer
 	admin     *kadm.Client
 	config    config.ConnectionConfig
 	settings  kafkaSettings
@@ -63,6 +68,7 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Kafk
 
 	conn := &KafkaConnector{
 		client:   client,
+		consume:  client,
 		admin:    kadm.NewClient(client),
 		config:   cfg,
 		settings: settings,
