@@ -298,6 +298,11 @@ func TestMessageMatchesField(t *testing.T) {
 		{name: "top-level number", row: jsonRow(`{"product_id":123,"k":1}`), field: "product_id", want: "123", match: true},
 		{name: "number mismatch", row: jsonRow(`{"product_id":123}`), field: "product_id", want: "124", match: false},
 		{name: "dot path", row: jsonRow(`{"user":{"id":"u-7"}}`), field: "user.id", want: "u-7", match: true},
+		{name: "nested array full path", row: jsonRow(`{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}`), field: "src.event_data.events[].name", want: "Auth", match: true},
+		{name: "nested array implicit wildcard", row: jsonRow(`{"src":{"event_data":{"events":[{"name":"Auth"}]}}}`), field: "src.event_data.events.name", want: "Auth", match: true},
+		{name: "suffix path below root", row: jsonRow(`{"src":{"event_data":{"events":[{"name":"Auth"}]}}}`), field: "events[].name", want: "Auth", match: true},
+		{name: "suffix scalar below root", row: jsonRow(`{"src":{"event_data":{"events":[{"name":"Auth"}]}}}`), field: "name", want: "Auth", match: true},
+		{name: "array value mismatch", row: jsonRow(`{"events":[{"name":"View"}]}`), field: "events[].name", want: "Auth", match: false},
 		{name: "missing path", row: jsonRow(`{"user":{"id":"u-7"}}`), field: "user.name", want: "x", match: false},
 		{name: "string value", row: jsonRow(`{"status":"paid"}`), field: "status", want: "paid", match: true},
 		{name: "bool value", row: jsonRow(`{"ok":true}`), field: "ok", want: "true", match: true},
@@ -314,6 +319,74 @@ func TestMessageMatchesField(t *testing.T) {
 				t.Fatalf("messageMatchesField = %v, want %v", got, tc.match)
 			}
 		})
+	}
+}
+
+func TestNormalPartitionWindow(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		limit int
+		want  int64
+	}{
+		{name: "default page", limit: 50, want: 50},
+		{name: "large page", limit: 500, want: 500},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := normalPartitionWindow(tc.limit); got != tc.want {
+				t.Fatalf("normalPartitionWindow = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSelectNewestPrefixesKeepsLosslessPartitionCursors(t *testing.T) {
+	t.Parallel()
+
+	row := func(partition int32, offset int64, timestamp string) map[string]any {
+		return map[string]any{"partition": partition, "offset": offset, "timestamp": timestamp}
+	}
+	rows := []map[string]any{
+		row(0, 98, "2026-01-01T00:00:01Z"),
+		row(0, 100, "2026-01-01T00:00:05Z"),
+		row(0, 99, "2026-01-01T00:00:03Z"),
+		row(1, 199, "2026-01-01T00:00:02Z"),
+		row(1, 200, "2026-01-01T00:00:04Z"),
+	}
+
+	selected := selectNewestPrefixes(rows, 3)
+	if len(selected) != 3 {
+		t.Fatalf("selected %d rows, want 3", len(selected))
+	}
+	want := [][2]int64{{0, 100}, {1, 200}, {0, 99}}
+	for i, pair := range want {
+		partition, _ := selected[i]["partition"].(int32)
+		offset, _ := selected[i]["offset"].(int64)
+		if int64(partition) != pair[0] || offset != pair[1] {
+			t.Fatalf("selected[%d] = (%d,%d), want (%d,%d)", i, partition, offset, pair[0], pair[1])
+		}
+	}
+
+	frontier := lowestConsumedOffsets(selected)
+	if frontier[0] != 99 || frontier[1] != 200 {
+		t.Fatalf("unexpected lossless frontier: %#v", frontier)
+	}
+}
+
+func TestSortRowsNewestUsesTimestampChronology(t *testing.T) {
+	t.Parallel()
+
+	rows := []map[string]any{
+		{"partition": int32(0), "offset": int64(10), "timestamp": "2026-07-20T13:59:17.81Z"},
+		{"partition": int32(0), "offset": int64(11), "timestamp": "2026-07-20T13:59:17.811Z"},
+	}
+	sortRowsNewest(rows)
+	if got := rows[0]["offset"]; got != int64(11) {
+		t.Fatalf("newest offset = %v, want 11", got)
 	}
 }
 

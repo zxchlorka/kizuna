@@ -10,6 +10,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -36,10 +37,11 @@ type kafkaSettings struct {
 }
 
 type KafkaConnector struct {
-	client   *kgo.Client
-	admin    *kadm.Client
-	config   config.ConnectionConfig
-	settings kafkaSettings
+	client    *kgo.Client
+	admin     *kadm.Client
+	config    config.ConnectionConfig
+	settings  kafkaSettings
+	consumeMu sync.Mutex
 }
 
 // New creates a KafkaConnector and verifies broker reachability.
