@@ -18,13 +18,35 @@ import (
 const (
 	defaultMessageLimit = 50
 	maxMessageLimit     = 500
-	consumeTimeout      = 6 * time.Second
+
+	// readBudget bounds one fast-snapshot refresh across all of its adaptive
+	// rounds. It is deliberately much smaller than the old all-or-nothing
+	// consumeTimeout (6s): a normal browse returns a recent snapshot quickly and,
+	// if some partitions are slow, returns the safely completed ones as a partial
+	// page instead of failing the whole request.
+	readBudget = 3 * time.Second
+	// maxAdaptiveRounds caps how many times snapshotRead widens partition windows
+	// to backfill a short page, guaranteeing the refill terminates.
+	maxAdaptiveRounds = 5
+	// maxCandidateOffsets caps the total offsets scanned across every round of a
+	// single refresh, bounding candidate memory even with large payloads.
+	maxCandidateOffsets = 4000
 
 	// Content-search scan budget for one "Scan more" step. A single step
 	// examines at most maxScanMessages records (across scoped partitions) within
-	// scanTimeBudget, then returns matches plus a cursor to continue deeper.
+	// scanTimeBudget, then returns matches plus a cursor to continue deeper. This
+	// budget is intentionally separate from the normal-browse readBudget so
+	// reader tuning never changes the scan budget.
 	maxScanMessages = 5000
 	scanTimeBudget  = 8 * time.Second
+)
+
+// Raw candidate fields hold copied record bytes captured during the poll loop.
+// Deserialization is deferred until final page selection; finalizeRow strips
+// these keys from the returned display row.
+const (
+	rawKeyField   = "_raw_key"
+	rawValueField = "_raw_value"
 )
 
 type partitionWindow struct {
@@ -122,44 +144,47 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		return nil, fmt.Errorf("%w: partition %d not found in topic %q", connector.ErrBadRequest, partitionFilter, topic)
 	}
 
-	budget := limit
-	perPartition := normalPartitionWindow(limit)
+	var (
+		consumed        *consumeResult
+		frontierWindows map[int32]partitionWindow
+	)
 	if scanning {
-		budget = maxScanMessages
-		perPartition = dividedWindow(budget, len(scoped))
+		// Content search reads a larger, evenly divided window per partition under
+		// its own scan budget. This path is deliberately separate from the normal
+		// browse quota so reader tuning never changes the scan budget.
+		perPartition := dividedWindow(maxScanMessages, len(scoped))
+		windows := make(map[int32]partitionWindow, len(scoped))
+		for _, id := range scoped {
+			start, end := partitionOffsets(topic, id, starts, ends)
+			upper := end
+			if before, ok := beforeOffsets[id]; ok && before < upper {
+				upper = before
+			}
+			if upper <= start {
+				continue
+			}
+			from := upper - perPartition
+			if from < start {
+				from = start
+			}
+			windows[id] = partitionWindow{from: from, upper: upper}
+		}
+		consumed, err = c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget)
+		if err != nil {
+			return nil, err
+		}
+		frontierWindows = windows
+	} else {
+		// Normal browse: bounded-quota fast snapshot with adaptive refill.
+		consumed, frontierWindows, err = c.snapshotRead(ctx, topic, scoped, starts, ends, beforeOffsets, limit)
+		if err != nil {
+			return nil, err
+		}
 	}
 
-	windows := make(map[int32]partitionWindow, len(scoped))
-	for _, id := range scoped {
-		start, end := partitionOffsets(topic, id, starts, ends)
-		upper := end
-		if before, ok := beforeOffsets[id]; ok && before < upper {
-			upper = before
-		}
-		if upper <= start {
-			continue
-		}
-		from := upper - perPartition
-		if from < start {
-			from = start
-		}
-		windows[id] = partitionWindow{from: from, upper: upper}
-	}
-
-	timeout := consumeTimeout
-	if scanning {
-		timeout = scanTimeBudget
-	}
-	consumed, err := c.consumeWindows(ctx, topic, windows, budget, timeout)
-	if err != nil {
-		return nil, err
-	}
 	rows := consumed.rows
 	if !scanning {
 		rows = selectNewestPrefixes(rows, limit)
-		if consumed.timedOut {
-			return nil, fmt.Errorf("%w: kafka did not finish reading every partition before the read deadline", connector.ErrTimeout)
-		}
 	}
 
 	sortRowsNewest(rows)
@@ -167,8 +192,8 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	// Advance only partitions whose rows are actually returned to the caller.
 	// Unread partitions keep their prior upper offset, so partial broker replies
 	// never create pagination gaps.
-	frontier := make(map[int32]int64, len(windows))
-	for id, window := range windows {
+	frontier := make(map[int32]int64, len(frontierWindows))
+	for id, window := range frontierWindows {
 		frontier[id] = window.upper
 	}
 	reached := lowestConsumedOffsets(rows)
@@ -179,7 +204,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	}
 
 	nextBefore := make(map[string]int64)
-	for id := range windows {
+	for id := range frontierWindows {
 		start, _ := partitionOffsets(topic, id, starts, ends)
 		if frontier[id] > start {
 			nextBefore[strconv.Itoa(int(id))] = frontier[id]
@@ -196,8 +221,14 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		if consumed.timedOut {
 			meta["partial_scan"] = true
 		}
-		rows = filterMatches(rows, matchField, matchValue)
+		// Content search must inspect every candidate, so it deserializes them all
+		// before testing the match predicate.
+		rows = filterMatches(finalizeRows(rows), matchField, matchValue)
 		meta["matched"] = len(rows)
+	} else {
+		// Deferred deserialization: only the rows that survived page selection are
+		// deserialized for display.
+		rows = finalizeRows(rows)
 	}
 	if len(nextBefore) > 0 {
 		meta["next_before_offsets"] = nextBefore
@@ -290,7 +321,7 @@ func (c *KafkaConnector) consumeWindows(
 			}
 			seenPartition[record.Partition] = true
 			if record.Offset < window.upper {
-				rowsByPartition[record.Partition] = append(rowsByPartition[record.Partition], recordRow(record))
+				rowsByPartition[record.Partition] = append(rowsByPartition[record.Partition], rawCandidateRow(record))
 			}
 		})
 		fetches.EachPartition(func(partition kgo.FetchTopicPartition) {
@@ -322,10 +353,144 @@ func (c *KafkaConnector) consumeWindows(
 		}
 	}
 
-	if consumeCtx.Err() != nil && len(result.completed) != len(windows) {
-		result.timedOut = true
+	completedCount := len(result.completed)
+	if completedCount == len(windows) {
+		// Every scoped partition finished its bounded range within budget.
+		return result, nil
 	}
+
+	// The read budget (or the caller's context) expired before every partition
+	// finished. Distinguish a usable partial page from a total failure.
+	result.timedOut = true
+	if completedCount == 0 {
+		// Not a single partition produced a safely-bounded result: an unresponsive
+		// broker or uniformly slow partitions, not an empty success. Surface it as
+		// a real error rather than a partial page with no data.
+		return nil, fmt.Errorf(
+			"%w: kafka read budget expired before any partition produced a usable result",
+			connector.ErrTimeout,
+		)
+	}
+	// At least one partition completed with safe rows and at least one did not:
+	// return only the completed partitions' rows and flag the page partial.
+	result.partial = true
 	return result, nil
+}
+
+// snapshotRead builds a recent cross-partition snapshot for the normal browse
+// path. Every scoped partition starts at a small quota window; if empty or
+// compacted partitions leave the page short, snapshotRead widens the still-
+// readable partitions over a bounded number of adaptive rounds. It never refills
+// forever: it stops as soon as the page target is met, no partition has older
+// records left, the round cap is reached, the candidate-offset budget is spent,
+// or the read budget expires.
+//
+// The returned consumeResult carries rows only from safely completed partition
+// windows (never in-flight partition data), plus the partial flag and completion
+// map that Task 3 surfaces. frontierWindows maps each scoped partition to its
+// original upper bound for the pagination cursor.
+func (c *KafkaConnector) snapshotRead(
+	ctx context.Context,
+	topic string,
+	scoped []int32,
+	starts, ends kadm.ListedOffsets,
+	beforeOffsets map[int32]int64,
+	limit int,
+) (*consumeResult, map[int32]partitionWindow, error) {
+	quota := initialPartitionQuota(limit, len(scoped))
+
+	// start is the partition's low offset; floor is the exclusive lower bound of
+	// the next round's window and moves down as we widen.
+	start := make(map[int32]int64, len(scoped))
+	floor := make(map[int32]int64, len(scoped))
+	frontierWindows := make(map[int32]partitionWindow, len(scoped))
+	for _, id := range scoped {
+		low, end := partitionOffsets(topic, id, starts, ends)
+		upper := end
+		if before, ok := beforeOffsets[id]; ok && before < upper {
+			upper = before
+		}
+		if upper <= low {
+			continue
+		}
+		start[id] = low
+		floor[id] = upper
+		frontierWindows[id] = partitionWindow{from: low, upper: upper}
+	}
+
+	aggregate := &consumeResult{
+		rows:      make([]map[string]any, 0, limit),
+		completed: make(map[int32]bool, len(frontierWindows)),
+	}
+	if len(frontierWindows) == 0 {
+		// Every scoped partition is empty at/below the cursor: a clean empty page.
+		return aggregate, frontierWindows, nil
+	}
+
+	budgetCtx, cancel := context.WithTimeout(ctx, readBudget)
+	defer cancel()
+
+	widen := quota
+	var scannedOffsets int64
+	for round := 0; round < maxAdaptiveRounds; round++ {
+		if budgetCtx.Err() != nil {
+			break
+		}
+
+		windows := make(map[int32]partitionWindow, len(frontierWindows))
+		for id := range frontierWindows {
+			if floor[id] <= start[id] {
+				continue // nothing older left to read in this partition
+			}
+			from := floor[id] - widen
+			if from < start[id] {
+				from = start[id]
+			}
+			windows[id] = partitionWindow{from: from, upper: floor[id]}
+			scannedOffsets += floor[id] - from
+		}
+		if len(windows) == 0 {
+			break // every partition has been read down to its start offset
+		}
+
+		consumed, err := c.consumeWindows(budgetCtx, topic, windows, limit, readBudget)
+		if err != nil {
+			if len(aggregate.completed) > 0 {
+				// Earlier rounds already produced safe rows; treat the exhausted
+				// budget as a partial page instead of discarding that work.
+				aggregate.partial = true
+				aggregate.timedOut = true
+				return aggregate, frontierWindows, nil
+			}
+			return nil, nil, err
+		}
+
+		for id := range consumed.completed {
+			aggregate.completed[id] = true
+		}
+		aggregate.rows = append(aggregate.rows, consumed.rows...)
+		for id := range windows {
+			floor[id] = windows[id].from
+		}
+		if consumed.partial {
+			aggregate.partial = true
+		}
+		if consumed.timedOut {
+			aggregate.timedOut = true
+		}
+
+		switch {
+		case consumed.partial || consumed.timedOut:
+			return aggregate, frontierWindows, nil // budget spent mid-round
+		case len(aggregate.rows) >= limit:
+			return aggregate, frontierWindows, nil // enough candidates for a page
+		case scannedOffsets >= maxCandidateOffsets:
+			return aggregate, frontierWindows, nil // candidate-offset budget spent
+		}
+		widen *= 2
+	}
+
+	return aggregate, frontierWindows, nil
 }
 
 func dividedWindow(total, partitions int) int64 {
@@ -343,16 +508,19 @@ func normalPartitionWindow(limit int) int64 {
 }
 
 // initialPartitionQuota returns the per-partition read window for a fast
-// snapshot page: max(1, ceil(pageSize/scopedPartitionCount)). It is the
-// replacement Task 2 wires into GetData in place of normalPartitionWindow so a
-// 100-message page across 54 partitions reads ~2 offsets per partition instead
-// of 100.
-//
-// TODO(task-2): implement the bounded quota and route GetData through it. The
-// placeholder below deliberately keeps today's whole-page behavior so the quota
-// unit test fails red until the real reader lands.
+// snapshot page: max(1, ceil(pageSize/scopedPartitionCount)). A 100-message page
+// across 54 partitions therefore reads ~2 offsets per partition instead of 100,
+// favouring cross-partition coverage over per-partition depth. A single scoped
+// partition still reads the whole page.
 func initialPartitionQuota(pageSize, scopedPartitionCount int) int64 {
-	return int64(pageSize)
+	if scopedPartitionCount <= 1 {
+		return int64(pageSize)
+	}
+	quota := (pageSize + scopedPartitionCount - 1) / scopedPartitionCount
+	if quota < 1 {
+		quota = 1
+	}
+	return int64(quota)
 }
 
 // selectNewestPrefixes performs a k-way merge of per-partition offset-desc
@@ -429,22 +597,62 @@ func rowIsNewer(left, right map[string]any) bool {
 	return leftPartition > rightPartition
 }
 
-func recordRow(record *kgo.Record) map[string]any {
-	key, _ := deserializePayload(record.Key)
-	value, format := deserializePayload(record.Value)
-
+// rawCandidateRow captures the minimal, undeserialized candidate produced during
+// the poll loop: partition/offset/timestamp plus copied key/value bytes. The
+// payload bytes are copied so the record can be reused by franz-go on the next
+// poll, and are deserialized only later, for the rows that survive page
+// selection (see finalizeRow). Headers are small and are deserialized eagerly.
+func rawCandidateRow(record *kgo.Record) map[string]any {
 	row := map[string]any{
 		"partition": record.Partition,
 		"offset":    record.Offset,
 		"timestamp": record.Timestamp.UTC().Format(time.RFC3339Nano),
-		"key":       key,
-		"value":     value,
-		"format":    format,
+	}
+	if len(record.Key) > 0 {
+		row[rawKeyField] = append([]byte(nil), record.Key...)
+	}
+	if len(record.Value) > 0 {
+		row[rawValueField] = append([]byte(nil), record.Value...)
 	}
 	if headers := recordHeaders(record); headers != nil {
 		row["headers"] = headers
 	}
 	return row
+}
+
+// finalizeRows deserializes each raw candidate into its display row in place.
+// It is the only place JSON/text/binary detection happens for the normal browse
+// path, so discarded candidates are never deserialized.
+func finalizeRows(rows []map[string]any) []map[string]any {
+	for i := range rows {
+		rows[i] = finalizeRow(rows[i])
+	}
+	return rows
+}
+
+// finalizeRow turns one raw candidate into a display row, deserializing the
+// copied key/value bytes and stripping the internal raw fields.
+func finalizeRow(raw map[string]any) map[string]any {
+	key, _ := deserializePayload(rawBytes(raw, rawKeyField))
+	value, format := deserializePayload(rawBytes(raw, rawValueField))
+
+	row := map[string]any{
+		"partition": raw["partition"],
+		"offset":    raw["offset"],
+		"timestamp": raw["timestamp"],
+		"key":       key,
+		"value":     value,
+		"format":    format,
+	}
+	if headers, ok := raw["headers"]; ok {
+		row["headers"] = headers
+	}
+	return row
+}
+
+func rawBytes(raw map[string]any, field string) []byte {
+	b, _ := raw[field].([]byte)
+	return b
 }
 
 // partitionsAllErrored reports whether every partition entry carries an error,
