@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -142,6 +143,79 @@ func rowOffset(t *testing.T, row map[string]any) int64 {
 		t.Fatalf("row is missing an int64 offset: %#v", row)
 	}
 	return off
+}
+
+// Deferred deserialization: the consume stage must produce raw candidates that
+// carry copied payload bytes but are NOT deserialized. Only the rows that
+// survive final page selection get deserialized, so the many large-payload
+// candidates that are discarded pre-merge never allocate parsed JSON. This is
+// the memory guard from Task 2's "ограничить память candidate budget" item.
+func TestConsumeWindowsDefersDeserializationUntilFinalPage(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic        = "big-payloads"
+		partitions   = 6
+		perPartition = 30
+		pageSize     = 100
+	)
+	// A large, valid JSON payload. Deserializing all partitions*perPartition of
+	// these pre-merge would be the memory blow-up the deferred pipeline avoids.
+	largePayload := `{"blob":"` + strings.Repeat("A", 128*1024) + `"}`
+
+	parts := make([]partitionFetch, 0, partitions)
+	for p := int32(0); p < partitions; p++ {
+		records := make([]*kgo.Record, 0, perPartition)
+		for off := int64(0); off < perPartition; off++ {
+			records = append(records, fetchRecord(topic, p, off, largePayload))
+		}
+		parts = append(parts, partitionFetch{partition: p, highWatermark: perPartition, records: records})
+	}
+	fake := &fakeConsumer{rounds: []kgo.Fetches{fetchRound(topic, parts...)}}
+	conn := &KafkaConnector{consume: fake}
+
+	windows := make(map[int32]partitionWindow, partitions)
+	for p := int32(0); p < partitions; p++ {
+		windows[p] = partitionWindow{from: 0, upper: perPartition}
+	}
+
+	res, err := conn.consumeWindows(context.Background(), topic, windows, pageSize, 2*time.Second)
+	if err != nil {
+		t.Fatalf("consumeWindows: %v", err)
+	}
+	if want := partitions * perPartition; len(res.rows) != want {
+		t.Fatalf("expected %d raw candidates, got %d", want, len(res.rows))
+	}
+	// Every raw candidate must retain copied bytes and must NOT be deserialized.
+	for _, row := range res.rows {
+		if _, deserialized := row["value"]; deserialized {
+			t.Fatal("consume stage must defer value deserialization")
+		}
+		if _, deserialized := row["format"]; deserialized {
+			t.Fatal("consume stage must defer format detection")
+		}
+		if _, ok := row[rawValueField].([]byte); !ok {
+			t.Fatal("consume stage must retain copied raw value bytes")
+		}
+	}
+
+	// Only the selected page is deserialized for display.
+	page := finalizeRows(selectNewestPrefixes(res.rows, pageSize))
+	if len(page) != pageSize {
+		t.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
+	}
+	for _, row := range page {
+		value, ok := row["value"].(string)
+		if !ok || value == "" {
+			t.Fatalf("final page rows must be deserialized: %#v", row["format"])
+		}
+		if format, _ := row["format"].(string); format != "json" {
+			t.Fatalf("expected json format for the large payload, got %q", format)
+		}
+		if _, leaked := row[rawValueField]; leaked {
+			t.Fatal("display rows must not leak internal raw fields")
+		}
+	}
 }
 
 // initialPartitionQuota: 54 partitions on a 100-message page must read a small

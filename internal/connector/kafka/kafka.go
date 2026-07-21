@@ -25,6 +25,12 @@ import (
 const (
 	pingTimeout     = 5 * time.Second
 	metadataTimeout = 10 * time.Second
+
+	// fetchMaxWait bounds how long a broker holds a single fetch waiting for more
+	// records. Kept well below the reader's overall readBudget (see messages.go)
+	// so the poll loop stays responsive to the request's deadline instead of
+	// blocking on a slow or idle partition.
+	fetchMaxWait = 500 * time.Millisecond
 )
 
 type kafkaSettings struct {
@@ -60,6 +66,11 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Kafk
 	if err != nil {
 		return nil, err
 	}
+	// FetchMaxWait keeps the message reader's poll loop responsive to its overall
+	// read budget. Appended here rather than inside buildClientOpts so the auth/
+	// TLS opt-count contract exercised by TestBuildClientOptsCoversAuthModes is
+	// unaffected.
+	opts = append(opts, kgo.FetchMaxWait(fetchMaxWait))
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
