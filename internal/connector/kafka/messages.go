@@ -557,6 +557,18 @@ func (c *KafkaConnector) snapshotRead(
 			if len(aggregate.completed) > 0 {
 				// Earlier rounds already produced safe rows; treat the exhausted
 				// budget as a partial page instead of discarding that work.
+				// consumeWindows only returns an error when ZERO partitions
+				// completed this round, so every partition attempted in `windows`
+				// failed to finish. Any of them that an earlier round had marked
+				// completed must flip back to not-completed for THIS response, so
+				// partitions_completed reflects the coverage actually delivered
+				// rather than a stale "completed at least one round ever" union
+				// (which could otherwise equal partitions_total while partial is
+				// true). completedFrom is intentionally left untouched: an earlier
+				// round's confirmed lower bound is still a valid cursor floor.
+				for id := range windows {
+					delete(aggregate.completed, id)
+				}
 				aggregate.partial = true
 				aggregate.timedOut = true
 				return aggregate, frontierWindows, nil
@@ -564,12 +576,26 @@ func (c *KafkaConnector) snapshotRead(
 			return nil, nil, err
 		}
 
-		for id := range consumed.completed {
-			aggregate.completed[id] = true
-			// A later round always reads a strictly lower (or equal) window than an
-			// earlier one for the same partition, so overwriting here always keeps
-			// the deepest confirmed bound.
-			aggregate.completedFrom[id] = consumed.completedFrom[id]
+		// Each round is authoritative for the partitions it attempted: overwrite
+		// every partition in this round's `windows` with THIS round's status
+		// instead of OR-ing completions across rounds. A partition that completed
+		// an earlier round but was widened into again and cut short by the budget
+		// correctly flips back to not-completed, so partitions_completed can never
+		// equal partitions_total while partial is true. A partition that completed
+		// and was never re-attempted (page filled, or nothing older left to widen
+		// into) is simply not in a later `windows` map and keeps its completed
+		// status. completed is a set whose len() is the partitions_completed count,
+		// so a not-completed partition is removed rather than stored as false.
+		for id := range windows {
+			if consumed.completed[id] {
+				aggregate.completed[id] = true
+				// A later round always reads a strictly lower (or equal) window than
+				// an earlier one for the same partition, so overwriting here always
+				// keeps the deepest confirmed bound for the cursor fallback.
+				aggregate.completedFrom[id] = consumed.completedFrom[id]
+			} else {
+				delete(aggregate.completed, id)
+			}
 		}
 		aggregate.rows = append(aggregate.rows, consumed.rows...)
 		aggregate.candidatesRead += consumed.candidatesRead
