@@ -55,8 +55,15 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const [createLinkValue, setCreateLinkValue] = useState<Record<string, unknown> | undefined>()
 
   useEffect(() => {
-    void fetchMessages(connId, topic, tabId)
-    void fetchTopicChildren(connId, topic, tabId)
+    // Messages are the critical-path content for this view (first paint of
+    // the Messages tab); topic children (partition list / consumer group
+    // counts — used by the Partitions/Consumer Groups tabs and the header's
+    // summary counts) are secondary. Kick the messages fetch off first and
+    // only start the children fetch once it settles, so both requests don't
+    // compete for the same short read-budget window on initial load.
+    void fetchMessages(connId, topic, tabId).finally(() => {
+      void fetchTopicChildren(connId, topic, tabId)
+    })
   }, [connId, fetchMessages, fetchTopicChildren, tabId, topic])
 
   useEffect(() => {
@@ -200,6 +207,11 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             searchField={tab?.searchField ?? ''}
             searchValue={tab?.searchValue ?? ''}
             scanned={tab?.scanned ?? 0}
+            partial={tab?.partial ?? false}
+            partialReason={tab?.partialReason ?? null}
+            partitionsTotal={tab?.partitionsTotal ?? 0}
+            partitionsCompleted={tab?.partitionsCompleted ?? 0}
+            messagesReturned={tab?.messagesReturned ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onRefresh={() => void fetchMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
