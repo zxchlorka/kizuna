@@ -31,7 +31,6 @@ interface KafkaMessageBrowserProps {
   partialReason: string | null
   partitionsTotal: number
   partitionsCompleted: number
-  messagesReturned: number
   onPartitionChange: (partition: number | null) => void
   onRefresh: () => void
   onLoadOlder: () => void
@@ -70,7 +69,6 @@ export function KafkaMessageBrowser({
   partialReason,
   partitionsTotal,
   partitionsCompleted,
-  messagesReturned,
   onPartitionChange,
   onRefresh,
   onLoadOlder,
@@ -208,7 +206,7 @@ export function KafkaMessageBrowser({
 
       {partial && (
         <KafkaCoverageBanner
-          messagesReturned={messagesReturned}
+          messageCount={messages.length}
           partitionsCompleted={partitionsCompleted}
           partitionsTotal={partitionsTotal}
           reason={partialReason}

@@ -211,7 +211,6 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             partialReason={tab?.partialReason ?? null}
             partitionsTotal={tab?.partitionsTotal ?? 0}
             partitionsCompleted={tab?.partitionsCompleted ?? 0}
-            messagesReturned={tab?.messagesReturned ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onRefresh={() => void fetchMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
