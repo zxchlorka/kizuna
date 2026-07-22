@@ -95,10 +95,39 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		t.Fatalf("first page: %v", err)
 	}
 	t.Logf(
-		"timing call=first_page elapsed_ms=%d rows=%d partitions=%v has_older=%v next_before_offsets_count=%d",
-		firstElapsed.Milliseconds(), len(first.Rows), first.Meta["partitions"], first.Meta["has_older"],
-		len(cursorMap(first.Meta["next_before_offsets"])),
+		"timing call=first_page elapsed_ms=%d rows=%d partitions_total=%v partitions_completed=%v "+
+			"has_older=%v partial=%v candidates_read=%v messages_returned=%v meta_elapsed_ms=%v next_before_offsets_count=%d",
+		firstElapsed.Milliseconds(), len(first.Rows), first.Meta["partitions_total"], first.Meta["partitions_completed"],
+		first.Meta["has_older"], first.Meta["partial"], first.Meta["candidates_read"], first.Meta["messages_returned"],
+		first.Meta["elapsed_ms"], len(cursorMap(first.Meta["next_before_offsets"])),
 	)
+	// Task 3's response-contract meta fields must all be present with sane
+	// values for a full-success normal-browse page: every scoped partition (54,
+	// no partition filter) responded, none partial, and messages_returned
+	// matches the actual row count.
+	if got, want := first.Meta["partitions_total"], 54; got != want {
+		t.Fatalf("meta.partitions_total = %v, want %d", got, want)
+	}
+	if got, want := first.Meta["partitions_completed"], 54; got != want {
+		t.Fatalf("meta.partitions_completed = %v, want %d (a fast local broker should complete every partition)", got, want)
+	}
+	if partial, _ := first.Meta["partial"].(bool); partial {
+		t.Fatalf("meta.partial = true unexpectedly: %#v", first.Meta)
+	}
+	if _, hasReason := first.Meta["partial_reason"]; hasReason {
+		t.Fatalf("meta.partial_reason must be absent when partial=false, got %v", first.Meta["partial_reason"])
+	}
+	if got, want := first.Meta["messages_returned"], len(first.Rows); got != want {
+		t.Fatalf("meta.messages_returned = %v, want %d (len(Rows))", got, want)
+	}
+	candidatesRead, ok := first.Meta["candidates_read"].(int)
+	if !ok || candidatesRead < len(first.Rows) {
+		t.Fatalf("meta.candidates_read = %#v, want an int >= messages_returned (%d)", first.Meta["candidates_read"], len(first.Rows))
+	}
+	elapsedMetaMs, ok := first.Meta["elapsed_ms"].(int64)
+	if !ok || elapsedMetaMs < 0 {
+		t.Fatalf("meta.elapsed_ms = %#v, want a non-negative int64", first.Meta["elapsed_ms"])
+	}
 	// Fast snapshot semantics: the page is a bounded recent snapshot, not exact
 	// global top-N. Expect 50-100 recent records, not a page filled entirely by
 	// the burst partition.
@@ -145,8 +174,10 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		t.Fatalf("second page: %v", err)
 	}
 	t.Logf(
-		"timing call=second_page elapsed_ms=%d rows=%d partitions=%v has_older=%v next_before_offsets_count=%d",
-		secondElapsed.Milliseconds(), len(second.Rows), second.Meta["partitions"], second.Meta["has_older"],
+		"timing call=second_page elapsed_ms=%d rows=%d partitions_total=%v partitions_completed=%v "+
+			"has_older=%v partial=%v candidates_read=%v messages_returned=%v next_before_offsets_count=%d",
+		secondElapsed.Milliseconds(), len(second.Rows), second.Meta["partitions_total"], second.Meta["partitions_completed"],
+		second.Meta["has_older"], second.Meta["partial"], second.Meta["candidates_read"], second.Meta["messages_returned"],
 		len(cursorMap(second.Meta["next_before_offsets"])),
 	)
 	// A second recent snapshot below the first page's cursor. Bounded, non-empty.
@@ -181,9 +212,11 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 		t.Fatalf("nested search: %v", err)
 	}
 	t.Logf(
-		"timing call=nested_search elapsed_ms=%d rows=%d partitions=%v has_older=%v scanned=%v matched=%v partial_scan=%v",
-		searchElapsed.Milliseconds(), len(search.Rows), search.Meta["partitions"], search.Meta["has_older"],
-		search.Meta["scanned"], search.Meta["matched"], search.Meta["partial_scan"],
+		"timing call=nested_search elapsed_ms=%d rows=%d partitions_total=%v partitions_completed=%v "+
+			"has_older=%v scanned=%v matched=%v partial_scan=%v candidates_read=%v",
+		searchElapsed.Milliseconds(), len(search.Rows), search.Meta["partitions_total"], search.Meta["partitions_completed"],
+		search.Meta["has_older"], search.Meta["scanned"], search.Meta["matched"], search.Meta["partial_scan"],
+		search.Meta["candidates_read"],
 	)
 	if len(search.Rows) != 1 {
 		t.Fatalf("nested search returned %d matches, want 1", len(search.Rows))

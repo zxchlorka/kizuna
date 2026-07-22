@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,9 +87,25 @@ type consumeResult struct {
 	// partial reports that the read budget was exhausted before every scoped
 	// partition finished, yet at least one partition completed with safe rows
 	// that are returned to the caller. Task 2's fast snapshot reader sets this;
-	// Task 3 surfaces it as DataResult.Meta["partial"]. The current reader never
-	// sets it, which is why the partial-result unit tests fail red until Task 2.
+	// Task 3 surfaces it as DataResult.Meta["partial"].
 	partial bool
+	// candidatesRead counts every raw record read off the broker for a scoped
+	// partition during this call, including records later discarded because
+	// their partition never completed within budget. It is strictly an
+	// observability counter (DataResult.Meta["candidates_read"]) and never
+	// drives a control-flow decision, so approximate double counting across
+	// edge cases (e.g. a record delivered just as its partition pauses) is
+	// harmless.
+	candidatesRead int
+	// completedFrom records, for each partition that completed in THIS call,
+	// the window's lower bound (offset) it was confirmed read down to — even
+	// when that window produced zero rows. lowestConsumedOffsets (used for the
+	// pagination cursor) only ever sees actual rows, so without this a
+	// partition that completes with zero rows in its window would never
+	// advance its cursor and would be rescanned forever. Populated at the same
+	// place completed[id] is set, so it is only ever set for genuinely
+	// completed partitions.
+	completedFrom map[int32]int64
 }
 
 // GetData reads one page of messages, newest first. Filters:
@@ -96,6 +113,8 @@ type consumeResult struct {
 //   - before_offsets: JSON map partition->offset from the previous page's
 //     meta.next_before_offsets; fetches the window right below it.
 func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connector.DataOpts) (*connector.DataResult, error) {
+	callStart := time.Now()
+
 	limit := opts.Limit
 	if limit <= 0 {
 		limit = defaultMessageLimit
@@ -118,6 +137,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	metaCtx, cancelMeta := context.WithTimeout(ctx, metadataTimeout)
 	defer cancelMeta()
 
+	metadataStart := time.Now()
 	var starts, ends kadm.ListedOffsets
 	group, groupCtx := errgroup.WithContext(metaCtx)
 	group.Go(func() error {
@@ -137,6 +157,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if err := group.Wait(); err != nil {
 		return nil, normalizeKafkaError(err)
 	}
+	metadataMs := time.Since(metadataStart).Milliseconds()
 	endsByPartition, ok := ends[topic]
 	if !ok || len(endsByPartition) == 0 || partitionsAllErrored(endsByPartition) {
 		return nil, fmt.Errorf("%w: topic %q not found", connector.ErrRelationNotFound, topic)
@@ -161,6 +182,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		consumed        *consumeResult
 		frontierWindows map[int32]partitionWindow
 	)
+	consumeStart := time.Now()
 	if scanning {
 		// Content search reads a larger, evenly divided window per partition under
 		// its own scan budget. This path is deliberately separate from the normal
@@ -194,6 +216,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			return nil, err
 		}
 	}
+	consumeMs := time.Since(consumeStart).Milliseconds()
 
 	rows := consumed.rows
 	if !scanning {
@@ -205,16 +228,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	// Advance only partitions whose rows are actually returned to the caller.
 	// Unread partitions keep their prior upper offset, so partial broker replies
 	// never create pagination gaps.
-	frontier := make(map[int32]int64, len(frontierWindows))
-	for id, window := range frontierWindows {
-		frontier[id] = window.upper
-	}
-	reached := lowestConsumedOffsets(rows)
-	for id, off := range reached {
-		if !scanning || consumed.completed[id] {
-			frontier[id] = off
-		}
-	}
+	frontier := computeFrontier(frontierWindows, rows, scanning, consumed.completed, consumed.completedFrom)
 
 	nextBefore := make(map[string]int64)
 	for id := range frontierWindows {
@@ -224,9 +238,20 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		}
 	}
 
+	// partitions_total counts only the SCOPED partitions matching the current
+	// filter (1 when a single partition is selected) — a semantic correction
+	// from the pre-Task-3 "partitions" key, which counted every partition of
+	// the topic regardless of filtering. Nothing on the frontend currently
+	// reads meta.partitions from this endpoint (frontend/src/stores/kafka.ts's
+	// MessagesResponse.meta type declares it but never consumes it, and the two
+	// unrelated call sites in ObjectTree.tsx / KafkaConsumerGroups.tsx read
+	// meta.partitions from the topic-listing and consumer-group endpoints, not
+	// this one), so this is a plain rename rather than an additive field.
 	meta := map[string]any{
-		"partitions": len(partitionIDs),
-		"has_older":  len(nextBefore) > 0,
+		"partitions_total":     len(scoped),
+		"partitions_completed": len(consumed.completed),
+		"has_older":            len(nextBefore) > 0,
+		"candidates_read":      consumed.candidatesRead,
 	}
 	if scanning {
 		meta["scanning"] = true
@@ -242,10 +267,35 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		// Deferred deserialization: only the rows that survived page selection are
 		// deserialized for display.
 		rows = finalizeRows(rows)
+		meta["partial"] = consumed.partial
+		if consumed.partial {
+			meta["partial_reason"] = "read_budget_exhausted"
+		}
+		meta["messages_returned"] = len(rows)
 	}
 	if len(nextBefore) > 0 {
 		meta["next_before_offsets"] = nextBefore
 	}
+
+	elapsedMs := time.Since(callStart).Milliseconds()
+	meta["elapsed_ms"] = elapsedMs
+
+	// One structured log line per reader request. Only counts/timings/booleans/
+	// the topic name are logged — never payload, key, headers, credentials, or
+	// broker secrets.
+	slog.Debug("kafka message reader request",
+		"topic", topic,
+		"limit", limit,
+		"scanning", scanning,
+		"partitions_total", len(scoped),
+		"partitions_completed", len(consumed.completed),
+		"metadata_ms", metadataMs,
+		"consume_ms", consumeMs,
+		"elapsed_ms", elapsedMs,
+		"candidates", consumed.candidatesRead,
+		"returned", len(rows),
+		"partial", consumed.partial,
+	)
 
 	return &connector.DataResult{
 		Columns: []connector.ColumnMeta{
@@ -276,8 +326,9 @@ func (c *KafkaConnector) consumeWindows(
 	timeout time.Duration,
 ) (*consumeResult, error) {
 	result := &consumeResult{
-		rows:      make([]map[string]any, 0, target),
-		completed: make(map[int32]bool, len(windows)),
+		rows:          make([]map[string]any, 0, target),
+		completed:     make(map[int32]bool, len(windows)),
+		completedFrom: make(map[int32]int64, len(windows)),
 	}
 	if len(windows) == 0 {
 		return result, nil
@@ -326,7 +377,11 @@ func (c *KafkaConnector) consumeWindows(
 
 		fetches.EachRecord(func(record *kgo.Record) {
 			window, ok := windows[record.Partition]
-			if !ok || result.completed[record.Partition] || record.Offset < window.from {
+			if !ok {
+				return
+			}
+			result.candidatesRead++
+			if result.completed[record.Partition] || record.Offset < window.from {
 				return
 			}
 			if record.Offset > maxSeen[record.Partition] {
@@ -350,6 +405,7 @@ func (c *KafkaConnector) consumeWindows(
 				continue
 			}
 			result.completed[id] = true
+			result.completedFrom[id] = window.from
 			result.rows = append(result.rows, rowsByPartition[id]...)
 			newlyCompleted[topic] = append(newlyCompleted[topic], id)
 		}
@@ -410,9 +466,10 @@ func resolveScanConsume(consumed *consumeResult, err error) (*consumeResult, err
 		// exhausted result. timedOut drives meta["partial_scan"], scanned/matched
 		// become 0, and the cursor is untouched, so the scan loop continues deeper.
 		return &consumeResult{
-			rows:      make([]map[string]any, 0),
-			completed: make(map[int32]bool),
-			timedOut:  true,
+			rows:          make([]map[string]any, 0),
+			completed:     make(map[int32]bool),
+			completedFrom: make(map[int32]int64),
+			timedOut:      true,
 		}, nil
 	}
 	return nil, err
@@ -460,8 +517,9 @@ func (c *KafkaConnector) snapshotRead(
 	}
 
 	aggregate := &consumeResult{
-		rows:      make([]map[string]any, 0, limit),
-		completed: make(map[int32]bool, len(frontierWindows)),
+		rows:          make([]map[string]any, 0, limit),
+		completed:     make(map[int32]bool, len(frontierWindows)),
+		completedFrom: make(map[int32]int64, len(frontierWindows)),
 	}
 	if len(frontierWindows) == 0 {
 		// Every scoped partition is empty at/below the cursor: a clean empty page.
@@ -508,8 +566,13 @@ func (c *KafkaConnector) snapshotRead(
 
 		for id := range consumed.completed {
 			aggregate.completed[id] = true
+			// A later round always reads a strictly lower (or equal) window than an
+			// earlier one for the same partition, so overwriting here always keeps
+			// the deepest confirmed bound.
+			aggregate.completedFrom[id] = consumed.completedFrom[id]
 		}
 		aggregate.rows = append(aggregate.rows, consumed.rows...)
+		aggregate.candidatesRead += consumed.candidatesRead
 		for id := range windows {
 			floor[id] = windows[id].from
 		}
@@ -766,6 +829,43 @@ func parseMatchFilter(filters []connector.FilterExpr) (field string, value strin
 		}
 	}
 	return field, value
+}
+
+// computeFrontier derives the per-partition pagination cursor for one GetData
+// call. It defaults every scoped partition to its original (pre-request)
+// upper bound, then advances it in two ways, in priority order:
+//  1. If the partition contributed rows that survived page selection, advance
+//     to the lowest such row's offset (the precise, lossless cursor).
+//  2. Otherwise, if the partition completed with zero rows in its window
+//     (completedFrom), advance to that confirmed lower bound — without this,
+//     an empty/compacted window would never move its cursor and would be
+//     rescanned forever by "Load older" / "Scan more".
+// A partition that neither returned rows nor completed keeps its prior upper
+// offset untouched, per the cursor contract: never skip, never re-show a row.
+func computeFrontier(
+	frontierWindows map[int32]partitionWindow,
+	rows []map[string]any,
+	scanning bool,
+	completed map[int32]bool,
+	completedFrom map[int32]int64,
+) map[int32]int64 {
+	frontier := make(map[int32]int64, len(frontierWindows))
+	for id, window := range frontierWindows {
+		frontier[id] = window.upper
+	}
+	reached := lowestConsumedOffsets(rows)
+	for id, off := range reached {
+		if !scanning || completed[id] {
+			frontier[id] = off
+		}
+	}
+	for id, from := range completedFrom {
+		if _, hasRows := reached[id]; hasRows {
+			continue // the row-based cursor above is authoritative when rows exist
+		}
+		frontier[id] = from
+	}
+	return frontier
 }
 
 // lowestConsumedOffsets reports the smallest offset consumed per partition.

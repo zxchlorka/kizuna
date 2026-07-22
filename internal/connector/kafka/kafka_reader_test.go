@@ -720,3 +720,150 @@ func TestConsumeWindowsPaginationIsLosslessAcrossPages(t *testing.T) {
 		}
 	}
 }
+
+// candidatesRead (Task 3's DataResult.Meta["candidates_read"]) must count every
+// raw record actually read off the broker, including records belonging to a
+// partition that never completes within budget — those records were still
+// real broker reads/decodes, even though their partition's rows are discarded.
+func TestConsumeWindowsCountsCandidatesReadIncludingIncompletePartitions(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic,
+			// Partition 0 completes cleanly: 2 records read, 2 candidates.
+			partitionFetch{partition: 0, highWatermark: 3, records: []*kgo.Record{
+				fetchRecord(topic, 0, 1, `{"n":1}`),
+				fetchRecord(topic, 0, 2, `{"n":2}`),
+			}},
+			// Partition 1 delivers one record but never reaches its window end, so
+			// it stays incomplete when the budget expires. Its one record was still
+			// read off the broker and must count toward candidatesRead even though
+			// it never survives into result.rows.
+			partitionFetch{partition: 1, highWatermark: 50, records: []*kgo.Record{
+				fetchRecord(topic, 1, 40, `{"n":40}`),
+			}},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	windows := map[int32]partitionWindow{
+		0: {from: 1, upper: 3},
+		1: {from: 40, upper: 50},
+	}
+	res, err := conn.consumeWindows(context.Background(), topic, windows, 100, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("consumeWindows: %v", err)
+	}
+	if !res.partial {
+		t.Fatalf("expected partial=true when partition 1 misses the budget")
+	}
+	if res.candidatesRead != 3 {
+		t.Fatalf("expected 3 candidates read (2 completed + 1 discarded), got %d", res.candidatesRead)
+	}
+	if len(res.rows) != 2 {
+		t.Fatalf("expected only partition 0's 2 rows to survive, got %d", len(res.rows))
+	}
+}
+
+// completedFrom must record the completed window's lower bound only for
+// partitions that actually completed in this call, keyed exactly like
+// completed. This is the bookkeeping computeFrontier relies on to advance the
+// cursor for a completed-but-empty partition.
+func TestConsumeWindowsRecordsCompletedFromForCompletedPartitionsOnly(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic,
+			// Partition 0 completes with zero records: a cleanly drained/empty
+			// range. Its highWatermark already covers the window end.
+			partitionFetch{partition: 0, highWatermark: 10},
+			// Partition 1 never completes within the short budget.
+			partitionFetch{partition: 1, highWatermark: 50, records: []*kgo.Record{
+				fetchRecord(topic, 1, 40, `{"n":40}`),
+			}},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	windows := map[int32]partitionWindow{
+		0: {from: 5, upper: 10},
+		1: {from: 40, upper: 50},
+	}
+	res, err := conn.consumeWindows(context.Background(), topic, windows, 100, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("consumeWindows: %v", err)
+	}
+	if !res.completed[0] {
+		t.Fatalf("expected partition 0 to complete")
+	}
+	if res.completed[1] {
+		t.Fatalf("expected partition 1 to remain incomplete")
+	}
+	if from, ok := res.completedFrom[0]; !ok || from != 5 {
+		t.Fatalf("expected completedFrom[0] = 5, got %v (present=%v)", from, ok)
+	}
+	if _, ok := res.completedFrom[1]; ok {
+		t.Fatalf("completedFrom must not carry an entry for an incomplete partition, got %v", res.completedFrom[1])
+	}
+}
+
+// computeFrontier is the pure function behind GetData's pagination cursor. A
+// completed partition that produced zero rows (an empty/compacted window)
+// must still advance its cursor via completedFrom, otherwise the exact same
+// empty window would be rescanned forever by "Load older" / "Scan more" (the
+// bug this test guards against).
+func TestComputeFrontierAdvancesCompletedEmptyPartitions(t *testing.T) {
+	t.Parallel()
+
+	frontierWindows := map[int32]partitionWindow{
+		0: {from: 0, upper: 100}, // has rows: row-based cursor wins
+		1: {from: 0, upper: 50},  // completed with zero rows: completedFrom wins
+		2: {from: 0, upper: 30},  // neither rows nor completedFrom: stays at upper
+	}
+	rows := []map[string]any{
+		{"partition": int32(0), "offset": int64(90)},
+		{"partition": int32(0), "offset": int64(95)},
+	}
+	completed := map[int32]bool{0: true, 1: true}
+	completedFrom := map[int32]int64{0: 80, 1: 20} // 0's completedFrom must lose to its rows
+
+	frontier := computeFrontier(frontierWindows, rows, false, completed, completedFrom)
+
+	if frontier[0] != 90 {
+		t.Fatalf("partition 0: row-based cursor must win over completedFrom, got %d, want 90", frontier[0])
+	}
+	if frontier[1] != 20 {
+		t.Fatalf("partition 1: completed-but-empty partition must advance via completedFrom, got %d, want 20", frontier[1])
+	}
+	if frontier[2] != 30 {
+		t.Fatalf("partition 2: untouched partition must keep its prior upper offset, got %d, want 30", frontier[2])
+	}
+}
+
+// The scanning path only trusts a row's offset as a cursor advance when its
+// partition is marked completed (an in-flight, not-yet-finished partition's
+// rows must not move the cursor past data that hasn't been confirmed safe).
+func TestComputeFrontierScanningRequiresCompletionForRowBasedAdvance(t *testing.T) {
+	t.Parallel()
+
+	frontierWindows := map[int32]partitionWindow{
+		0: {from: 0, upper: 100},
+	}
+	rows := []map[string]any{
+		{"partition": int32(0), "offset": int64(90)},
+	}
+
+	// Partition 0 not completed: row-based advance must NOT apply.
+	frontier := computeFrontier(frontierWindows, rows, true, map[int32]bool{}, map[int32]int64{})
+	if frontier[0] != 100 {
+		t.Fatalf("scanning: an incomplete partition's rows must not advance the cursor, got %d, want 100", frontier[0])
+	}
+
+	// Partition 0 completed: row-based advance applies.
+	frontier = computeFrontier(frontierWindows, rows, true, map[int32]bool{0: true}, map[int32]int64{})
+	if frontier[0] != 90 {
+		t.Fatalf("scanning: a completed partition's rows must advance the cursor, got %d, want 90", frontier[0])
+	}
+}
