@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -47,6 +48,18 @@ const (
 const (
 	rawKeyField   = "_raw_key"
 	rawValueField = "_raw_value"
+)
+
+// errReadBudgetExhausted is the specific failure consumeWindows returns when its
+// read budget expires before a single scoped partition finished — no usable data
+// at all. It wraps connector.ErrTimeout so the normal-browse path (and its unit
+// test) still see a plain timeout, but it is a distinct sentinel value so the
+// content-search path can recognise this one case and degrade it gracefully via
+// resolveScanConsume, without mistaking a genuine broker timeout (which also maps
+// to ErrTimeout in normalizeKafkaError) for it.
+var errReadBudgetExhausted = fmt.Errorf(
+	"%w: kafka read budget expired before any partition produced a usable result",
+	connector.ErrTimeout,
 )
 
 type partitionWindow struct {
@@ -169,7 +182,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			}
 			windows[id] = partitionWindow{from: from, upper: upper}
 		}
-		consumed, err = c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget)
+		consumed, err = resolveScanConsume(c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget))
 		if err != nil {
 			return nil, err
 		}
@@ -365,16 +378,44 @@ func (c *KafkaConnector) consumeWindows(
 	if completedCount == 0 {
 		// Not a single partition produced a safely-bounded result: an unresponsive
 		// broker or uniformly slow partitions, not an empty success. Surface it as
-		// a real error rather than a partial page with no data.
-		return nil, fmt.Errorf(
-			"%w: kafka read budget expired before any partition produced a usable result",
-			connector.ErrTimeout,
-		)
+		// a real error rather than a partial page with no data. The normal-browse
+		// path propagates this as a hard timeout; the content-search path recognises
+		// this exact sentinel and degrades it to an empty partial scan.
+		return nil, errReadBudgetExhausted
 	}
 	// At least one partition completed with safe rows and at least one did not:
 	// return only the completed partitions' rows and flag the page partial.
 	result.partial = true
 	return result, nil
+}
+
+// resolveScanConsume adapts a consumeWindows (result, error) pair for the
+// content-search path. The normal-browse path treats "read budget expired before
+// any partition finished" as a hard error, but a progressive scan step must not:
+// that case previously returned an empty partial scan (HTTP 200, partial_scan=true,
+// 0 matches) so the frontend's "Scan more" loop keeps going instead of halting on
+// an error banner. This helper restores that tolerance for exactly the
+// errReadBudgetExhausted sentinel and nothing else — a genuine broker/auth failure
+// (ErrForbidden, ErrUnavailable, a broker RequestTimedOut, unknown topic, …) still
+// propagates as an error, so real failures never masquerade as an empty scan.
+//
+// It is a pure function of its inputs so the scanning branch's error/decision
+// handling is unit-testable without GetData's concrete *kadm.Client metadata calls.
+func resolveScanConsume(consumed *consumeResult, err error) (*consumeResult, error) {
+	if err == nil {
+		return consumed, nil
+	}
+	if errors.Is(err, errReadBudgetExhausted) {
+		// Budget expired with nothing completed: degrade to an empty, budget-
+		// exhausted result. timedOut drives meta["partial_scan"], scanned/matched
+		// become 0, and the cursor is untouched, so the scan loop continues deeper.
+		return &consumeResult{
+			rows:      make([]map[string]any, 0),
+			completed: make(map[int32]bool),
+			timedOut:  true,
+		}, nil
+	}
+	return nil, err
 }
 
 // snapshotRead builds a recent cross-partition snapshot for the normal browse

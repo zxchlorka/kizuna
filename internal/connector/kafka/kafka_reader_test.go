@@ -3,6 +3,7 @@ package kafka
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -216,6 +217,118 @@ func TestConsumeWindowsDefersDeserializationUntilFinalPage(t *testing.T) {
 			t.Fatal("display rows must not leak internal raw fields")
 		}
 	}
+}
+
+// resolveScanConsume is the content-search path's adapter over a consumeWindows
+// (result, error) pair. The normal-browse path treats "read budget expired before
+// any partition finished" as a hard ErrTimeout, but a progressive scan step must
+// degrade that one case to an empty partial scan (HTTP 200, partial_scan=true, 0
+// matches) so the frontend's "Scan more" loop keeps going. Every OTHER error —
+// including a genuine broker RequestTimedOut that also maps to ErrTimeout — must
+// still propagate so real failures never masquerade as an empty scan.
+//
+// This is the coverage for the scanning-path regression fix: without it, a slow
+// broker draining scanTimeBudget with zero scoped partitions finished surfaced an
+// error banner and halted the scan loop instead of continuing gracefully.
+func TestResolveScanConsumeDegradesZeroCompletedBudgetTimeout(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+
+	t.Run("zero-completed budget timeout degrades to an empty partial scan", func(t *testing.T) {
+		t.Parallel()
+		// A broker that never returns records nor reaches any window end spends the
+		// whole scan budget without a single completed partition — consumeWindows
+		// returns errReadBudgetExhausted (the same edge the normal path errors on).
+		_, budgetErr := (&KafkaConnector{consume: &fakeConsumer{}}).consumeWindows(
+			context.Background(), topic,
+			map[int32]partitionWindow{0: {from: 0, upper: 10}, 1: {from: 0, upper: 10}},
+			maxScanMessages, 120*time.Millisecond,
+		)
+		if budgetErr == nil {
+			t.Fatalf("expected consumeWindows to error on a zero-completed budget timeout")
+		}
+		if !errors.Is(budgetErr, connector.ErrTimeout) {
+			t.Fatalf("the budget-exhausted sentinel must still wrap ErrTimeout, got %v", budgetErr)
+		}
+
+		consumed, err := resolveScanConsume(nil, budgetErr)
+		if err != nil {
+			t.Fatalf("the scan path must tolerate a zero-completed budget timeout, got error: %v", err)
+		}
+		if consumed == nil {
+			t.Fatalf("a degraded scan must return a non-nil result, not (nil, nil)")
+		}
+		if !consumed.timedOut {
+			t.Fatalf("a degraded scan result must be flagged timedOut so meta[partial_scan] is set")
+		}
+		if len(consumed.rows) != 0 {
+			t.Fatalf("a degraded scan result must carry zero rows, got %d", len(consumed.rows))
+		}
+	})
+
+	t.Run("genuine broker auth error still propagates", func(t *testing.T) {
+		t.Parallel()
+		_, authErr := (&KafkaConnector{consume: &fakeConsumer{rounds: []kgo.Fetches{
+			fetchRound(topic, partitionFetch{partition: 0, err: kerr.TopicAuthorizationFailed}),
+		}}}).consumeWindows(
+			context.Background(), topic,
+			map[int32]partitionWindow{0: {from: 0, upper: 10}},
+			maxScanMessages, time.Second,
+		)
+		if authErr == nil {
+			t.Fatalf("expected consumeWindows to surface the broker auth failure")
+		}
+		res, err := resolveScanConsume(nil, authErr)
+		if !errors.Is(err, connector.ErrForbidden) {
+			t.Fatalf("a genuine broker/auth error must still propagate from the scan path, got %v", err)
+		}
+		if res != nil {
+			t.Fatalf("a propagated error must not carry a (degraded) result, got %#v", res)
+		}
+	})
+
+	t.Run("client-closed unavailability still propagates", func(t *testing.T) {
+		t.Parallel()
+		_, closedErr := (&KafkaConnector{consume: &fakeConsumer{clientClosed: true}}).consumeWindows(
+			context.Background(), topic,
+			map[int32]partitionWindow{0: {from: 0, upper: 10}},
+			maxScanMessages, time.Second,
+		)
+		if _, err := resolveScanConsume(nil, closedErr); !errors.Is(err, connector.ErrUnavailable) {
+			t.Fatalf("a client-closed error must still propagate from the scan path, got %v", err)
+		}
+	})
+
+	t.Run("a genuine broker timeout that is not the sentinel still propagates", func(t *testing.T) {
+		t.Parallel()
+		// normalizeKafkaError maps a broker RequestTimedOut / deadline to ErrTimeout
+		// too, so the distinction cannot be "any ErrTimeout degrades". Only the
+		// errReadBudgetExhausted sentinel does; a different ErrTimeout must error out.
+		brokerTimeout := fmt.Errorf("%w: broker request timed out", connector.ErrTimeout)
+		res, err := resolveScanConsume(nil, brokerTimeout)
+		if err == nil {
+			t.Fatalf("a non-sentinel ErrTimeout must still propagate, got result %#v", res)
+		}
+		if !errors.Is(err, connector.ErrTimeout) {
+			t.Fatalf("the propagated error must be the original broker timeout, got %v", err)
+		}
+	})
+
+	t.Run("a successful result passes through untouched", func(t *testing.T) {
+		t.Parallel()
+		in := &consumeResult{
+			rows:      []map[string]any{{"partition": int32(0), "offset": int64(1)}},
+			completed: map[int32]bool{0: true},
+		}
+		out, err := resolveScanConsume(in, nil)
+		if err != nil {
+			t.Fatalf("a nil error must pass through, got %v", err)
+		}
+		if out != in {
+			t.Fatalf("a successful result must pass through unchanged")
+		}
+	})
 }
 
 // initialPartitionQuota: 54 partitions on a 100-message page must read a small
