@@ -17,7 +17,7 @@ export function useOpenLinkSource() {
   const openTabWithFilter = useWorkspaceStore((state) => state.openTabWithFilter)
   const openConnection = useWorkspaceStore((state) => state.openConnection)
   const resolveObjectType = useDataStore((state) => state.resolveObjectType)
-  const setSearch = useKafkaStore((state) => state.setSearch)
+  const searchTopic = useKafkaStore((state) => state.searchTopic)
   const pushToast = useToastStore((state) => state.push)
 
   return useCallback(
@@ -53,8 +53,8 @@ export function useOpenLinkSource() {
       openConnection(link.source_conn_id)
       navigate(`/connections/${link.source_conn_id}`)
       const tabId = `${link.source_conn_id}:kafka_topic:${topic}`
-      void setSearch(link.source_conn_id, topic, tabId, link.source_field ?? '', value)
+      void searchTopic(link.source_conn_id, topic, tabId, link.source_field ?? '', value)
     },
-    [navigate, openTab, openTabWithFilter, openConnection, resolveObjectType, setSearch, pushToast]
+    [navigate, openTab, openTabWithFilter, openConnection, resolveObjectType, searchTopic, pushToast]
   )
 }

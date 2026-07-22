@@ -43,10 +43,12 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const fetchMessages = useKafkaStore((state) => state.fetchMessages)
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
-  const setSearch = useKafkaStore((state) => state.setSearch)
+  const setLoadedFilter = useKafkaStore((state) => state.setLoadedFilter)
+  const clearLoadedFilter = useKafkaStore((state) => state.clearLoadedFilter)
+  const searchTopic = useKafkaStore((state) => state.searchTopic)
+  const scanMore = useKafkaStore((state) => state.scanMore)
+  const cancelScan = useKafkaStore((state) => state.cancelScan)
   const clearSearch = useKafkaStore((state) => state.clearSearch)
-  const deepScan = useKafkaStore((state) => state.deepScan)
-  const cancelDeepScan = useKafkaStore((state) => state.cancelDeepScan)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const links = useLinksStore((state) => state.links)
   const openLinkTarget = useOpenLinkTarget()
@@ -203,10 +205,15 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             hasOlder={tab?.hasOlder ?? false}
             partitionCount={partitions.length}
             partitionFilter={tab?.partitionFilter ?? null}
+            filterActive={tab?.filterActive ?? false}
+            filterField={tab?.filterField ?? ''}
+            filterValue={tab?.filterValue ?? ''}
             searchActive={tab?.searchActive ?? false}
             searchField={tab?.searchField ?? ''}
             searchValue={tab?.searchValue ?? ''}
+            scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
+            scanPartial={tab?.scanPartial ?? false}
             partial={tab?.partial ?? false}
             partialReason={tab?.partialReason ?? null}
             partitionsTotal={tab?.partitionsTotal ?? 0}
@@ -214,11 +221,12 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onRefresh={() => void fetchMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
-            onSearch={(field, value) => void setSearch(connId, topic, tabId, field, value)}
+            onFilterLoaded={(field, value) => setLoadedFilter(tabId, field, value)}
+            onClearFilter={() => clearLoadedFilter(tabId)}
+            onSearchTopic={(field, value) => void searchTopic(connId, topic, tabId, field, value)}
+            onScanMore={() => void scanMore(connId, topic, tabId)}
+            onCancelScan={() => cancelScan(tabId)}
             onClearSearch={() => void clearSearch(connId, topic, tabId)}
-            deepScanning={tab?.deepScanning ?? false}
-            onDeepScan={(field, value) => void deepScan(connId, topic, tabId, field, value)}
-            onCancelDeepScan={() => cancelDeepScan(tabId)}
             links={topicLinks}
             onOpenLink={handleOpenLink}
             onCreateLink={handleCreateLink}
