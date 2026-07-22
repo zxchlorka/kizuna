@@ -31,6 +31,15 @@ interface KafkaTopicTabState {
   scanned: number
   deepScanning: boolean
   deepScanCanceled: boolean
+  // Coverage/partial-result state for the normal (non-search) browse path —
+  // see MessagesResponse.meta. Absent (scanning) responses just resolve
+  // these to their zero/false defaults, which keeps the coverage banner off
+  // during content-search since that path has its own "Scanned N" UI.
+  partial: boolean
+  partialReason: string | null
+  partitionsTotal: number
+  partitionsCompleted: number
+  messagesReturned: number
 }
 
 interface KafkaSearch {
@@ -70,6 +79,11 @@ function defaultTabState(): KafkaTopicTabState {
     scanned: 0,
     deepScanning: false,
     deepScanCanceled: false,
+    partial: false,
+    partialReason: null,
+    partitionsTotal: 0,
+    partitionsCompleted: 0,
+    messagesReturned: 0,
   }
 }
 
@@ -85,10 +99,27 @@ interface MessagesResponse {
   meta?: {
     has_older?: boolean
     next_before_offsets?: Record<string, number>
-    partitions?: number
+    // partitions_total/partitions_completed count only the SCOPED partitions
+    // for the current filter (1 when a single partition is selected).
+    // partitions_completed can be < partitions_total even when partial is
+    // false — fully-drained/empty partitions below the cursor simply aren't
+    // counted as "responded". Never derive UI state by comparing these two
+    // yourself; drive it off `partial` instead.
+    partitions_total?: number
+    partitions_completed?: number
+    candidates_read?: number
+    elapsed_ms?: number
+    // Normal browse path only (no match_field/match_value filters active).
+    partial?: boolean
+    partial_reason?: string
+    messages_returned?: number
+    // Content-search (scanning) path only — see match_field/match_value in
+    // requestMessages. Unrelated to partial/messages_returned above; the
+    // search/scan UX itself is reworked in a later task.
     scanning?: boolean
     scanned?: number
     matched?: number
+    partial_scan?: boolean
   }
 }
 
@@ -133,7 +164,7 @@ async function requestMessages(
     filters.push({ column: 'match_value', op: 'eq', value: search.value })
   }
 
-  const params = new URLSearchParams({ limit: '50' })
+  const params = new URLSearchParams({ limit: '100' })
   if (filters.length > 0) {
     params.set('filters', JSON.stringify(filters))
   }
@@ -228,6 +259,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
               hasOlder: Boolean(data.meta?.has_older),
               nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
               scanned: data.meta?.scanned ?? 0,
+              partial: Boolean(data.meta?.partial),
+              partialReason: data.meta?.partial_reason ?? null,
+              partitionsTotal: data.meta?.partitions_total ?? 0,
+              partitionsCompleted: data.meta?.partitions_completed ?? 0,
+              messagesReturned: data.meta?.messages_returned ?? 0,
               messagesLoading: false,
             },
           },
@@ -286,6 +322,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
                 hasOlder: Boolean(data.meta?.has_older),
                 nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
                 scanned: tab.scanned + (data.meta?.scanned ?? 0),
+                partial: Boolean(data.meta?.partial),
+                partialReason: data.meta?.partial_reason ?? null,
+                partitionsTotal: data.meta?.partitions_total ?? 0,
+                partitionsCompleted: data.meta?.partitions_completed ?? 0,
+                messagesReturned: data.meta?.messages_returned ?? 0,
                 loadingOlder: false,
               },
             },
@@ -321,6 +362,10 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
           messages: [],
           nextBeforeOffsets: null,
           hasOlder: false,
+          partial: false,
+          partitionsTotal: 0,
+          partitionsCompleted: 0,
+          messagesReturned: 0,
         },
       },
     }))
@@ -341,6 +386,10 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
           nextBeforeOffsets: null,
           hasOlder: false,
           scanned: 0,
+          partial: false,
+          partitionsTotal: 0,
+          partitionsCompleted: 0,
+          messagesReturned: 0,
         },
       },
     }))
@@ -360,6 +409,10 @@ export const useKafkaStore = create<KafkaStore>((set, get) => ({
           nextBeforeOffsets: null,
           hasOlder: false,
           scanned: 0,
+          partial: false,
+          partitionsTotal: 0,
+          partitionsCompleted: 0,
+          messagesReturned: 0,
         },
       },
     }))

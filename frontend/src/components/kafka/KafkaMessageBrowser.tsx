@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState, type FormEvent, type MouseEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
+import { KafkaCoverageBanner } from '@/components/kafka/KafkaCoverageBanner'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
@@ -26,6 +27,11 @@ interface KafkaMessageBrowserProps {
   searchField: string
   searchValue: string
   scanned: number
+  partial: boolean
+  partialReason: string | null
+  partitionsTotal: number
+  partitionsCompleted: number
+  messagesReturned: number
   onPartitionChange: (partition: number | null) => void
   onRefresh: () => void
   onLoadOlder: () => void
@@ -60,6 +66,11 @@ export function KafkaMessageBrowser({
   searchField,
   searchValue,
   scanned,
+  partial,
+  partialReason,
+  partitionsTotal,
+  partitionsCompleted,
+  messagesReturned,
   onPartitionChange,
   onRefresh,
   onLoadOlder,
@@ -129,10 +140,18 @@ export function KafkaMessageBrowser({
             </SelectContent>
           </Select>
         </div>
-        <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRefresh} disabled={loading}>
-          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {loading && messages.length > 0 && (
+            <span className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Refreshing…
+            </span>
+          )}
+          <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRefresh} disabled={loading}>
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
       <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
@@ -186,6 +205,15 @@ export function KafkaMessageBrowser({
       )}
 
       {error && <ErrorBanner message={error} onRetry={onRefresh} />}
+
+      {partial && (
+        <KafkaCoverageBanner
+          messagesReturned={messagesReturned}
+          partitionsCompleted={partitionsCompleted}
+          partitionsTotal={partitionsTotal}
+          reason={partialReason}
+        />
+      )}
 
       {!error && messages.length === 0 && !loading ? (
         <EmptyState
