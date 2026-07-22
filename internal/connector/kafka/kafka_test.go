@@ -605,3 +605,102 @@ func TestPingFailsWhenBrokersUnreachable(t *testing.T) {
 		t.Fatal("expected ping to fail for an unreachable broker")
 	}
 }
+
+func TestParseJSONPath(t *testing.T) {
+	t.Parallel()
+
+	key := func(k string) jsonPathSegment { return jsonPathSegment{kind: jsonPathKey, key: k} }
+	idx := jsonPathSegment{kind: jsonPathIndex}
+
+	tests := []struct {
+		name string
+		in   string
+		want []jsonPathSegment
+	}{
+		{name: "plain scalar", in: "event_type", want: []jsonPathSegment{key("event_type")}},
+		{name: "dot path", in: "user.id", want: []jsonPathSegment{key("user"), key("id")}},
+		{
+			name: "nested object array object scalar",
+			in:   "src.event_data.events[].name",
+			want: []jsonPathSegment{key("src"), key("event_data"), key("events"), idx, key("name")},
+		},
+		{
+			name: "two array levels",
+			in:   "items[].attributes[].value",
+			want: []jsonPathSegment{key("items"), idx, key("attributes"), idx, key("value")},
+		},
+		{
+			name: "bracket key with dot",
+			in:   `["key.with.dot"].name`,
+			want: []jsonPathSegment{key("key.with.dot"), key("name")},
+		},
+		{name: "legacy wildcard alias", in: "events[*].name", want: []jsonPathSegment{key("events"), idx, key("name")}},
+		{name: "leading dollar and dot", in: "$.user.id", want: []jsonPathSegment{key("user"), key("id")}},
+		{name: "single quoted bracket key", in: `['a.b'].c`, want: []jsonPathSegment{key("a.b"), key("c")}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := parseJSONPath(tc.in)
+			if len(got) != len(tc.want) {
+				t.Fatalf("parseJSONPath(%q) = %+v, want %+v", tc.in, got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("parseJSONPath(%q)[%d] = %+v, want %+v", tc.in, i, got[i], tc.want[i])
+				}
+			}
+		})
+	}
+}
+
+// jsonPathSharedFixtures is the cross-language grammar test matrix. The exact
+// same documents/paths/wants/expectations are asserted in TypeScript by
+// frontend/src/lib/jsonPaths.test.ts, so the Go matcher and the TS traversal
+// provably agree on the canonical grammar. Only full paths from the root are
+// used here (no legacy suffix paths), which is where the strict TS traversal and
+// the lenient Go matcher must produce identical results.
+var jsonPathSharedFixtures = []struct {
+	name  string
+	doc   string
+	path  string
+	want  string
+	match bool
+}{
+	{name: "top-level string", doc: `{"event_type":"batch","count":3,"ok":true}`, path: "event_type", want: "batch", match: true},
+	{name: "top-level number", doc: `{"event_type":"batch","count":3,"ok":true}`, path: "count", want: "3", match: true},
+	{name: "top-level bool", doc: `{"event_type":"batch","count":3,"ok":true}`, path: "ok", want: "true", match: true},
+	{name: "top-level number mismatch", doc: `{"event_type":"batch","count":3,"ok":true}`, path: "count", want: "4", match: false},
+	{name: "nested obj array obj scalar (Auth)", doc: `{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}`, path: "src.event_data.events[].name", want: "Auth", match: true},
+	{name: "nested array first element", doc: `{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}`, path: "src.event_data.events[].name", want: "View", match: true},
+	{name: "nested array no such value", doc: `{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}`, path: "src.event_data.events[].name", want: "Nope", match: false},
+	{name: "nested arrays two levels", doc: `{"src":{"event_data":{"events":[{"data":{"items":[{"category":["regular","6208"]}]}},{"data":{"items":[{"category":["spool"]}]}}]}}}`, path: "src.event_data.events[].data.items[].category[]", want: "6208", match: true},
+	{name: "nested arrays other branch", doc: `{"src":{"event_data":{"events":[{"data":{"items":[{"category":["regular","6208"]}]}},{"data":{"items":[{"category":["spool"]}]}}]}}}`, path: "src.event_data.events[].data.items[].category[]", want: "spool", match: true},
+	{name: "nested arrays miss", doc: `{"src":{"event_data":{"events":[{"data":{"items":[{"category":["regular","6208"]}]}},{"data":{"items":[{"category":["spool"]}]}}]}}}`, path: "src.event_data.events[].data.items[].category[]", want: "nope", match: false},
+	{name: "missing field", doc: `{"src":{"event_data":{"events":[{"name":"Auth"}]}}}`, path: "src.event_data.missing", want: "x", match: false},
+	{name: "null matches null literal", doc: `{"src":{"timezone_offset":null}}`, path: "src.timezone_offset", want: "null", match: true},
+	{name: "null does not match zero", doc: `{"src":{"timezone_offset":null}}`, path: "src.timezone_offset", want: "0", match: false},
+	{name: "mixed types scalar branch", doc: `{"a":{"b":"X"}}`, path: "a.b", want: "X", match: true},
+	{name: "mixed types object branch no match", doc: `{"a":{"b":{"nested":1}}}`, path: "a.b", want: "X", match: false},
+	{name: "mixed types descend past scalar", doc: `{"a":{"b":"X"}}`, path: "a.b.c", want: "X", match: false},
+	{name: "invalid json", doc: `{not json`, path: "a", want: "anything", match: false},
+	{name: "key with dot bracket notation", doc: `{"key.with.dot":{"name":"Zulu"}}`, path: `["key.with.dot"].name`, want: "Zulu", match: true},
+	{name: "key with dot plain path does not match", doc: `{"key.with.dot":{"name":"Zulu"}}`, path: "key.with.dot.name", want: "Zulu", match: false},
+}
+
+func TestJSONPathSharedFixtures(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range jsonPathSharedFixtures {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			row := map[string]any{"format": "json", "value": tc.doc}
+			if got := messageMatchesField(row, tc.path, tc.want); got != tc.match {
+				t.Fatalf("messageMatchesField(%q, %q, %q) = %v, want %v", tc.doc, tc.path, tc.want, got, tc.match)
+			}
+		})
+	}
+}

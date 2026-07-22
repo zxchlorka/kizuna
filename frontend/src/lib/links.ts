@@ -1,8 +1,13 @@
 import type { ColumnMeta, LinkRecord, TableRow } from '@/types/api'
+import { parsePath, traverse } from '@/lib/jsonPaths'
 
 // extractMessageField parses a Kafka message JSON value and returns the scalar
-// at a dot-path (e.g. "user_id", "user.id"). Returns null when the value is not
-// JSON, the path is missing, or the leaf is not a scalar.
+// at a canonical path (e.g. "user_id", "user.id", "items[].id",
+// ["key.with.dot"].name — see lib/jsonPaths.ts). It returns the FIRST scalar
+// leaf the path resolves to, or null when the value is not JSON, the path
+// resolves to no leaf, or the leaf is null/an object/an array (not a linkable
+// scalar). Existing simple dot-path links resolve identically to before; the
+// array/bracket grammar is purely additive.
 export function extractMessageField(value: string, field: string): string | null {
   if (!field) {
     return null
@@ -13,20 +18,16 @@ export function extractMessageField(value: string, field: string): string | null
   } catch {
     return null
   }
-  let current: unknown = parsed
-  for (const part of field.split('.')) {
-    if (typeof current !== 'object' || current === null || Array.isArray(current)) {
-      return null
-    }
-    current = (current as Record<string, unknown>)[part]
-    if (current === undefined) {
-      return null
-    }
-  }
-  if (current === null || typeof current === 'object') {
+  const segments = parsePath(field)
+  if (segments.length === 0) {
     return null
   }
-  return String(current)
+  for (const leaf of traverse(parsed, segments)) {
+    if (leaf !== null && typeof leaf !== 'object') {
+      return String(leaf)
+    }
+  }
+  return null
 }
 
 // buildRedisKey replaces the single '*' in a pattern with the value.

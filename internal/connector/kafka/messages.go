@@ -924,9 +924,19 @@ func filterMatches(rows []map[string]any, field string, value string) []map[stri
 	return matches
 }
 
-// messageMatchesField reports whether a message contains the JSON path equal
-// to want. Paths may start below the root ("events[].name"), and arrays are
-// traversed implicitly, so both "events.name" and "events[].name" work.
+// messageMatchesField reports whether a message contains a JSON leaf at the
+// canonical path equal to want. The path grammar matches the shared TypeScript
+// library (frontend/src/lib/jsonPaths.ts): a plain object key separated by '.',
+// an array element denoted by '[]', and a key containing '.', '[', ']', a quote
+// or whitespace addressed with bracket notation (["key.with.dot"]).
+//
+// Full paths from the root ("src.event_data.events[].name") always resolve
+// correctly. Two legacy affordances are preserved for hand-typed search queries
+// so existing usage keeps working: a path may start below the root
+// ("events[].name" matches a nested array anywhere), and an array may be
+// traversed implicitly without the '[]' marker ("events.name" == "events[].name").
+// The canonical TypeScript traversal is strict (root-anchored, '[]' required);
+// the shared fixture set uses full '[]' paths, on which both agree.
 func messageMatchesField(row map[string]any, field string, want string) bool {
 	if field == "" {
 		return true
@@ -942,44 +952,117 @@ func messageMatchesField(row map[string]any, field string, want string) bool {
 	if json.Unmarshal([]byte(raw), &parsed) != nil {
 		return false
 	}
-	parts := normalizeJSONPath(field)
-	if len(parts) == 0 {
+	segments := parseJSONPath(field)
+	if len(segments) == 0 {
 		return false
 	}
-	return jsonPathMatchesAnywhere(parsed, parts, want)
+	return jsonPathMatchesAnywhere(parsed, segments, want)
 }
 
-func normalizeJSONPath(field string) []string {
-	field = strings.TrimSpace(field)
-	field = strings.TrimPrefix(field, "$")
-	field = strings.TrimPrefix(field, ".")
-	rawParts := strings.Split(field, ".")
-	parts := make([]string, 0, len(rawParts))
-	for _, part := range rawParts {
-		part = strings.TrimSpace(part)
-		part = strings.TrimSuffix(part, "[*]")
-		part = strings.TrimSuffix(part, "[]")
-		if part != "" {
-			parts = append(parts, part)
+type jsonPathSegmentKind int
+
+const (
+	jsonPathKey jsonPathSegmentKind = iota
+	jsonPathIndex
+)
+
+// jsonPathSegment is one step of a parsed canonical path: an object key or an
+// array element wildcard ('[]').
+type jsonPathSegment struct {
+	kind jsonPathSegmentKind
+	key  string
+}
+
+// parseJSONPath parses a canonical path string into segments. It tolerates a
+// leading '$' and stray '.' separators, accepts legacy "[*]" as an alias for
+// "[]", and unwraps bracket-quoted keys (["key.with.dot"] or ['key']). It is the
+// Go counterpart of parsePath in frontend/src/lib/jsonPaths.ts.
+func parseJSONPath(field string) []jsonPathSegment {
+	s := strings.TrimSpace(field)
+	segments := make([]jsonPathSegment, 0, 8)
+	i := 0
+	n := len(s)
+	for i < n {
+		c := s[i]
+		switch {
+		case c == '.' || c == '$':
+			i++
+		case c == '[':
+			switch {
+			case i+1 < n && s[i+1] == ']':
+				segments = append(segments, jsonPathSegment{kind: jsonPathIndex})
+				i += 2
+			case i+2 < n && s[i+1] == '*' && s[i+2] == ']':
+				segments = append(segments, jsonPathSegment{kind: jsonPathIndex})
+				i += 3
+			case i+1 < n && (s[i+1] == '"' || s[i+1] == '\''):
+				quote := s[i+1]
+				j := i + 2
+				var sb strings.Builder
+				for j < n && s[j] != quote {
+					if s[j] == '\\' && j+1 < n {
+						sb.WriteByte(s[j+1])
+						j += 2
+						continue
+					}
+					sb.WriteByte(s[j])
+					j++
+				}
+				j++ // consume closing quote
+				if j < n && s[j] == ']' {
+					j++ // consume closing bracket
+				}
+				segments = append(segments, jsonPathSegment{kind: jsonPathKey, key: sb.String()})
+				i = j
+			default:
+				// Bare bracket content (e.g. [foo]) — treat as a key for leniency.
+				j := i + 1
+				var sb strings.Builder
+				for j < n && s[j] != ']' {
+					sb.WriteByte(s[j])
+					j++
+				}
+				if j < n {
+					j++ // consume closing bracket
+				}
+				if key := strings.TrimSpace(sb.String()); key != "" {
+					segments = append(segments, jsonPathSegment{kind: jsonPathKey, key: key})
+				}
+				i = j
+			}
+		default:
+			// Plain key: everything up to the next '.' or '['.
+			j := i
+			for j < n && s[j] != '.' && s[j] != '[' {
+				j++
+			}
+			if key := strings.TrimSpace(s[i:j]); key != "" {
+				segments = append(segments, jsonPathSegment{kind: jsonPathKey, key: key})
+			}
+			i = j
 		}
 	}
-	return parts
+	return segments
 }
 
-func jsonPathMatchesAnywhere(value any, parts []string, want string) bool {
-	if jsonPathMatchesFrom(value, parts, want) {
+// jsonPathMatchesAnywhere first tries a root-anchored match, then recurses into
+// every child so a hand-typed suffix path ("events[].name", "name") still finds
+// a nested match. Full paths from the root match on the first (root-anchored)
+// attempt, so this suffix fallback never changes their result.
+func jsonPathMatchesAnywhere(value any, segments []jsonPathSegment, want string) bool {
+	if jsonPathMatchesFrom(value, segments, want) {
 		return true
 	}
 	switch typed := value.(type) {
 	case map[string]any:
 		for _, child := range typed {
-			if jsonPathMatchesAnywhere(child, parts, want) {
+			if jsonPathMatchesAnywhere(child, segments, want) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			if jsonPathMatchesAnywhere(child, parts, want) {
+			if jsonPathMatchesAnywhere(child, segments, want) {
 				return true
 			}
 		}
@@ -987,17 +1070,35 @@ func jsonPathMatchesAnywhere(value any, parts []string, want string) bool {
 	return false
 }
 
-func jsonPathMatchesFrom(value any, parts []string, want string) bool {
-	if len(parts) == 0 {
+// jsonPathMatchesFrom resolves segments against value starting at value itself.
+// A 'key' segment descends objects; an 'index' segment consumes an array by
+// iterating its elements. For backward compatibility a 'key' segment landing on
+// an array is also traversed implicitly (each element retried with the same
+// segment), so "events.name" behaves like "events[].name".
+func jsonPathMatchesFrom(value any, segments []jsonPathSegment, want string) bool {
+	if len(segments) == 0 {
 		return jsonLeafEquals(value, want)
 	}
+	seg := segments[0]
 	switch typed := value.(type) {
 	case map[string]any:
-		child, ok := typed[parts[0]]
-		return ok && jsonPathMatchesFrom(child, parts[1:], want)
+		if seg.kind != jsonPathKey {
+			return false
+		}
+		child, ok := typed[seg.key]
+		return ok && jsonPathMatchesFrom(child, segments[1:], want)
 	case []any:
+		if seg.kind == jsonPathIndex {
+			for _, child := range typed {
+				if jsonPathMatchesFrom(child, segments[1:], want) {
+					return true
+				}
+			}
+			return false
+		}
+		// Legacy implicit array traversal for a key segment.
 		for _, child := range typed {
-			if jsonPathMatchesFrom(child, parts, want) {
+			if jsonPathMatchesFrom(child, segments, want) {
 				return true
 			}
 		}
