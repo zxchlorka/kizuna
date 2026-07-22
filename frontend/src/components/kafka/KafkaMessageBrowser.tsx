@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useState, type FormEvent, type MouseEvent } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsDown, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaCoverageBanner } from '@/components/kafka/KafkaCoverageBanner'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
+import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -89,6 +90,7 @@ export function KafkaMessageBrowser({
   const [valueInput, setValueInput] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
   // Seed the editable inputs from the active search (e.g. a link jump sets it
   // programmatically) so the user sees what's being searched and can refine it.
@@ -163,6 +165,17 @@ export function KafkaMessageBrowser({
           autoComplete="off"
           className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
         />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 font-mono text-[11px]"
+          onClick={() => setPickerOpen(true)}
+          title="Browse sampled messages and pick a field"
+        >
+          <ListTree className="h-3.5 w-3.5" />
+          Choose field
+        </Button>
         <input
           value={valueInput}
           onChange={(event) => setValueInput(event.target.value)}
@@ -302,6 +315,13 @@ export function KafkaMessageBrowser({
       )}
 
       <KafkaMessageModal message={modalMessage} onClose={() => setModalMessage(null)} />
+
+      <JsonFieldPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        messages={messages}
+        onUseField={(path) => setFieldInput(path)}
+      />
 
       {menu && (
         <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
