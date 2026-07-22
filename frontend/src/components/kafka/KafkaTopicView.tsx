@@ -41,7 +41,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const tab = useKafkaStore((state) => state.tabs[tabId])
   const fetchTopicChildren = useKafkaStore((state) => state.fetchTopicChildren)
   const loadInitialMessages = useKafkaStore((state) => state.loadInitialMessages)
-  const fetchMessages = useKafkaStore((state) => state.fetchMessages)
+  const refreshMessages = useKafkaStore((state) => state.refreshMessages)
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
   const setLoadedFilter = useKafkaStore((state) => state.setLoadedFilter)
@@ -95,7 +95,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
 
   const refreshAll = () => {
     void fetchTopicChildren(connId, topic, tabId)
-    void fetchMessages(connId, topic, tabId)
+    // Search-aware: re-runs an active search instead of browse-clobbering it.
+    void refreshMessages(connId, topic, tabId)
   }
 
   const topicLinks = useMemo(
@@ -170,7 +171,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
                   Produce
                 </Button>
               )}
-              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={refreshAll} disabled={tab?.childrenLoading}>
+              <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={refreshAll} disabled={tab?.childrenLoading || tab?.scanning}>
                 <RefreshCw className={cn('h-3.5 w-3.5', tab?.childrenLoading && 'animate-spin')} />
                 Refresh
               </Button>
@@ -227,7 +228,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             partitionsTotal={tab?.partitionsTotal ?? 0}
             partitionsCompleted={tab?.partitionsCompleted ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
-            onRefresh={() => void fetchMessages(connId, topic, tabId)}
+            onRefresh={() => void refreshMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
             onFilterLoaded={(field, value) => setLoadedFilter(tabId, field, value)}
             onClearFilter={() => clearLoadedFilter(tabId)}
@@ -266,7 +267,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
         onOpenChange={setProduceOpen}
         onProduced={() => {
           void fetchTopicChildren(connId, topic, tabId)
-          void fetchMessages(connId, topic, tabId)
+          // Same search-aware refresh: producing while a search is active re-runs
+          // the search rather than silently discarding it for a browse page.
+          void refreshMessages(connId, topic, tabId)
         }}
       />
 

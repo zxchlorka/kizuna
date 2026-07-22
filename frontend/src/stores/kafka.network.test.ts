@@ -274,6 +274,99 @@ describe('loadInitialMessages — mount-path guard against search clobbering', (
   })
 })
 
+describe('Refresh is search-aware (settled-search clobber guard)', () => {
+  it('re-runs the current search from the top instead of browse-overwriting a settled search', async () => {
+    // Reproduces the reviewer's scenario: an active, SETTLED search (matches
+    // loaded, searchActive:true, scanning:false), then an explicit Refresh (both
+    // the toolbar and header buttons route through refreshMessages). The old
+    // browse-only fetchMessages would have replaced the scan rows/cursor with
+    // unrelated browse data while leaving searchActive/scanned stale. It must now
+    // RE-RUN the search from the top.
+    const fetchMock = vi
+      .fn()
+      // Initial search step — settles (scanning:false) with one match + a cursor.
+      .mockResolvedValueOnce(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 7)],
+          total: 1,
+          has_more: false,
+          meta: { scanning: true, scanned: 40, matched: 1, has_older: true, next_before_offsets: { '0': 5 } },
+        })
+      )
+      // The Refresh must issue a fresh FIRST search step (distinct rows/cursor so
+      // we can prove it re-scanned rather than reusing stale state or browsing).
+      .mockResolvedValueOnce(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 6)],
+          total: 1,
+          has_more: false,
+          meta: { scanning: true, scanned: 25, matched: 1, has_older: true, next_before_offsets: { '0': 4 } },
+        })
+      )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-refresh-search', 'src.event_data.events[].name', 'Auth')
+
+    const settled = useKafkaStore.getState().tabs['tab-refresh-search']
+    expect(settled.searchActive).toBe(true)
+    expect(settled.scanning).toBe(false) // settled, not mid-scan
+    expect(settled.messages).toHaveLength(1)
+    expect(settled.scanned).toBe(40)
+    expect(settled.nextBeforeOffsets).toEqual({ '0': 5 })
+
+    await useKafkaStore.getState().refreshMessages('c1', 'topic', 'tab-refresh-search')
+
+    // The Refresh re-ran the SAME search (match_field/value carried), never a
+    // browse fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const refreshUrl = decodeURIComponent(String(fetchMock.mock.calls[1][0]))
+    expect(refreshUrl).toContain('match_field')
+    expect(refreshUrl).toContain('match_value')
+
+    const tab = useKafkaStore.getState().tabs['tab-refresh-search']
+    expect(tab.searchActive).toBe(true)
+    // Fresh first step replaced the rows/cursor/scanned (reset). The header's
+    // "Scanned N · M matches" now describes THIS re-run, not a stale count sitting
+    // over unrelated browse rows — i.e. no silent browse corruption.
+    expect(tab.messages).toHaveLength(1)
+    expect(tab.messages[0].offset).toBe(6)
+    expect(tab.scanned).toBe(25)
+    expect(tab.nextBeforeOffsets).toEqual({ '0': 4 })
+  })
+
+  it('browse-refreshes (no match filter) when no search is active — unchanged', async () => {
+    const browseFetch = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 9), scanRow(0, 8)],
+          total: 2,
+          has_more: false,
+          meta: { has_older: false, partitions_total: 1, partitions_completed: 1, messages_returned: 2 },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', browseFetch as unknown as typeof fetch)
+
+    // Seed a plain browse tab (searchActive:false) via the initial load.
+    await useKafkaStore.getState().loadInitialMessages('c1', 'topic', 'tab-refresh-browse')
+    expect(useKafkaStore.getState().tabs['tab-refresh-browse'].searchActive).toBe(false)
+
+    await useKafkaStore.getState().refreshMessages('c1', 'topic', 'tab-refresh-browse')
+
+    // Refresh on a browse tab behaves exactly as before: a browse fetch with no
+    // match filter.
+    expect(browseFetch).toHaveBeenCalledTimes(2)
+    const refreshUrl = decodeURIComponent(String(browseFetch.mock.calls[1][0]))
+    expect(refreshUrl).not.toContain('match_field')
+    const tab = useKafkaStore.getState().tabs['tab-refresh-browse']
+    expect(tab.searchActive).toBe(false)
+    expect(tab.messages).toHaveLength(2)
+  })
+})
+
 describe('Clearing a search returns to browse', () => {
   it('clearSearch reloads a browse page with no match filter', async () => {
     const fetchMock = vi

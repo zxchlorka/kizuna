@@ -76,6 +76,15 @@ interface KafkaStore {
   // browse refresh/produce paths.
   loadInitialMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchMessages: (connId: string, topic: string, tabId: string) => Promise<void>
+  // Explicit user "Refresh" of the current view (header + toolbar buttons, the
+  // produce-then-refresh path). Search-aware: if a "Search topic" session is
+  // active for this tab, re-run that search from the top (a fresh first step
+  // with the tab's existing searchField/searchValue) instead of browse-
+  // overwriting the accumulated scan matches/cursor; otherwise reload the
+  // newest browse page via fetchMessages. Restores the pre-Task-7 intent
+  // (Refresh keeps you looking at the same kind of thing) on top of the new
+  // browse/search separation.
+  refreshMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchOlderMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   setPartitionFilter: (connId: string, topic: string, tabId: string, partition: number | null) => Promise<void>
   // Filter loaded (client-side, no network).
@@ -446,6 +455,25 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
 
       kafkaMessageRequests.set(requestKey, request)
       return request
+    },
+
+    // refreshMessages is the explicit user "Refresh" of the current view. Before
+    // Task 7, the single fetchMessages was search-aware and a Refresh during an
+    // active search correctly RE-RAN the search; Task 7's split made fetchMessages
+    // strictly browse-only, so a bare fetchMessages here would silently replace an
+    // active search's matches/cursor with unrelated browse rows while leaving
+    // searchActive/scanned/"Scanned N · M matches" stale (the same corruption
+    // class the mount-path guard fixes, reached via an explicit click). Route the
+    // decision through searchActive: re-run the search from the top when one is
+    // active, otherwise browse-refresh. This restores the old intent using the new
+    // clean searchTopic/fetchMessages separation — no reintroduced muddled fetch.
+    refreshMessages: async (connId, topic, tabId) => {
+      const current = ensureState(get().tabs, tabId)
+      if (current.searchActive) {
+        await get().searchTopic(connId, topic, tabId, current.searchField, current.searchValue)
+        return
+      }
+      await get().fetchMessages(connId, topic, tabId)
     },
 
     // fetchOlderMessages loads the next older browse page and appends it. A
