@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { fetchWithTimeout } from '@/lib/http'
+import { fetchWithTimeout, RequestAbortedError } from '@/lib/http'
+import { matchField } from '@/lib/jsonPaths'
 import type { ColumnMeta, KafkaProduceRequest, KafkaProduceResult, ObjectItem } from '@/types/api'
 
 export interface KafkaMessageRow {
@@ -25,16 +26,35 @@ interface KafkaTopicTabState {
   hasOlder: boolean
   nextBeforeOffsets: Record<string, number> | null
   partitionFilter: number | null
+
+  // "Filter loaded" — a pure client-side predicate over the already-loaded raw
+  // `messages`, run in the browser with zero network requests. It never touches
+  // `nextBeforeOffsets`/`hasOlder`; the visible rows are derived from `messages`
+  // + this predicate (see filterLoadedMessages), so clearing it restores the
+  // page and cursor instantly because they were never mutated.
+  filterField: string
+  filterValue: string
+  filterActive: boolean
+
+  // "Search topic" — the budgeted BACKEND scan (match_field/match_value ->
+  // messages.go). Each step scans one window under the reader's scan budget and
+  // returns whatever it matched plus a cursor to continue deeper. `messages`
+  // holds the accumulated matches while a search session is active.
   searchField: string
   searchValue: string
   searchActive: boolean
+  scanning: boolean
   scanned: number
-  deepScanning: boolean
-  deepScanCanceled: boolean
+  // A scan STEP hit its backend budget before finishing its window (meta
+  // partial_scan). Deliberately SEPARATE from the browse-coverage `partial`
+  // field below so the two "partial" concepts never smear into one ambiguous
+  // flag — one drives the "Scan more"/scanned UI, the other the amber coverage
+  // banner.
+  scanPartial: boolean
+
   // Coverage/partial-result state for the normal (non-search) browse path —
-  // see MessagesResponse.meta. Absent (scanning) responses just resolve
-  // these to their zero/false defaults, which keeps the coverage banner off
-  // during content-search since that path has its own "Scanned N" UI.
+  // see MessagesResponse.meta. The search/scan path never writes these; it has
+  // its own scanned/scanPartial state above.
   partial: boolean
   partialReason: string | null
   partitionsTotal: number
@@ -53,10 +73,14 @@ interface KafkaStore {
   fetchMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchOlderMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   setPartitionFilter: (connId: string, topic: string, tabId: string, partition: number | null) => Promise<void>
-  setSearch: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
+  // Filter loaded (client-side, no network).
+  setLoadedFilter: (tabId: string, field: string, value: string) => void
+  clearLoadedFilter: (tabId: string) => void
+  // Search topic (budgeted backend scan).
+  searchTopic: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
+  scanMore: (connId: string, topic: string, tabId: string) => Promise<void>
+  cancelScan: (tabId: string) => void
   clearSearch: (connId: string, topic: string, tabId: string) => Promise<void>
-  deepScan: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
-  cancelDeepScan: (tabId: string) => void
   produce: (connId: string, request: KafkaProduceRequest) => Promise<KafkaProduceResult>
 }
 
@@ -73,12 +97,15 @@ function defaultTabState(): KafkaTopicTabState {
     hasOlder: false,
     nextBeforeOffsets: null,
     partitionFilter: null,
+    filterField: '',
+    filterValue: '',
+    filterActive: false,
     searchField: '',
     searchValue: '',
     searchActive: false,
+    scanning: false,
     scanned: 0,
-    deepScanning: false,
-    deepScanCanceled: false,
+    scanPartial: false,
     partial: false,
     partialReason: null,
     partitionsTotal: 0,
@@ -89,6 +116,24 @@ function defaultTabState(): KafkaTopicTabState {
 
 function ensureState(tabs: Record<string, KafkaTopicTabState>, tabId: string): KafkaTopicTabState {
   return tabs[tabId] ?? defaultTabState()
+}
+
+// filterLoadedMessages applies a client-side predicate over already-loaded rows.
+// It is the "Filter loaded" operation's whole logic: an empty path matches
+// everything (no filtering), otherwise a row survives when its JSON value has a
+// leaf at the canonical path equal to `value`, using the STRICT root-anchored
+// matcher shared with the Go backend's fixture set (see jsonPaths.matchField).
+// Non-JSON rows never match a non-empty path and are filtered out. Pure and
+// side-effect free, so the caller derives the visible set without ever mutating
+// the raw `messages`/cursor state.
+export function filterLoadedMessages(
+  messages: KafkaMessageRow[],
+  field: string,
+  value: string
+): KafkaMessageRow[] {
+  const path = field.trim()
+  if (path === '') return messages
+  return messages.filter((row) => matchField(row.value, path, value))
 }
 
 interface MessagesResponse {
@@ -114,8 +159,10 @@ interface MessagesResponse {
     partial_reason?: string
     messages_returned?: number
     // Content-search (scanning) path only — see match_field/match_value in
-    // requestMessages. Unrelated to partial/messages_returned above; the
-    // search/scan UX itself is reworked in a later task.
+    // requestMessages. Unrelated to partial/messages_returned above.
+    // `scanned` counts candidates inspected in the step; `matched` counts hits
+    // (== rows.length); `partial_scan` marks a step that hit its budget before
+    // finishing its window.
     scanning?: boolean
     scanned?: number
     matched?: number
@@ -125,6 +172,9 @@ interface MessagesResponse {
 
 const kafkaChildrenRequests = new Map<string, Promise<void>>()
 const kafkaMessageRequests = new Map<string, Promise<void>>()
+// In-flight "Search topic" scan step per tab. Kept out of the reactive store so
+// Cancel can abort the underlying HTTP request directly (see cancelScan).
+const kafkaScanControllers = new Map<string, AbortController>()
 
 function kafkaTopicKey(connId: string, topic: string, tabId: string): string {
   return `${tabId}::${connId}::${topic}`
@@ -135,14 +185,9 @@ function kafkaMessageKey(
   topic: string,
   tabId: string,
   partition: number | null,
-  beforeOffsets: Record<string, number> | null,
-  search: KafkaSearch | null
+  beforeOffsets: Record<string, number> | null
 ): string {
-  return `${kafkaTopicKey(connId, topic, tabId)}::${partition ?? 'all'}::${JSON.stringify(beforeOffsets ?? {})}::${search?.field ?? ''}=${search?.value ?? ''}`
-}
-
-function activeSearch(tab: KafkaTopicTabState): KafkaSearch | null {
-  return tab.searchActive && tab.searchField ? { field: tab.searchField, value: tab.searchValue } : null
+  return `${kafkaTopicKey(connId, topic, tabId)}::${partition ?? 'all'}::${JSON.stringify(beforeOffsets ?? {})}`
 }
 
 async function requestMessages(
@@ -150,7 +195,8 @@ async function requestMessages(
   topic: string,
   partition: number | null,
   beforeOffsets: Record<string, number> | null,
-  search: KafkaSearch | null
+  search: KafkaSearch | null,
+  signal?: AbortSignal
 ): Promise<MessagesResponse> {
   const filters: Array<{ column: string; op: string; value: string }> = []
   if (partition !== null) {
@@ -172,7 +218,8 @@ async function requestMessages(
   const res = await fetchWithTimeout(
     `/api/connections/${connId}/objects/${encodeURIComponent(topic)}/data?${params.toString()}`,
     undefined,
-    search ? 22000 : 18000
+    search ? 22000 : 18000,
+    signal
   )
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }))
@@ -181,295 +228,399 @@ async function requestMessages(
   return (await res.json()) as MessagesResponse
 }
 
-export const useKafkaStore = create<KafkaStore>((set, get) => ({
-  tabs: {},
-
-  fetchTopicChildren: async (connId, topic, tabId) => {
-    const requestKey = kafkaTopicKey(connId, topic, tabId)
-    const pending = kafkaChildrenRequests.get(requestKey)
-    if (pending) {
-      return pending
-    }
-
-    const request = (async () => {
-      set((state) => ({
-        tabs: {
-          ...state.tabs,
-          [tabId]: { ...ensureState(state.tabs, tabId), childrenLoading: true, childrenError: null },
-        },
-      }))
-      try {
-        const res = await fetchWithTimeout(`/api/connections/${connId}/objects?path=${encodeURIComponent(topic)}`)
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: res.statusText }))
-          throw new Error(body.error || res.statusText)
-        }
-        const children = (await res.json()) as ObjectItem[]
-        set((state) => ({
-          tabs: {
-            ...state.tabs,
-            [tabId]: { ...ensureState(state.tabs, tabId), children, childrenLoading: false },
-          },
-        }))
-      } catch (error) {
-        set((state) => ({
-          tabs: {
-            ...state.tabs,
-            [tabId]: {
-              ...ensureState(state.tabs, tabId),
-              childrenLoading: false,
-              childrenError: (error as Error).message,
-            },
-          },
-        }))
-      } finally {
-        kafkaChildrenRequests.delete(requestKey)
-      }
-    })()
-
-    kafkaChildrenRequests.set(requestKey, request)
-    return request
-  },
-
-  fetchMessages: async (connId, topic, tabId) => {
+export const useKafkaStore = create<KafkaStore>((set, get) => {
+  // runScanStep drives one "Search topic" backend scan window. `reset` starts a
+  // fresh search (clears the accumulated matches/cursor); otherwise it's a "Scan
+  // more" continuation from the current cursor. Either way it merges the step's
+  // matches even when the step reports partial_scan, so a budget-limited step
+  // never discards what it already found.
+  const runScanStep = async (connId: string, topic: string, tabId: string, reset: boolean): Promise<void> => {
     const current = ensureState(get().tabs, tabId)
-    const search = activeSearch(current)
-    const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, null, search)
-    const pending = kafkaMessageRequests.get(requestKey)
-    if (pending) {
-      return pending
-    }
+    if (current.scanning) return
+    if (!reset && (!current.hasOlder || !current.nextBeforeOffsets)) return
 
-    const request = (async () => {
-      set((state) => ({
+    const search: KafkaSearch = { field: current.searchField, value: current.searchValue }
+    const beforeOffsets = reset ? null : current.nextBeforeOffsets
+
+    // Supersede any lingering controller and register this step's own so Cancel
+    // aborts exactly this in-flight request.
+    kafkaScanControllers.get(tabId)?.abort()
+    const controller = new AbortController()
+    kafkaScanControllers.set(tabId, controller)
+
+    set((state) => {
+      const tab = ensureState(state.tabs, tabId)
+      return {
         tabs: {
           ...state.tabs,
-          [tabId]: { ...ensureState(state.tabs, tabId), messagesLoading: true, messagesError: null },
+          [tabId]: {
+            ...tab,
+            scanning: true,
+            messagesError: null,
+            ...(reset
+              ? { messages: [], scanned: 0, scanPartial: false, nextBeforeOffsets: null, hasOlder: false }
+              : {}),
+          },
         },
-      }))
-      try {
-        const data = await requestMessages(connId, topic, current.partitionFilter, null, search)
-        set((state) => ({
+      }
+    })
+
+    try {
+      const data = await requestMessages(connId, topic, current.partitionFilter, beforeOffsets, search, controller.signal)
+      set((state) => {
+        const tab = ensureState(state.tabs, tabId)
+        const base = reset ? [] : tab.messages
+        const seen = new Set(base.map((row) => `${row.partition}:${row.offset}`))
+        const matches = (data.rows ?? []).filter((row) => !seen.has(`${row.partition}:${row.offset}`))
+        return {
           tabs: {
             ...state.tabs,
             [tabId]: {
-              ...ensureState(state.tabs, tabId),
-              messages: data.rows ?? [],
-              total: data.total,
+              ...tab,
+              messages: [...base, ...matches],
+              scanned: (reset ? 0 : tab.scanned) + (data.meta?.scanned ?? 0),
+              scanPartial: Boolean(data.meta?.partial_scan),
               hasOlder: Boolean(data.meta?.has_older),
               nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
-              scanned: data.meta?.scanned ?? 0,
-              partial: Boolean(data.meta?.partial),
-              partialReason: data.meta?.partial_reason ?? null,
-              partitionsTotal: data.meta?.partitions_total ?? 0,
-              partitionsCompleted: data.meta?.partitions_completed ?? 0,
-              messagesReturned: data.meta?.messages_returned ?? 0,
-              messagesLoading: false,
+              scanning: false,
             },
           },
-        }))
-      } catch (error) {
+        }
+      })
+    } catch (error) {
+      if (error instanceof RequestAbortedError) {
+        // Deliberate Cancel: keep the matches accumulated so far, just stop.
         set((state) => ({
-          tabs: {
-            ...state.tabs,
-            [tabId]: {
-              ...ensureState(state.tabs, tabId),
-              messagesLoading: false,
-              messagesError: (error as Error).message,
-            },
-          },
+          tabs: { ...state.tabs, [tabId]: { ...ensureState(state.tabs, tabId), scanning: false } },
         }))
-      } finally {
-        kafkaMessageRequests.delete(requestKey)
+        return
       }
-    })()
-
-    kafkaMessageRequests.set(requestKey, request)
-    return request
-  },
-
-  fetchOlderMessages: async (connId, topic, tabId) => {
-    const current = ensureState(get().tabs, tabId)
-    if (!current.nextBeforeOffsets || current.loadingOlder) {
-      return
-    }
-    const search = activeSearch(current)
-    const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, current.nextBeforeOffsets, search)
-    const pending = kafkaMessageRequests.get(requestKey)
-    if (pending) {
-      return pending
-    }
-
-    const request = (async () => {
       set((state) => ({
         tabs: {
           ...state.tabs,
-          [tabId]: { ...ensureState(state.tabs, tabId), loadingOlder: true, messagesError: null },
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            scanning: false,
+            messagesError: (error as Error).message,
+          },
         },
       }))
-      try {
-        const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, search)
-        set((state) => {
-          const tab = ensureState(state.tabs, tabId)
-          const seen = new Set(tab.messages.map((row) => `${row.partition}:${row.offset}`))
-          const older = (data.rows ?? []).filter((row) => !seen.has(`${row.partition}:${row.offset}`))
-          return {
+    } finally {
+      if (kafkaScanControllers.get(tabId) === controller) {
+        kafkaScanControllers.delete(tabId)
+      }
+    }
+  }
+
+  return {
+    tabs: {},
+
+    fetchTopicChildren: async (connId, topic, tabId) => {
+      const requestKey = kafkaTopicKey(connId, topic, tabId)
+      const pending = kafkaChildrenRequests.get(requestKey)
+      if (pending) {
+        return pending
+      }
+
+      const request = (async () => {
+        set((state) => ({
+          tabs: {
+            ...state.tabs,
+            [tabId]: { ...ensureState(state.tabs, tabId), childrenLoading: true, childrenError: null },
+          },
+        }))
+        try {
+          const res = await fetchWithTimeout(`/api/connections/${connId}/objects?path=${encodeURIComponent(topic)}`)
+          if (!res.ok) {
+            const body = await res.json().catch(() => ({ error: res.statusText }))
+            throw new Error(body.error || res.statusText)
+          }
+          const children = (await res.json()) as ObjectItem[]
+          set((state) => ({
+            tabs: {
+              ...state.tabs,
+              [tabId]: { ...ensureState(state.tabs, tabId), children, childrenLoading: false },
+            },
+          }))
+        } catch (error) {
+          set((state) => ({
             tabs: {
               ...state.tabs,
               [tabId]: {
-                ...tab,
-                messages: [...tab.messages, ...older],
+                ...ensureState(state.tabs, tabId),
+                childrenLoading: false,
+                childrenError: (error as Error).message,
+              },
+            },
+          }))
+        } finally {
+          kafkaChildrenRequests.delete(requestKey)
+        }
+      })()
+
+      kafkaChildrenRequests.set(requestKey, request)
+      return request
+    },
+
+    // fetchMessages loads the newest browse page. It is browse-only: content
+    // search runs through searchTopic/scanMore, never here, so a "Search topic"
+    // session and a plain page load can never contend for the same state.
+    fetchMessages: async (connId, topic, tabId) => {
+      const current = ensureState(get().tabs, tabId)
+      const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, null)
+      const pending = kafkaMessageRequests.get(requestKey)
+      if (pending) {
+        return pending
+      }
+
+      const request = (async () => {
+        set((state) => ({
+          tabs: {
+            ...state.tabs,
+            [tabId]: { ...ensureState(state.tabs, tabId), messagesLoading: true, messagesError: null },
+          },
+        }))
+        try {
+          const data = await requestMessages(connId, topic, current.partitionFilter, null, null)
+          set((state) => ({
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...ensureState(state.tabs, tabId),
+                messages: data.rows ?? [],
+                total: data.total,
                 hasOlder: Boolean(data.meta?.has_older),
                 nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
-                scanned: tab.scanned + (data.meta?.scanned ?? 0),
                 partial: Boolean(data.meta?.partial),
                 partialReason: data.meta?.partial_reason ?? null,
                 partitionsTotal: data.meta?.partitions_total ?? 0,
                 partitionsCompleted: data.meta?.partitions_completed ?? 0,
                 messagesReturned: data.meta?.messages_returned ?? 0,
-                loadingOlder: false,
+                messagesLoading: false,
               },
             },
-          }
-        })
-      } catch (error) {
+          }))
+        } catch (error) {
+          set((state) => ({
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...ensureState(state.tabs, tabId),
+                messagesLoading: false,
+                messagesError: (error as Error).message,
+              },
+            },
+          }))
+        } finally {
+          kafkaMessageRequests.delete(requestKey)
+        }
+      })()
+
+      kafkaMessageRequests.set(requestKey, request)
+      return request
+    },
+
+    // fetchOlderMessages loads the next older browse page and appends it. A
+    // client-side "Filter loaded" predicate simply re-derives over the enlarged
+    // raw set, so loading older while filtering surfaces more matches.
+    fetchOlderMessages: async (connId, topic, tabId) => {
+      const current = ensureState(get().tabs, tabId)
+      if (!current.nextBeforeOffsets || current.loadingOlder) {
+        return
+      }
+      const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, current.nextBeforeOffsets)
+      const pending = kafkaMessageRequests.get(requestKey)
+      if (pending) {
+        return pending
+      }
+
+      const request = (async () => {
         set((state) => ({
           tabs: {
             ...state.tabs,
-            [tabId]: {
-              ...ensureState(state.tabs, tabId),
-              loadingOlder: false,
-              messagesError: (error as Error).message,
-            },
+            [tabId]: { ...ensureState(state.tabs, tabId), loadingOlder: true, messagesError: null },
           },
         }))
-      } finally {
-        kafkaMessageRequests.delete(requestKey)
+        try {
+          const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, null)
+          set((state) => {
+            const tab = ensureState(state.tabs, tabId)
+            const seen = new Set(tab.messages.map((row) => `${row.partition}:${row.offset}`))
+            const older = (data.rows ?? []).filter((row) => !seen.has(`${row.partition}:${row.offset}`))
+            return {
+              tabs: {
+                ...state.tabs,
+                [tabId]: {
+                  ...tab,
+                  messages: [...tab.messages, ...older],
+                  hasOlder: Boolean(data.meta?.has_older),
+                  nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
+                  partial: Boolean(data.meta?.partial),
+                  partialReason: data.meta?.partial_reason ?? null,
+                  partitionsTotal: data.meta?.partitions_total ?? 0,
+                  partitionsCompleted: data.meta?.partitions_completed ?? 0,
+                  messagesReturned: data.meta?.messages_returned ?? 0,
+                  loadingOlder: false,
+                },
+              },
+            }
+          })
+        } catch (error) {
+          set((state) => ({
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...ensureState(state.tabs, tabId),
+                loadingOlder: false,
+                messagesError: (error as Error).message,
+              },
+            },
+          }))
+        } finally {
+          kafkaMessageRequests.delete(requestKey)
+        }
+      })()
+
+      kafkaMessageRequests.set(requestKey, request)
+      return request
+    },
+
+    setPartitionFilter: async (connId, topic, tabId, partition) => {
+      // Changing partition scope is a fresh browse of that scope: abort any scan
+      // and drop both the search session and the client-side filter so the view
+      // is unambiguous.
+      kafkaScanControllers.get(tabId)?.abort()
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            partitionFilter: partition,
+            messages: [],
+            nextBeforeOffsets: null,
+            hasOlder: false,
+            filterField: '',
+            filterValue: '',
+            filterActive: false,
+            searchField: '',
+            searchValue: '',
+            searchActive: false,
+            scanning: false,
+            scanned: 0,
+            scanPartial: false,
+            partial: false,
+            partialReason: null,
+            partitionsTotal: 0,
+            partitionsCompleted: 0,
+            messagesReturned: 0,
+          },
+        },
+      }))
+      await get().fetchMessages(connId, topic, tabId)
+    },
+
+    setLoadedFilter: (tabId, field, value) => {
+      const trimmed = field.trim()
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            filterField: trimmed,
+            filterValue: value,
+            filterActive: trimmed !== '',
+          },
+        },
+      }))
+    },
+
+    clearLoadedFilter: (tabId) => {
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            filterField: '',
+            filterValue: '',
+            filterActive: false,
+          },
+        },
+      }))
+    },
+
+    searchTopic: async (connId, topic, tabId, field, value) => {
+      const trimmed = field.trim()
+      if (trimmed === '') return
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            searchField: trimmed,
+            searchValue: value,
+            searchActive: true,
+            // A topic scan replaces the loaded view with its matches; drop any
+            // client-side filter so the two operations never stack on one set.
+            filterField: '',
+            filterValue: '',
+            filterActive: false,
+          },
+        },
+      }))
+      await runScanStep(connId, topic, tabId, true)
+    },
+
+    scanMore: async (connId, topic, tabId) => {
+      await runScanStep(connId, topic, tabId, false)
+    },
+
+    cancelScan: (tabId) => {
+      // Abort the in-flight HTTP request (not just stop the next step). The
+      // aborted request's handler flips `scanning` off and keeps the matches
+      // found so far; set it here too so the UI reacts immediately.
+      kafkaScanControllers.get(tabId)?.abort()
+      set((state) => ({
+        tabs: { ...state.tabs, [tabId]: { ...ensureState(state.tabs, tabId), scanning: false } },
+      }))
+    },
+
+    clearSearch: async (connId, topic, tabId) => {
+      kafkaScanControllers.get(tabId)?.abort()
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            searchField: '',
+            searchValue: '',
+            searchActive: false,
+            scanning: false,
+            scanned: 0,
+            scanPartial: false,
+            messages: [],
+            nextBeforeOffsets: null,
+            hasOlder: false,
+          },
+        },
+      }))
+      await get().fetchMessages(connId, topic, tabId)
+    },
+
+    produce: async (connId, request) => {
+      const res = await fetchWithTimeout(
+        `/api/connections/${connId}/produce`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        },
+        30000
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(body.error || res.statusText)
       }
-    })()
-
-    kafkaMessageRequests.set(requestKey, request)
-    return request
-  },
-
-  setPartitionFilter: async (connId, topic, tabId, partition) => {
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: {
-          ...ensureState(state.tabs, tabId),
-          partitionFilter: partition,
-          messages: [],
-          nextBeforeOffsets: null,
-          hasOlder: false,
-          partial: false,
-          partialReason: null,
-          partitionsTotal: 0,
-          partitionsCompleted: 0,
-          messagesReturned: 0,
-        },
-      },
-    }))
-    await get().fetchMessages(connId, topic, tabId)
-  },
-
-  setSearch: async (connId, topic, tabId, field, value) => {
-    const trimmed = field.trim()
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: {
-          ...ensureState(state.tabs, tabId),
-          searchField: trimmed,
-          searchValue: value,
-          searchActive: trimmed !== '',
-          messages: [],
-          nextBeforeOffsets: null,
-          hasOlder: false,
-          scanned: 0,
-          partial: false,
-          partialReason: null,
-          partitionsTotal: 0,
-          partitionsCompleted: 0,
-          messagesReturned: 0,
-        },
-      },
-    }))
-    await get().fetchMessages(connId, topic, tabId)
-  },
-
-  clearSearch: async (connId, topic, tabId) => {
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: {
-          ...ensureState(state.tabs, tabId),
-          searchField: '',
-          searchValue: '',
-          searchActive: false,
-          messages: [],
-          nextBeforeOffsets: null,
-          hasOlder: false,
-          scanned: 0,
-          partial: false,
-          partialReason: null,
-          partitionsTotal: 0,
-          partitionsCompleted: 0,
-          messagesReturned: 0,
-        },
-      },
-    }))
-    await get().fetchMessages(connId, topic, tabId)
-  },
-
-  deepScan: async (connId, topic, tabId, field, value) => {
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: true, deepScanCanceled: false },
-      },
-    }))
-    // First window (resets messages/scanned/cursor; preserves the deepScan flags on merge).
-    await get().setSearch(connId, topic, tabId, field, value)
-    // Auto-loop "Scan more" until found / beginning / error / no cursor / canceled.
-    while (true) {
-      const t = ensureState(get().tabs, tabId)
-      if (t.deepScanCanceled || t.messages.length > 0 || !t.hasOlder || t.messagesError || !t.nextBeforeOffsets) {
-        break
-      }
-      await get().fetchOlderMessages(connId, topic, tabId)
-    }
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: false },
-      },
-    }))
-  },
-
-  cancelDeepScan: (tabId) => {
-    set((state) => ({
-      tabs: {
-        ...state.tabs,
-        [tabId]: { ...ensureState(state.tabs, tabId), deepScanCanceled: true },
-      },
-    }))
-  },
-
-  produce: async (connId, request) => {
-    const res = await fetchWithTimeout(
-      `/api/connections/${connId}/produce`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(request),
-      },
-      30000
-    )
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
-    return (await res.json()) as KafkaProduceResult
-  },
-}))
+      return (await res.json()) as KafkaProduceResult
+    },
+  }
+})
