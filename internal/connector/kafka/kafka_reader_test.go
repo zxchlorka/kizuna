@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/zxchlorka/kizuna/internal/connector"
@@ -865,5 +866,152 @@ func TestComputeFrontierScanningRequiresCompletionForRowBasedAdvance(t *testing.
 	frontier = computeFrontier(frontierWindows, rows, true, map[int32]bool{0: true}, map[int32]int64{})
 	if frontier[0] != 90 {
 		t.Fatalf("scanning: a completed partition's rows must advance the cursor, got %d, want 90", frontier[0])
+	}
+}
+
+// listedOffsets builds a kadm.ListedOffsets for one topic from a partition->offset
+// map, so snapshotRead can be driven directly in a unit test without a live broker.
+func listedOffsets(topic string, byPartition map[int32]int64) kadm.ListedOffsets {
+	inner := make(map[int32]kadm.ListedOffset, len(byPartition))
+	for id, off := range byPartition {
+		inner[id] = kadm.ListedOffset{Topic: topic, Partition: id, Offset: off}
+	}
+	return kadm.ListedOffsets{topic: inner}
+}
+
+// snapshotRead's partitions_completed count (len(consumed.completed), surfaced as
+// Meta["partitions_completed"]) must never equal partitions_total (len(scoped))
+// while the response is flagged partial. This guards the common adaptive-widening
+// partial path: round 1 completes ALL scoped partitions with a shallow quota, the
+// page under-fills, then a deeper widening round is cut short by the budget and
+// returns partial (some partitions complete, some don't). A permissive cross-round
+// union of completed would leave every partition marked completed even though the
+// response is partial — a self-contradictory "N of N partitions responded" next to
+// a partial badge. Each round must instead be authoritative for the partitions it
+// re-attempts, so a partition widened into again and cut off flips back to
+// not-completed for this response.
+func TestSnapshotReadPartialNeverReportsAllPartitionsCompleted(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	// Partitions 0 and 1 have a deep backlog (start 0); partition 2 is a shallow
+	// tail (start 980) that round 1 fully drains, so it is never re-attempted.
+	starts := listedOffsets(topic, map[int32]int64{0: 0, 1: 0, 2: 980})
+	ends := listedOffsets(topic, map[int32]int64{0: 1000, 1: 1000, 2: 1000})
+
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		// Round 1: every scoped partition completes its shallow window via an empty
+		// end fetch (high watermark already covers the window), contributing zero
+		// rows — the page under-fills, forcing a widening round.
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 1000},
+			partitionFetch{partition: 1, highWatermark: 1000},
+			partitionFetch{partition: 2, highWatermark: 1000},
+		),
+		// Round 2 widens partitions 0 and 1 (partition 2 is fully drained). Partition
+		// 0 completes (record at its window's upper-1); partition 1 delivers a record
+		// but never reaches its end, so it stays incomplete until the budget expires
+		// and consumeWindows returns a partial (non-error) round.
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 1000, records: []*kgo.Record{
+				fetchRecord(topic, 0, 965, `{"n":965}`),
+			}},
+			partitionFetch{partition: 1, highWatermark: 1000, records: []*kgo.Record{
+				fetchRecord(topic, 1, 900, `{"n":900}`),
+			}},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	// A short deadline forces round 2's widened read to be cut short by the budget.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	scoped := []int32{0, 1, 2}
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, 100)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+	if !res.partial {
+		t.Fatalf("expected a partial response when a widened round is cut off by the budget")
+	}
+	// The invariant: a partial response can never claim every scoped partition
+	// completed.
+	if len(res.completed) >= len(scoped) {
+		t.Fatalf("partial response reported partitions_completed=%d >= partitions_total=%d (self-contradictory)",
+			len(res.completed), len(scoped))
+	}
+	// Concretely: partition 2 (fully drained in round 1, never re-attempted) stays
+	// completed; partition 0 completes again in round 2; partition 1 was re-attempted
+	// and cut off, so it flips back to not-completed.
+	if !res.completed[0] {
+		t.Fatalf("partition 0 completed round 2 and must stay completed, got %#v", res.completed)
+	}
+	if res.completed[1] {
+		t.Fatalf("partition 1 was widened into and cut off — it must NOT count as completed, got %#v", res.completed)
+	}
+	if !res.completed[2] {
+		t.Fatalf("partition 2 was fully drained in round 1 and never re-attempted — it must stay completed, got %#v", res.completed)
+	}
+	if len(res.completed) != 2 {
+		t.Fatalf("expected exactly 2 completed partitions (0 and 2), got %d: %#v", len(res.completed), res.completed)
+	}
+}
+
+// The companion to the partial path above: when an ENTIRE widening round errors
+// (zero completions that round, e.g. the read budget expires before any widened
+// partition finishes) after an earlier round already completed partitions,
+// snapshotRead returns the earlier work as a partial page. Every partition
+// attempted in the failed round must be excluded from partitions_completed too —
+// snapshotRead knows them from its own local `windows` map even though
+// consumeWindows returned an error, not a *consumeResult. Without this, the
+// error branch would keep the prior round's stale completed union and again report
+// partitions_completed == partitions_total on a partial response.
+func TestSnapshotReadPartialAfterErroredRoundExcludesAttemptedPartitions(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	starts := listedOffsets(topic, map[int32]int64{0: 0, 1: 0, 2: 980})
+	ends := listedOffsets(topic, map[int32]int64{0: 1000, 1: 1000, 2: 1000})
+
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		// Round 1: all three scoped partitions complete cleanly with zero rows, so
+		// the page under-fills and a widening round is required.
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 1000},
+			partitionFetch{partition: 1, highWatermark: 1000},
+			partitionFetch{partition: 2, highWatermark: 1000},
+		),
+		// Round 2 widens partitions 0 and 1 (partition 2 is fully drained). No round
+		// is scripted for it, so the fake blocks until the deadline and consumeWindows
+		// returns errReadBudgetExhausted — zero completions that round.
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+
+	scoped := []int32{0, 1, 2}
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, 100)
+	if err != nil {
+		t.Fatalf("snapshotRead must return the earlier round's work as a partial page, not an error: %v", err)
+	}
+	if !res.partial {
+		t.Fatalf("expected a partial response when the widening round's budget is exhausted")
+	}
+	if len(res.completed) >= len(scoped) {
+		t.Fatalf("partial response reported partitions_completed=%d >= partitions_total=%d (self-contradictory)",
+			len(res.completed), len(scoped))
+	}
+	// Partitions 0 and 1 were attempted in the errored round and must be excluded;
+	// partition 2 was fully drained in round 1 and never re-attempted, so it stays.
+	if res.completed[0] || res.completed[1] {
+		t.Fatalf("partitions attempted in the errored widening round must be excluded from the count, got %#v", res.completed)
+	}
+	if !res.completed[2] {
+		t.Fatalf("the fully-drained partition 2 must stay completed, got %#v", res.completed)
+	}
+	if len(res.completed) != 1 {
+		t.Fatalf("expected exactly 1 completed partition (2), got %d: %#v", len(res.completed), res.completed)
 	}
 }
