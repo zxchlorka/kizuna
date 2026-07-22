@@ -198,6 +198,82 @@ describe('Cancel aborts the in-flight request', () => {
   })
 })
 
+describe('loadInitialMessages — mount-path guard against search clobbering', () => {
+  it('does NOT browse-overwrite an active search session when the tab remounts', async () => {
+    // First: run a search so the tab holds scan matches + searchActive.
+    const searchFetch = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 7)],
+          total: 1,
+          has_more: false,
+          meta: { scanning: true, scanned: 40, matched: 1, has_older: true, next_before_offsets: { '0': 5 } },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', searchFetch as unknown as typeof fetch)
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-remount', 'a.b', 'x')
+
+    const afterSearch = useKafkaStore.getState().tabs['tab-remount']
+    expect(afterSearch.searchActive).toBe(true)
+    expect(afterSearch.messages).toHaveLength(1)
+    expect(afterSearch.scanned).toBe(40)
+    expect(afterSearch.nextBeforeOffsets).toEqual({ '0': 5 })
+
+    // Now simulate KafkaTopicView remounting (tab-switch-away-and-back): the
+    // mount effect fires loadInitialMessages for the same tab. It must issue NO
+    // browse request and leave messages/scanned/searchActive/cursor intact — the
+    // reviewer's deterministic case #2.
+    const browseFetch = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 9), scanRow(0, 8)],
+          total: 2,
+          has_more: false,
+          meta: { has_older: false, partitions_total: 1, partitions_completed: 1, messages_returned: 2 },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', browseFetch as unknown as typeof fetch)
+
+    await useKafkaStore.getState().loadInitialMessages('c1', 'topic', 'tab-remount')
+
+    expect(browseFetch).not.toHaveBeenCalled()
+    const tab = useKafkaStore.getState().tabs['tab-remount']
+    expect(tab.searchActive).toBe(true)
+    expect(tab.messages).toHaveLength(1)
+    expect(tab.messages[0].offset).toBe(7)
+    expect(tab.scanned).toBe(40)
+    expect(tab.nextBeforeOffsets).toEqual({ '0': 5 })
+  })
+
+  it('loads the browse page for a brand-new tab with no active search', async () => {
+    const browseFetch = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 9), scanRow(0, 8)],
+          total: 2,
+          has_more: false,
+          meta: { has_older: false, partitions_total: 1, partitions_completed: 1, messages_returned: 2 },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', browseFetch as unknown as typeof fetch)
+
+    await useKafkaStore.getState().loadInitialMessages('c1', 'topic', 'tab-new')
+
+    expect(browseFetch).toHaveBeenCalledTimes(1)
+    const browseUrl = decodeURIComponent(String(browseFetch.mock.calls[0][0]))
+    expect(browseUrl).not.toContain('match_field')
+    const tab = useKafkaStore.getState().tabs['tab-new']
+    expect(tab.searchActive).toBe(false)
+    expect(tab.messages).toHaveLength(2)
+  })
+})
+
 describe('Clearing a search returns to browse', () => {
   it('clearSearch reloads a browse page with no match filter', async () => {
     const fetchMock = vi

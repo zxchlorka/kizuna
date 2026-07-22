@@ -40,6 +40,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   )
   const tab = useKafkaStore((state) => state.tabs[tabId])
   const fetchTopicChildren = useKafkaStore((state) => state.fetchTopicChildren)
+  const loadInitialMessages = useKafkaStore((state) => state.loadInitialMessages)
   const fetchMessages = useKafkaStore((state) => state.fetchMessages)
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
@@ -60,13 +61,20 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
     // Messages are the critical-path content for this view (first paint of
     // the Messages tab); topic children (partition list / consumer group
     // counts — used by the Partitions/Consumer Groups tabs and the header's
-    // summary counts) are secondary. Kick the messages fetch off first and
+    // summary counts) are secondary. Kick the messages load off first and
     // only start the children fetch once it settles, so both requests don't
     // compete for the same short read-budget window on initial load.
-    void fetchMessages(connId, topic, tabId).finally(() => {
+    //
+    // loadInitialMessages (not fetchMessages) so a REMOUNT of this tab — which
+    // happens on every tab switch, since DataViewPage renders KafkaTopicView
+    // only for the active tab — does not browse-overwrite an active "Search
+    // topic" session's matches. A brand-new tab still browse-loads normally;
+    // a search-active tab keeps its scan results and this resolves immediately,
+    // so the children fetch still runs.
+    void loadInitialMessages(connId, topic, tabId).finally(() => {
       void fetchTopicChildren(connId, topic, tabId)
     })
-  }, [connId, fetchMessages, fetchTopicChildren, tabId, topic])
+  }, [connId, loadInitialMessages, fetchTopicChildren, tabId, topic])
 
   useEffect(() => {
     void fetchLinks().catch(() => undefined)
