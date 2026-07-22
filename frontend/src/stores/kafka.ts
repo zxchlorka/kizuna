@@ -70,6 +70,11 @@ interface KafkaSearch {
 interface KafkaStore {
   tabs: Record<string, KafkaTopicTabState>
   fetchTopicChildren: (connId: string, topic: string, tabId: string) => Promise<void>
+  // Mount-time initial load. Guards an active search from being browse-clobbered
+  // when KafkaTopicView remounts (see implementation). Prefer this over
+  // fetchMessages for the view's mount effect; use fetchMessages for explicit
+  // browse refresh/produce paths.
+  loadInitialMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchOlderMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   setPartitionFilter: (connId: string, topic: string, tabId: string, partition: number | null) => Promise<void>
@@ -360,6 +365,29 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
 
       kafkaChildrenRequests.set(requestKey, request)
       return request
+    },
+
+    // loadInitialMessages is the mount-time "initial load" trigger for a topic
+    // tab (KafkaTopicView's mount effect). It is deliberately SEPARATE from
+    // fetchMessages because Zustand tab state outlives the component: DataViewPage
+    // renders KafkaTopicView only for the active tab, so it REMOUNTS on every tab
+    // switch. If the mount always browse-fetched, a tab already holding an active
+    // "Search topic" session (searchActive) would have its accumulated scan
+    // matches/cursor silently overwritten by a fresh browse page while the search
+    // header/scanned/next_before_offsets kept describing the old scan — the
+    // regression this guards against.
+    //
+    // Guard: if a search session is already active for this tab, leave it fully
+    // untouched and fetch nothing; otherwise load the newest browse page exactly
+    // as fetchMessages does. A brand-new tab has searchActive=false (ensureState
+    // synthesizes a default only for reading; it is never persisted), so its
+    // first-page priority load (Task 4) is unaffected. The link-jump flow is
+    // covered too: useOpenLinkTarget/useOpenLinkSource call searchTopic, which
+    // sets searchActive synchronously before React commits the mount and runs
+    // this effect, so the mount sees the active search and skips the browse.
+    loadInitialMessages: async (connId, topic, tabId) => {
+      if (ensureState(get().tabs, tabId).searchActive) return
+      await get().fetchMessages(connId, topic, tabId)
     },
 
     // fetchMessages loads the newest browse page. It is browse-only: content
