@@ -1015,3 +1015,177 @@ func TestSnapshotReadPartialAfterErroredRoundExcludesAttemptedPartitions(t *test
 		t.Fatalf("expected exactly 1 completed partition (2), got %d: %#v", len(res.completed), res.completed)
 	}
 }
+
+// TestConsumeWindowsHandlesOneSlowPartitionAmongManyWithinBudget frames the
+// partial-result guarantee as an explicit "one slow broker/partition among many
+// healthy ones" scenario — Task 8's slow-partition acceptance check, done as a
+// deterministic unit test through the fakeConsumer seam rather than real network
+// fault injection (per the plan's scoping decision). It extends
+// TestConsumeWindowsReturnsPartialWhenPartitionMissesBudget (a single fast + a
+// single slow partition) to SEVERAL fast partitions plus one slow one, and pins
+// down three things at once: the reader returns near its budget instead of
+// hanging on the slow partition, every fast partition's rows survive, and the
+// response is flagged partial=true rather than erroring or discarding the safe
+// data.
+func TestConsumeWindowsHandlesOneSlowPartitionAmongManyWithinBudget(t *testing.T) {
+	t.Parallel()
+
+	const (
+		topic     = "orders"
+		fastCount = 5
+		slowID    = int32(5)
+	)
+	// Five fast partitions each deliver their full 2-record window (offsets 0,1)
+	// in the first poll round, so each reaches its window end and completes. One
+	// slow partition delivers a single early record but never reaches its window
+	// end (it needs offset 199), so it stays unfinished until the read budget fires
+	// — exactly the shape of one broker/partition responding slower than the read
+	// budget while its peers respond normally.
+	parts := make([]partitionFetch, 0, fastCount+1)
+	for p := int32(0); p < fastCount; p++ {
+		parts = append(parts, partitionFetch{partition: p, highWatermark: 2, records: []*kgo.Record{
+			fetchRecord(topic, p, 0, `{"n":0}`),
+			fetchRecord(topic, p, 1, `{"n":1}`),
+		}})
+	}
+	parts = append(parts, partitionFetch{partition: slowID, highWatermark: 200, records: []*kgo.Record{
+		fetchRecord(topic, slowID, 10, `{"slow":true}`),
+	}})
+	fake := &fakeConsumer{rounds: []kgo.Fetches{fetchRound(topic, parts...)}}
+	conn := &KafkaConnector{consume: fake}
+
+	windows := make(map[int32]partitionWindow, fastCount+1)
+	for p := int32(0); p < fastCount; p++ {
+		windows[p] = partitionWindow{from: 0, upper: 2}
+	}
+	windows[slowID] = partitionWindow{from: 0, upper: 200} // needs offset 199, never delivered
+
+	const budget = 150 * time.Millisecond
+	start := time.Now()
+	res, err := conn.consumeWindows(context.Background(), topic, windows, 100, budget)
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("one slow partition among many must be a partial success, not an error: %v", err)
+	}
+	// Completes near the budget rather than hanging on the slow partition.
+	if elapsed > time.Second {
+		t.Fatalf("reader must return near its %v budget, took %v", budget, elapsed)
+	}
+	if !res.partial {
+		t.Fatalf("expected partial=true when one partition misses the read budget")
+	}
+	if !res.timedOut {
+		t.Fatalf("expected timedOut=true (budget expired before the slow partition finished)")
+	}
+	// Every fast partition completed; the slow one did not.
+	for p := int32(0); p < fastCount; p++ {
+		if !res.completed[p] {
+			t.Fatalf("fast partition %d must complete within budget, got completed=%#v", p, res.completed)
+		}
+	}
+	if res.completed[slowID] {
+		t.Fatalf("the slow partition %d must remain incomplete, got completed=%#v", slowID, res.completed)
+	}
+	if len(res.completed) != fastCount {
+		t.Fatalf("expected exactly %d completed partitions, got %d: %#v", fastCount, len(res.completed), res.completed)
+	}
+	// The fast partitions' rows survive; the slow partition's single in-flight
+	// record is discarded because its window never completed.
+	if want := fastCount * 2; len(res.rows) != want {
+		t.Fatalf("expected %d rows from the completed fast partitions, got %d", want, len(res.rows))
+	}
+	for _, row := range res.rows {
+		if p, _ := row["partition"].(int32); p == slowID {
+			t.Fatalf("no row from the incomplete slow partition may be returned, got %#v", row)
+		}
+	}
+	// The slow partition's single delivered record still counts as a candidate read.
+	if want := fastCount*2 + 1; res.candidatesRead != want {
+		t.Fatalf("expected %d candidates read (%d fast + 1 slow), got %d", want, fastCount*2, res.candidatesRead)
+	}
+}
+
+// BenchmarkNormalBrowseLargePayloads measures the allocation cost of a normal-
+// browse page read over a topic whose candidates are almost all large (~128KB)
+// JSON payloads, MOST of which are discarded before the final page selection. It
+// is the "proper benchmark" extension of
+// TestConsumeWindowsDefersDeserializationUntilFinalPage (Task 8a's large-payload /
+// deferred-deserialization acceptance item).
+//
+// Both sub-benchmarks run the full normal-browse page pipeline over an IDENTICAL
+// candidate set built once outside the loop, so the only variable is when
+// deserialization happens:
+//
+//   - deferred: the shipped reader path, finalizeRows(selectNewestPrefixes(rows,
+//     page)). Only the ~page rows that survive selection are ever deserialized;
+//     allocation scales with messages_returned × payload.
+//   - eager_prerework: a faithful stand-in for the pre-rework reader, which
+//     deserialized EVERY candidate before the merge — selectNewestPrefixes(
+//     finalizeRows(rows), page). Allocation scales with candidates_read × payload.
+//
+// consumeWindows (the raw-byte copy) is identical in both, so the bytes/op and
+// allocs/op DELTA between them is exactly the cost of deserializing the discarded
+// candidates — the memory the deferred pipeline avoids. Recorded numbers and the
+// before/after scaling analysis live in task-8a-report.md.
+func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
+	const (
+		topic        = "big-payloads-bench"
+		partitions   = 6
+		perPartition = 100 // 600 candidates total
+		pageSize     = 100 // only 100 survive selection; 500 (~83%) are discarded
+	)
+	largePayload := `{"blob":"` + strings.Repeat("A", 128*1024) + `"}`
+
+	// Build the fetch round once; every record shares the one payload buffer, so
+	// the fixture itself is cheap. consumeWindows copies the bytes per candidate at
+	// read time, measured identically inside both sub-benchmark loops.
+	parts := make([]partitionFetch, 0, partitions)
+	for p := int32(0); p < partitions; p++ {
+		records := make([]*kgo.Record, 0, perPartition)
+		for off := int64(0); off < perPartition; off++ {
+			records = append(records, fetchRecord(topic, p, off, largePayload))
+		}
+		parts = append(parts, partitionFetch{partition: p, highWatermark: perPartition, records: records})
+	}
+	round := fetchRound(topic, parts...)
+	windows := make(map[int32]partitionWindow, partitions)
+	for p := int32(0); p < partitions; p++ {
+		windows[p] = partitionWindow{from: 0, upper: perPartition}
+	}
+
+	// read replays the same scripted round into a fresh reader and returns the raw,
+	// undeserialized candidates a normal browse would have consumed.
+	read := func(b *testing.B) *consumeResult {
+		res, err := (&KafkaConnector{consume: &fakeConsumer{rounds: []kgo.Fetches{round}}}).
+			consumeWindows(context.Background(), topic, windows, pageSize, 2*time.Second)
+		if err != nil {
+			b.Fatalf("consumeWindows: %v", err)
+		}
+		if want := partitions * perPartition; len(res.rows) != want {
+			b.Fatalf("expected %d raw candidates, got %d", want, len(res.rows))
+		}
+		return res
+	}
+
+	b.Run("deferred", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			res := read(b)
+			page := finalizeRows(selectNewestPrefixes(res.rows, pageSize))
+			if len(page) != pageSize {
+				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
+			}
+		}
+	})
+
+	b.Run("eager_prerework", func(b *testing.B) {
+		b.ReportAllocs()
+		for i := 0; i < b.N; i++ {
+			res := read(b)
+			page := selectNewestPrefixes(finalizeRows(res.rows), pageSize)
+			if len(page) != pageSize {
+				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
+			}
+		}
+	})
+}
