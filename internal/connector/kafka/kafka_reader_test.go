@@ -808,29 +808,93 @@ func TestConsumeWindowsRecordsCompletedFromForCompletedPartitionsOnly(t *testing
 	if _, ok := res.completedFrom[1]; ok {
 		t.Fatalf("completedFrom must not carry an entry for an incomplete partition, got %v", res.completedFrom[1])
 	}
+	// recordsRead is completedFrom's companion: it must stay UNSET for a window
+	// that completed with zero records, which is exactly what makes the
+	// completedFrom advance safe for that partition.
+	if res.recordsRead[0] {
+		t.Fatalf("partition 0 completed with zero records — recordsRead[0] must stay false")
+	}
+	if res.recordsRead[1] {
+		t.Fatalf("partition 1 never completed — recordsRead[1] must stay false")
+	}
 }
 
-// computeFrontier is the pure function behind GetData's pagination cursor. A
-// completed partition that produced zero rows (an empty/compacted window)
-// must still advance its cursor via completedFrom, otherwise the exact same
-// empty window would be rescanned forever by "Load older" / "Scan more" (the
-// bug this test guards against).
+// The companion of the test above: when a completed window DID contain records,
+// recordsRead must be set, so computeFrontier can refuse the completedFrom
+// advance and avoid skipping records that may not survive page selection.
+func TestConsumeWindowsMarksRecordsReadForNonEmptyCompletedWindow(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic,
+			// Partition 0 completes with records inside its window.
+			partitionFetch{partition: 0, highWatermark: 10, records: []*kgo.Record{
+				fetchRecord(topic, 0, 8, `{"n":8}`),
+				fetchRecord(topic, 0, 9, `{"n":9}`),
+			}},
+			// Partition 1 completes with zero records (empty/compacted range).
+			partitionFetch{partition: 1, highWatermark: 50},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	windows := map[int32]partitionWindow{
+		0: {from: 5, upper: 10},
+		1: {from: 45, upper: 50},
+	}
+	res, err := conn.consumeWindows(context.Background(), topic, windows, 100, 150*time.Millisecond)
+	if err != nil {
+		t.Fatalf("consumeWindows: %v", err)
+	}
+	if !res.recordsRead[0] {
+		t.Fatalf("partition 0's completed window held 2 records — recordsRead[0] must be true")
+	}
+	if res.recordsRead[1] {
+		t.Fatalf("partition 1's completed window held no record — recordsRead[1] must be false")
+	}
+	// Both still record completedFrom; recordsRead is the discriminator, not
+	// completedFrom's presence.
+	if from, ok := res.completedFrom[0]; !ok || from != 5 {
+		t.Fatalf("expected completedFrom[0] = 5, got %v (present=%v)", from, ok)
+	}
+	if from, ok := res.completedFrom[1]; !ok || from != 45 {
+		t.Fatalf("expected completedFrom[1] = 45, got %v (present=%v)", from, ok)
+	}
+}
+
+// computeFrontier is the pure function behind GetData's pagination cursor. It
+// must satisfy TWO opposing requirements at once:
+//
+//   - Task 3's stuck-cursor fix: a completed partition that contained zero
+//     records (an empty/compacted window) must still advance its cursor via
+//     completedFrom, otherwise the exact same empty window would be rescanned
+//     forever by "Load older" / "Scan more" (partition 1 below).
+//   - The silent-skip fix: a completed partition that DID contain records, none
+//     of which survived the final page trim, must NOT advance — advancing there
+//     moves the cursor past records that were read from the broker but never
+//     returned, losing them permanently (partition 3 below).
+//
+// recordsRead is what separates the two; both are asserted here so neither fix
+// can be regressed without failing this test.
 func TestComputeFrontierAdvancesCompletedEmptyPartitions(t *testing.T) {
 	t.Parallel()
 
 	frontierWindows := map[int32]partitionWindow{
 		0: {from: 0, upper: 100}, // has rows: row-based cursor wins
-		1: {from: 0, upper: 50},  // completed with zero rows: completedFrom wins
+		1: {from: 0, upper: 50},  // completed with zero records: completedFrom wins
 		2: {from: 0, upper: 30},  // neither rows nor completedFrom: stays at upper
+		3: {from: 0, upper: 40},  // completed WITH records, all trimmed: stays at upper
 	}
 	rows := []map[string]any{
 		{"partition": int32(0), "offset": int64(90)},
 		{"partition": int32(0), "offset": int64(95)},
 	}
-	completed := map[int32]bool{0: true, 1: true}
-	completedFrom := map[int32]int64{0: 80, 1: 20} // 0's completedFrom must lose to its rows
+	completed := map[int32]bool{0: true, 1: true, 3: true}
+	completedFrom := map[int32]int64{0: 80, 1: 20, 3: 15} // 0's completedFrom must lose to its rows
+	recordsRead := map[int32]bool{0: true, 3: true}
 
-	frontier := computeFrontier(frontierWindows, rows, false, completed, completedFrom)
+	frontier := computeFrontier(frontierWindows, rows, false, completed, completedFrom, recordsRead)
 
 	if frontier[0] != 90 {
 		t.Fatalf("partition 0: row-based cursor must win over completedFrom, got %d, want 90", frontier[0])
@@ -840,6 +904,10 @@ func TestComputeFrontierAdvancesCompletedEmptyPartitions(t *testing.T) {
 	}
 	if frontier[2] != 30 {
 		t.Fatalf("partition 2: untouched partition must keep its prior upper offset, got %d, want 30", frontier[2])
+	}
+	if frontier[3] != 40 {
+		t.Fatalf("partition 3: a completed window whose records were all trimmed out of the page must NOT "+
+			"advance past them (that is silent data loss), got %d, want 40", frontier[3])
 	}
 }
 
@@ -857,15 +925,327 @@ func TestComputeFrontierScanningRequiresCompletionForRowBasedAdvance(t *testing.
 	}
 
 	// Partition 0 not completed: row-based advance must NOT apply.
-	frontier := computeFrontier(frontierWindows, rows, true, map[int32]bool{}, map[int32]int64{})
+	frontier := computeFrontier(frontierWindows, rows, true, map[int32]bool{}, map[int32]int64{}, map[int32]bool{})
 	if frontier[0] != 100 {
 		t.Fatalf("scanning: an incomplete partition's rows must not advance the cursor, got %d, want 100", frontier[0])
 	}
 
 	// Partition 0 completed: row-based advance applies.
-	frontier = computeFrontier(frontierWindows, rows, true, map[int32]bool{0: true}, map[int32]int64{})
+	frontier = computeFrontier(frontierWindows, rows, true, map[int32]bool{0: true}, map[int32]int64{}, map[int32]bool{0: true})
 	if frontier[0] != 90 {
 		t.Fatalf("scanning: a completed partition's rows must advance the cursor, got %d, want 90", frontier[0])
+	}
+}
+
+// buildPaginationCursor must keep a partition that fully drained THIS request
+// (frontier == start) in next_before_offsets at its start offset rather than
+// dropping it, and derive has_older from whether ANY partition still has older data
+// (frontier > start), not from the map's size. This is the exact regression: the
+// pre-fix code omitted a drained partition, so the next request — seeing no cursor
+// entry for it — re-read that partition from the current end offset and re-showed
+// its rows, and has_older (then len(map) > 0) never reached false while any deeper
+// partition remained.
+func TestBuildPaginationCursorRetainsDrainedPartitionsAndDerivesHasOlder(t *testing.T) {
+	t.Parallel()
+
+	// Partition 0 (deep) still has older data below offset 10; partition 52 (shallow)
+	// drained THIS request down to its start offset 0. Both had a window, so both are
+	// present in frontier.
+	scoped := []int32{0, 52}
+	frontier := map[int32]int64{0: 10, 52: 0}
+	startOf := func(int32) int64 { return 0 }
+
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, nil, startOf)
+
+	if got, ok := cursor["52"]; !ok || got != 0 {
+		t.Fatalf("drained partition 52 must be retained at its start offset 0 (present=%v, value=%d); "+
+			"omitting it makes the next request re-read it from the top", ok, got)
+	}
+	if got, ok := cursor["0"]; !ok || got != 10 {
+		t.Fatalf("partition 0 must carry its frontier offset 10, got %d (present=%v)", got, ok)
+	}
+	if !hasOlder {
+		t.Fatalf("has_older must be true while partition 0 still has older data (frontier 10 > start 0)")
+	}
+}
+
+// The page AFTER a partition drains, that partition is no longer windowed (its
+// window builder hits upper <= low and skips it), so it is absent from frontier.
+// buildPaginationCursor must still carry it forward — pinned at its start offset —
+// from the incoming cursor, or it drops out of next_before_offsets and the request
+// after that re-reads it from the top. This is the second half of the same bug: the
+// live QA sweep saw partition 52 drain on page 6, get pinned on page 6, then vanish
+// from page 7's cursor (52 no longer windowed) and be re-read on page 8 (52:11
+// duplicate). Carrying it forward from beforeOffsets fixes that.
+func TestBuildPaginationCursorCarriesForwardAlreadyDrainedPartition(t *testing.T) {
+	t.Parallel()
+
+	// Partition 0 windowed with older data still remaining; partition 52 drained on a
+	// prior page (NOT windowed this request, so absent from frontier) but present in
+	// the incoming cursor at its start offset 0.
+	scoped := []int32{0, 52}
+	frontier := map[int32]int64{0: 10} // only partition 0 had a window this request
+	beforeOffsets := map[int32]int64{0: 20, 52: 0}
+	startOf := func(int32) int64 { return 0 }
+
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, startOf)
+
+	if got, ok := cursor["52"]; !ok || got != 0 {
+		t.Fatalf("already-drained partition 52 must be carried forward at its start offset 0 (present=%v, "+
+			"value=%d); dropping it makes the NEXT request re-read it from the top", ok, got)
+	}
+	if got, ok := cursor["0"]; !ok || got != 10 {
+		t.Fatalf("partition 0 must carry its frontier offset 10, got %d (present=%v)", got, ok)
+	}
+	if !hasOlder {
+		t.Fatalf("has_older must be true while partition 0 still has older data")
+	}
+}
+
+// An empty scoped partition (no records, no window, never in the cursor) must be
+// omitted entirely — it can never be re-read, so it needs no cursor entry, and
+// including it would just grow the map with noise. Also the complement of the
+// has_older check: once every partition with data has drained, has_older is false
+// even though the map is non-empty (it lists every drained-but-nonempty partition).
+func TestBuildPaginationCursorOmitsEmptyAndDerivesHasOlderFalseWhenAllDrained(t *testing.T) {
+	t.Parallel()
+
+	// Partitions 0 and 52 held data and have now drained to their start (0); partition
+	// 27 is empty (never windowed, never carried a cursor).
+	scoped := []int32{0, 27, 52}
+	frontier := map[int32]int64{0: 0, 52: 0} // both drained to their start; 27 never had a window
+	beforeOffsets := map[int32]int64{0: 2, 52: 2}
+	startOf := func(int32) int64 { return 0 }
+
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, startOf)
+
+	if hasOlder {
+		t.Fatalf("has_older must be false once every scoped partition with data has drained to its start")
+	}
+	if _, ok := cursor["27"]; ok {
+		t.Fatalf("the empty partition 27 must be omitted from the cursor, got %#v", cursor)
+	}
+	if len(cursor) != 2 {
+		t.Fatalf("the cursor must list exactly the two drained-but-nonempty partitions, got %#v", cursor)
+	}
+}
+
+// snapshotRead must SKIP building a window for a partition whose before_offsets
+// cursor sits at exactly its start offset (a partition drained on the previous
+// page). Without this, a drained partition retained in the cursor at its start
+// would still get a window and be re-read — defeating the buildPaginationCursor
+// fix. This proves the consumer side of the cursor contract with no live broker.
+func TestSnapshotReadSkipsPartitionWhoseCursorIsAtStart(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	starts := listedOffsets(topic, map[int32]int64{0: 0, 1: 0})
+	ends := listedOffsets(topic, map[int32]int64{0: 100, 1: 12})
+	// Cursor from the previous page: partition 1 fully drained (cursor == its start
+	// offset 0); partition 0 still has older data (cursor at offset 10).
+	beforeOffsets := map[int32]int64{0: 10, 1: 0}
+
+	// Only partition 0 is scripted to deliver; partition 1 must never be assigned or
+	// read because its window is skipped.
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic, partitionFetch{partition: 0, highWatermark: 100, records: []*kgo.Record{
+			fetchRecord(topic, 0, 8, `{"n":8}`),
+			fetchRecord(topic, 0, 9, `{"n":9}`),
+		}}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	res, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, beforeOffsets, 100)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+	if _, ok := frontierWindows[1]; ok {
+		t.Fatalf("partition 1 (cursor at its start offset) must NOT get a window — a window means it "+
+			"would be re-read from offset %d down, re-showing already-returned rows", ends[topic][1].Offset)
+	}
+	if _, ok := frontierWindows[0]; !ok {
+		t.Fatalf("partition 0 still has older data and must get a window")
+	}
+	// The reader must never have asked the broker to consume partition 1.
+	fake.mu.Lock()
+	added := fake.added
+	fake.mu.Unlock()
+	for _, assignment := range added {
+		if parts, ok := assignment[topic]; ok {
+			if _, has := parts[1]; has {
+				t.Fatalf("drained partition 1 must never be assigned for consumption, got assignment %#v", parts)
+			}
+		}
+	}
+	// Sanity: partition 0's window was read (offsets 8,9), confirming the read
+	// actually happened rather than the whole call short-circuiting.
+	if len(res.rows) != 2 {
+		t.Fatalf("expected partition 0's 2 rows to be read, got %d", len(res.rows))
+	}
+}
+
+// pageFrontier replays GetData's exact post-consume sequence (trim to the page
+// limit, sort newest-first, derive the cursor) so a test can assert the cursor a
+// real request would emit without a live broker or the metadata round-trips.
+func pageFrontier(consumed *consumeResult, frontierWindows map[int32]partitionWindow, limit int) ([]map[string]any, map[int32]int64) {
+	rows := selectNewestPrefixes(consumed.rows, limit)
+	sortRowsNewest(rows)
+	return rows, computeFrontier(frontierWindows, rows, false, consumed.completed, consumed.completedFrom, consumed.recordsRead)
+}
+
+// rowsContain reports whether the page holds a specific (partition, offset).
+func rowsContain(rows []map[string]any, partition int32, offset int64) bool {
+	for _, row := range rows {
+		id, _ := row["partition"].(int32)
+		off, _ := row["offset"].(int64)
+		if id == partition && off == offset {
+			return true
+		}
+	}
+	return false
+}
+
+// THE SILENT-SKIP REGRESSION. A partition can complete its window and yield
+// records that are then ALL trimmed out of the final page by selectNewestPrefixes
+// (its records are older than other partitions'). Before the fix, computeFrontier
+// saw no rows for it in the trimmed page and fell through to the completedFrom
+// advance, moving the cursor BELOW records that were read from the broker but
+// never returned — permanently unreachable data loss. Live evidence: the QA sweep
+// saw 749 of 785 seeded messages (3 partitions x 12 records skipped).
+//
+// The invariant: a partition's cursor may only advance past an offset that was
+// either RETURNED in this response, or confirmed to hold no record at all.
+func TestSnapshotReadDoesNotAdvanceCursorPastRecordsWithheldFromPage(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	const limit = 4
+	// Three scoped partitions => per-partition quota ceil(4/3) = 2, so one round
+	// reads 6 candidates for a 4-row page: 2 candidates must be trimmed.
+	starts := listedOffsets(topic, map[int32]int64{0: 0, 1: 0, 2: 0})
+	ends := listedOffsets(topic, map[int32]int64{0: 100, 1: 100, 2: 12})
+
+	// Partitions 0 and 1 sit at the newest offsets (fetchRecord derives the record
+	// timestamp from the offset, so higher offset == newer). Partition 2 is a
+	// shallow, much older tail: its two records complete its window but lose the
+	// newest-4 selection outright.
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 100, records: []*kgo.Record{
+				fetchRecord(topic, 0, 98, `{"n":98}`),
+				fetchRecord(topic, 0, 99, `{"n":99}`),
+			}},
+			partitionFetch{partition: 1, highWatermark: 100, records: []*kgo.Record{
+				fetchRecord(topic, 1, 98, `{"n":98}`),
+				fetchRecord(topic, 1, 99, `{"n":99}`),
+			}},
+			partitionFetch{partition: 2, highWatermark: 12, records: []*kgo.Record{
+				fetchRecord(topic, 2, 10, `{"n":10}`),
+				fetchRecord(topic, 2, 11, `{"n":11}`),
+			}},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1, 2}, starts, ends, nil, limit)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+	if !consumed.completed[2] {
+		t.Fatalf("precondition: partition 2 must complete its window, got %#v", consumed.completed)
+	}
+	if from, ok := consumed.completedFrom[2]; !ok || from != 10 {
+		t.Fatalf("precondition: partition 2 must record completedFrom=10, got %v (present=%v)", from, ok)
+	}
+	if len(consumed.rows) != 6 {
+		t.Fatalf("precondition: expected 6 candidates read across 3 partitions, got %d", len(consumed.rows))
+	}
+
+	rows, frontier := pageFrontier(consumed, frontierWindows, limit)
+
+	if len(rows) != limit {
+		t.Fatalf("precondition: expected a full %d-row page, got %d", limit, len(rows))
+	}
+	// Partition 2's records were read but WITHHELD from the page — the exact
+	// setup that used to lose them.
+	if rowsContain(rows, 2, 10) || rowsContain(rows, 2, 11) {
+		t.Fatalf("precondition: partition 2's records must be trimmed out of the page, got %#v", rows)
+	}
+	if frontier[2] != 12 {
+		t.Fatalf("SILENT SKIP: partition 2's cursor advanced to %d, past records 10 and 11 that were read "+
+			"from the broker but never returned to the caller — they can never be fetched again. "+
+			"It must stay at its prior upper offset 12 so the next page re-reads that window.", frontier[2])
+	}
+	// The returned partitions advance normally (their newest prefix is in the page).
+	if frontier[0] != 98 || frontier[1] != 98 {
+		t.Fatalf("returned partitions must advance to their lowest returned offset, got 0=%d 1=%d (want 98, 98)",
+			frontier[0], frontier[1])
+	}
+}
+
+// The adaptive-rounds aggregation caveat. completedFrom deepens with every
+// widening round, so a LATER round that reads a genuinely empty deeper window
+// must not let the cursor leapfrog past records an EARLIER round of the SAME
+// request read and withheld from the page. recordsRead is therefore sticky
+// (OR-ed across rounds), never overwritten the way completed/completedFrom are.
+func TestSnapshotReadLaterEmptyRoundCannotLeapfrogEarlierWithheldRecords(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	const limit = 4
+	starts := listedOffsets(topic, map[int32]int64{0: 0, 1: 0})
+	ends := listedOffsets(topic, map[int32]int64{0: 100, 1: 20})
+
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		// Round 1 (quota 2 per partition): partition 0 reads [98,100) and partition 1
+		// reads [18,20). Each yields a single record, so the 4-row page under-fills
+		// and a widening round follows. Partition 1's record at offset 19 is the one
+		// that must never be skipped.
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 100, records: []*kgo.Record{
+				fetchRecord(topic, 0, 99, `{"n":99}`),
+			}},
+			partitionFetch{partition: 1, highWatermark: 20, records: []*kgo.Record{
+				fetchRecord(topic, 1, 19, `{"n":19}`),
+			}},
+		),
+		// Round 2 widens to 4: partition 0 reads [94,98) and fills the page; partition
+		// 1's deeper window [14,18) is genuinely EMPTY (high watermark already past its
+		// upper bound), so it completes with zero records and records completedFrom=14.
+		// Taken alone that is a legitimate advance — but partition 1's offset-19 record
+		// from round 1 sits ABOVE it and is about to be trimmed off the page.
+		fetchRound(topic,
+			partitionFetch{partition: 0, highWatermark: 100, records: []*kgo.Record{
+				fetchRecord(topic, 0, 94, `{"n":94}`),
+				fetchRecord(topic, 0, 95, `{"n":95}`),
+				fetchRecord(topic, 0, 96, `{"n":96}`),
+				fetchRecord(topic, 0, 97, `{"n":97}`),
+			}},
+			partitionFetch{partition: 1, highWatermark: 20},
+		),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, limit)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+	// Precondition: the later empty round did deepen completedFrom for partition 1.
+	if from, ok := consumed.completedFrom[1]; !ok || from != 14 {
+		t.Fatalf("precondition: round 2 must deepen completedFrom[1] to 14, got %v (present=%v)", from, ok)
+	}
+	if !consumed.recordsRead[1] {
+		t.Fatalf("recordsRead must be sticky across rounds: round 1 read a record for partition 1")
+	}
+
+	rows, frontier := pageFrontier(consumed, frontierWindows, limit)
+
+	if rowsContain(rows, 1, 19) {
+		t.Fatalf("precondition: partition 1's offset-19 record must be trimmed out of the page, got %#v", rows)
+	}
+	if frontier[1] != 20 {
+		t.Fatalf("LEAPFROG: partition 1's cursor advanced to %d, past the offset-19 record that round 1 read "+
+			"and this page withheld. It must stay at its prior upper offset 20.", frontier[1])
 	}
 }
 
