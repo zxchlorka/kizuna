@@ -389,31 +389,29 @@ func TestKafkaRepresentativeQAIntegration(t *testing.T) {
 
 	// ---- Acceptance: 10+ page cursor sweep — zero duplicates, no silent skips. ----
 	//
-	// KNOWN BACKEND BUG surfaced by this check (see task-8a-report.md, "Concerns").
-	// GetData omits a fully-drained partition from next_before_offsets (the
-	// `frontier[id] > start` guard in messages.go). A missing before_offsets entry
-	// is treated by snapshotRead as "read from the end offset", so once a shallow
-	// partition drains and drops out of the cursor while a deeper partition still
-	// has older data (has_older stays true), the very next page re-reads every
-	// drained partition from the top — re-showing already-returned rows and
-	// preventing has_older from ever reaching false. This violates the cursor
-	// contract ("never re-shows the same row") and the DoD ("cursor pagination
-	// creates no duplicates"). The fix changes the response contract (drained
-	// partitions must be encoded in the cursor, or has_older must be derived
-	// separately), i.e. established Task-3 architecture — out of scope for this QA
-	// task, escalated to the controller.
+	// Regression guard for the cursor bug root-caused in task-8a-report.md and fixed
+	// in task-8a-cursor-fix-report.md. The pre-fix GetData omitted a fully-drained
+	// partition (frontier == start) from next_before_offsets. A missing before_offsets
+	// entry is treated by snapshotRead (and the scan path) as "read from the current
+	// end offset", so once a shallow partition drained and dropped out of the cursor
+	// while a deeper partition still had older data (has_older stayed true), the very
+	// next page re-read every drained partition from the top — re-showing
+	// already-returned rows and preventing has_older from ever reaching false. That
+	// violated the cursor contract ("never re-shows the same row") and the DoD
+	// ("cursor pagination creates no duplicates").
 	//
-	// While the bug exists this subtest SKIPS with the captured evidence (so the
-	// suite stays runnable) but the QA report records the item as FAILED. Once the
-	// reader is fixed, the sweep drains cleanly and this test ENFORCES the
-	// no-duplicate / no-skip / full-coverage contract instead of skipping.
+	// The fix keeps every scoped partition in next_before_offsets (drained ones pinned
+	// at their start offset, which the window builder then skips via `upper <= low`)
+	// and derives has_older from whether any partition still has frontier > start. This
+	// subtest now ENFORCES the full contract: a full sweep from newest to oldest that
+	// returns every (partition, offset) exactly once, never re-shows a row, and
+	// terminates with has_older=false.
 	t.Run("full_drain_lossless_pagination", func(t *testing.T) {
 		seen := make(map[string]bool, totalRecords)
 		perPartition := make(map[int32][]int64, partitions)
 		var cursor map[string]int64
 		pages := 0
 		const pageCap = 200
-		bug := ""
 		for {
 			filters := make([]connector.FilterExpr, 0, 1)
 			if cursor != nil {
@@ -430,37 +428,34 @@ func TestKafkaRepresentativeQAIntegration(t *testing.T) {
 				o, _ := row["offset"].(int64)
 				key := fmt.Sprintf("%d:%d", p, o)
 				if seen[key] {
-					bug = fmt.Sprintf("cursor re-showed already-returned message %s on page %d "+
-						"(the partition had fully drained and dropped out of next_before_offsets, "+
-						"then was re-read from the top while deeper partitions still had older data)", key, pages)
-					break
+					t.Fatalf("cursor re-showed already-returned message %s on page %d "+
+						"(a fully-drained partition must stay pinned in next_before_offsets at its start "+
+						"offset, not drop out and get re-read from the top)", key, pages)
 				}
 				seen[key] = true
 				perPartition[p] = append(perPartition[p], o)
 			}
-			if bug != "" {
-				break
-			}
 			hasOlder, _ := res.Meta["has_older"].(bool)
 			next, _ := res.Meta["next_before_offsets"].(map[string]int64)
-			if !hasOlder || len(next) == 0 {
+			if !hasOlder {
+				// has_older=false is the clean terminal state; the cursor must be gone.
+				if len(next) != 0 {
+					t.Fatalf("page %d reported has_older=false but still emitted a next_before_offsets cursor %#v", pages, next)
+				}
 				break
+			}
+			if len(next) == 0 {
+				t.Fatalf("page %d reported has_older=true but emitted no next_before_offsets cursor", pages)
 			}
 			cursor = next
 			if pages >= pageCap {
-				bug = fmt.Sprintf("pagination never terminated: still has_older=true after %d pages "+
-					"(drained partitions keep being re-read from the top)", pageCap)
-				break
+				t.Fatalf("pagination never terminated: still has_older=true after %d pages "+
+					"(a drained partition is being re-read from the top instead of skipped)", pageCap)
 			}
 		}
 
-		if bug != "" {
-			t.Skipf("KNOWN BACKEND BUG (task-8a-report.md): %s. Acceptance item FAILS pending a "+
-				"response-contract fix decided by the controller.", bug)
-		}
-
-		// Fixed path (enforced once the reader no longer re-reads drained partitions):
-		// every offset in every partition's [start,end) range returned exactly once.
+		// Every offset in every partition's [start,end) range must have been returned
+		// exactly once across the sweep.
 		if pages < 10 {
 			t.Logf("note: topic drained in %d pages (<10); the deep partition still exercised multi-page continuation", pages)
 		}

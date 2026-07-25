@@ -106,6 +106,23 @@ type consumeResult struct {
 	// place completed[id] is set, so it is only ever set for genuinely
 	// completed partitions.
 	completedFrom map[int32]int64
+	// recordsRead marks, for each partition that completed in THIS call, whether
+	// its completed window actually contained at least one record inside
+	// [window.from, window.upper). It is the guard that separates the two cases
+	// completedFrom alone cannot tell apart:
+	//
+	//   - completed window with ZERO records (empty / fully-compacted range):
+	//     advancing the cursor to completedFrom is safe and necessary (Task 3's
+	//     stuck-cursor fix — nothing is lost).
+	//   - completed window that DID contain records, none of which survived final
+	//     page selection: advancing to completedFrom would move the cursor past
+	//     records that were read from the broker but never returned to the
+	//     caller, making them permanently unreachable (silent data loss).
+	//
+	// Set at the same place completed[id]/completedFrom[id] are, so it is keyed
+	// only by genuinely completed partitions and always describes the same window
+	// completedFrom describes. See computeFrontier for how it is consumed.
+	recordsRead map[int32]bool
 }
 
 // GetData reads one page of messages, newest first. Filters:
@@ -225,18 +242,17 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 
 	sortRowsNewest(rows)
 
-	// Advance only partitions whose rows are actually returned to the caller.
-	// Unread partitions keep their prior upper offset, so partial broker replies
-	// never create pagination gaps.
-	frontier := computeFrontier(frontierWindows, rows, scanning, consumed.completed, consumed.completedFrom)
+	// Advance only partitions whose rows are actually returned to the caller (or
+	// whose window is confirmed to hold no record at all). Unread partitions, and
+	// partitions whose records were read but trimmed out of this page, keep their
+	// prior upper offset, so neither partial broker replies nor page selection
+	// can create pagination gaps.
+	frontier := computeFrontier(frontierWindows, rows, scanning, consumed.completed, consumed.completedFrom, consumed.recordsRead)
 
-	nextBefore := make(map[string]int64)
-	for id := range frontierWindows {
+	nextBefore, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, func(id int32) int64 {
 		start, _ := partitionOffsets(topic, id, starts, ends)
-		if frontier[id] > start {
-			nextBefore[strconv.Itoa(int(id))] = frontier[id]
-		}
-	}
+		return start
+	})
 
 	// partitions_total counts only the SCOPED partitions matching the current
 	// filter (1 when a single partition is selected) — a semantic correction
@@ -250,7 +266,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	meta := map[string]any{
 		"partitions_total":     len(scoped),
 		"partitions_completed": len(consumed.completed),
-		"has_older":            len(nextBefore) > 0,
+		"has_older":            hasOlder,
 		"candidates_read":      consumed.candidatesRead,
 	}
 	if scanning {
@@ -273,7 +289,12 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		}
 		meta["messages_returned"] = len(rows)
 	}
-	if len(nextBefore) > 0 {
+	// Emit the cursor only when there is genuinely more to fetch. next_before_offsets
+	// now includes every scoped partition (drained ones pinned at their start), so
+	// its size is no longer a "has more" signal; gate on hasOlder instead. This keeps
+	// the prior wire invariant the frontend relies on: next_before_offsets is present
+	// exactly when has_older is true (kafka.ts's "Scan more"/"Load older" guards).
+	if hasOlder {
 		meta["next_before_offsets"] = nextBefore
 	}
 
@@ -309,7 +330,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		},
 		Rows:    rows,
 		Total:   total,
-		HasMore: len(nextBefore) > 0,
+		HasMore: hasOlder,
 		Meta:    meta,
 	}, nil
 }
@@ -329,6 +350,7 @@ func (c *KafkaConnector) consumeWindows(
 		rows:          make([]map[string]any, 0, target),
 		completed:     make(map[int32]bool, len(windows)),
 		completedFrom: make(map[int32]int64, len(windows)),
+		recordsRead:   make(map[int32]bool, len(windows)),
 	}
 	if len(windows) == 0 {
 		return result, nil
@@ -406,6 +428,13 @@ func (c *KafkaConnector) consumeWindows(
 			}
 			result.completed[id] = true
 			result.completedFrom[id] = window.from
+			if len(rowsByPartition[id]) > 0 {
+				// This completed window held real records inside [from, upper).
+				// Whether they survive final page selection is decided later, so
+				// the cursor must not blind-advance past this window on the
+				// strength of completedFrom alone (see computeFrontier).
+				result.recordsRead[id] = true
+			}
 			result.rows = append(result.rows, rowsByPartition[id]...)
 			newlyCompleted[topic] = append(newlyCompleted[topic], id)
 		}
@@ -469,6 +498,7 @@ func resolveScanConsume(consumed *consumeResult, err error) (*consumeResult, err
 			rows:          make([]map[string]any, 0),
 			completed:     make(map[int32]bool),
 			completedFrom: make(map[int32]int64),
+			recordsRead:   make(map[int32]bool),
 			timedOut:      true,
 		}, nil
 	}
@@ -520,6 +550,7 @@ func (c *KafkaConnector) snapshotRead(
 		rows:          make([]map[string]any, 0, limit),
 		completed:     make(map[int32]bool, len(frontierWindows)),
 		completedFrom: make(map[int32]int64, len(frontierWindows)),
+		recordsRead:   make(map[int32]bool, len(frontierWindows)),
 	}
 	if len(frontierWindows) == 0 {
 		// Every scoped partition is empty at/below the cursor: a clean empty page.
@@ -593,6 +624,18 @@ func (c *KafkaConnector) snapshotRead(
 				// an earlier one for the same partition, so overwriting here always
 				// keeps the deepest confirmed bound for the cursor fallback.
 				aggregate.completedFrom[id] = consumed.completedFrom[id]
+				// recordsRead, unlike completed/completedFrom, is STICKY across
+				// rounds — it is OR-ed, never overwritten or deleted. completedFrom
+				// deepens with every widening round, so a later round that reads a
+				// genuinely empty deeper window would otherwise let the cursor
+				// leapfrog past records an EARLIER round of the same request read
+				// and withheld from the page. Because the rounds tile the range
+				// [completedFrom, upper) contiguously downward, the OR over all
+				// completed rounds answers exactly "did this request read any record
+				// in the range the cursor would advance past".
+				if consumed.recordsRead[id] {
+					aggregate.recordsRead[id] = true
+				}
 			} else {
 				delete(aggregate.completed, id)
 			}
@@ -857,23 +900,96 @@ func parseMatchFilter(filters []connector.FilterExpr) (field string, value strin
 	return field, value
 }
 
+// buildPaginationCursor turns one GetData call's per-partition frontier into the
+// wire cursor (next_before_offsets) plus the has_older flag.
+//
+// It emits an entry for EVERY scoped partition that has, or previously had, older
+// data, so none can silently drop out of the cursor and be re-read from the top on
+// a later page (the pagination bug this fixes). For each scoped partition id:
+//
+//   - If it had a read window this request (id present in frontier), it is keyed to
+//     its advanced frontier offset. A partition fully drained THIS request has
+//     frontier[id] == start and is still emitted, pinned at start.
+//   - Otherwise, if it carried an incoming cursor (beforeOffsets[id]) it was fully
+//     drained on an EARLIER page and skipped this request (its window builder hit
+//     upper <= low). It stays pinned at its start offset and is carried forward —
+//     without this it would vanish from the cursor the page AFTER it drained, and
+//     the next request would re-read it from the current end offset (a duplicate).
+//   - Otherwise it is an empty partition (no records — never a window, never a
+//     cursor entry). It is correctly omitted: it can never be re-read regardless,
+//     since snapshotRead always skips it (upper == end == start <= low).
+//
+// A missing before_offsets entry is NOT neutral: snapshotRead (and the scan path)
+// treat it as "read from the current end offset". Retained at its start offset the
+// next request instead builds upper == start, hits `if upper <= low { continue }`,
+// and skips it (neither re-read nor errored).
+//
+// has_older reflects whether ANY scoped partition still has genuinely older data
+// (its cursor offset > its start), NOT the size of the cursor map — which, now that
+// drained partitions are retained, is non-empty whenever any scoped partition has
+// ever held data.
+//
+// frontier is keyed exactly by the partitions that had a window this request (see
+// computeFrontier), so `off, windowed := frontier[id]` is the authoritative
+// "did this partition read a window" test.
+func buildPaginationCursor(
+	scoped []int32,
+	frontier map[int32]int64,
+	beforeOffsets map[int32]int64,
+	startOffset func(int32) int64,
+) (map[string]int64, bool) {
+	cursor := make(map[string]int64, len(scoped))
+	hasOlder := false
+	for _, id := range scoped {
+		start := startOffset(id)
+		if off, windowed := frontier[id]; windowed {
+			cursor[strconv.Itoa(int(id))] = off
+			if off > start {
+				hasOlder = true
+			}
+			continue
+		}
+		if _, carried := beforeOffsets[id]; carried {
+			cursor[strconv.Itoa(int(id))] = start
+		}
+	}
+	return cursor, hasOlder
+}
+
 // computeFrontier derives the per-partition pagination cursor for one GetData
 // call. It defaults every scoped partition to its original (pre-request)
 // upper bound, then advances it in two ways, in priority order:
 //  1. If the partition contributed rows that survived page selection, advance
 //     to the lowest such row's offset (the precise, lossless cursor).
-//  2. Otherwise, if the partition completed with zero rows in its window
-//     (completedFrom), advance to that confirmed lower bound — without this,
-//     an empty/compacted window would never move its cursor and would be
-//     rescanned forever by "Load older" / "Scan more".
+//  2. Otherwise, if the partition completed with zero records in its window
+//     (completedFrom and NOT recordsRead), advance to that confirmed lower
+//     bound — without this, an empty/compacted window would never move its
+//     cursor and would be rescanned forever by "Load older" / "Scan more".
+//
 // A partition that neither returned rows nor completed keeps its prior upper
 // offset untouched, per the cursor contract: never skip, never re-show a row.
+//
+// The invariant this function enforces:
+//
+//	A partition's cursor may only advance past an offset that was either
+//	(a) actually RETURNED to the caller in this response, or (b) confirmed to
+//	contain no record at all. It must never advance past a record that was read
+//	from the broker but withheld from the page.
+//
+// Case (a) is the row-based advance; case (b) is the completedFrom advance,
+// which is why it is gated on recordsRead. The gap between them — a window that
+// completed and yielded records, none of which survived selectNewestPrefixes'
+// trim to the page limit — is precisely the silent-skip bug: completedFrom would
+// move the cursor below records the caller never saw, making them permanently
+// unreachable. Such a partition keeps its prior upper offset so the very next
+// page re-reads that window and can return those records.
 func computeFrontier(
 	frontierWindows map[int32]partitionWindow,
 	rows []map[string]any,
 	scanning bool,
 	completed map[int32]bool,
 	completedFrom map[int32]int64,
+	recordsRead map[int32]bool,
 ) map[int32]int64 {
 	frontier := make(map[int32]int64, len(frontierWindows))
 	for id, window := range frontierWindows {
@@ -888,6 +1004,13 @@ func computeFrontier(
 	for id, from := range completedFrom {
 		if _, hasRows := reached[id]; hasRows {
 			continue // the row-based cursor above is authoritative when rows exist
+		}
+		if recordsRead[id] {
+			// The window completed and DID hold records, but none of them are in
+			// this response (they were trimmed out of the final page). Advancing to
+			// `from` here would skip them forever. Leave the cursor at the prior
+			// upper bound so the next page re-reads this window.
+			continue
 		}
 		frontier[id] = from
 	}
