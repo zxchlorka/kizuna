@@ -38,10 +38,17 @@ type fakeConsumer struct {
 	// clientClosed makes every poll report a closed client.
 	clientClosed bool
 
-	added   []map[string]map[int32]kgo.Offset
-	removed []map[string][]int32
-	paused  [][]int32
-	resumed []map[string][]int32
+	added        []map[string]map[int32]kgo.Offset
+	removed      []map[string][]int32
+	paused       [][]int32
+	resumed      []map[string][]int32
+	purgedTopics []string
+}
+
+func (f *fakeConsumer) PurgeTopicsFromConsuming(topics ...string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.purgedTopics = append(f.purgedTopics, topics...)
 }
 
 func (f *fakeConsumer) AddConsumePartitions(p map[string]map[int32]kgo.Offset) {
@@ -1568,4 +1575,195 @@ func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
 			}
 		}
 	})
+}
+
+// --- Topic delete/recreate recovery -----------------------------------------
+//
+// Kafka addresses topics by UUID in fetch requests (KIP-516), and the long-lived
+// kgo.Client caches name -> UUID. Recreating a topic with the same name gives it a
+// NEW UUID, so the cached mapping is stale and the broker answers UnknownTopicID
+// forever. franz-go deliberately bubbles that up instead of retrying (source.go:
+// "the topic has been recreated and we will never consume the topic again").
+// Before this, the only cure was deleting and recreating the whole connection.
+
+// consumeWindows must surface the stale-topic-ID failure as its own sentinel,
+// BEFORE normalizeKafkaError — that helper wraps the message as a string and would
+// drop the *kerr.Error from the chain, making the condition undetectable.
+func TestConsumeWindowsSurfacesTopicIncarnationChange(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic, partitionFetch{partition: 0, err: kerr.UnknownTopicID}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	_, err := conn.consumeWindows(
+		context.Background(),
+		topic,
+		map[int32]partitionWindow{0: {from: 0, upper: 10}},
+		10,
+		time.Second,
+	)
+
+	if !errors.Is(err, errTopicIncarnationChanged) {
+		t.Fatalf("consumeWindows error = %v, want it to match errTopicIncarnationChanged", err)
+	}
+	// The kerr cause must still be reachable for logging/diagnosis.
+	if !errors.Is(err, kerr.UnknownTopicID) {
+		t.Fatalf("consumeWindows error = %v, want the kerr.UnknownTopicID cause preserved", err)
+	}
+}
+
+// One purge + exactly one retry. The retry must drop the incoming cursor: those
+// offsets belong to the PREVIOUS incarnation of the topic and mean nothing in the
+// new one.
+func TestConsumeWithIncarnationRetryPurgesAndDropsCursor(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{}
+	conn := &KafkaConnector{consume: fake}
+
+	var cursors []map[int32]int64
+	attempts := 0
+	attempt := func(cursor map[int32]int64) (*consumeResult, map[int32]partitionWindow, error) {
+		attempts++
+		cursors = append(cursors, cursor)
+		if attempts == 1 {
+			return nil, nil, fmt.Errorf("%w: stale id", errTopicIncarnationChanged)
+		}
+		return &consumeResult{rows: []map[string]any{{"offset": int64(1)}}}, map[int32]partitionWindow{0: {from: 0, upper: 1}}, nil
+	}
+
+	consumed, windows, cursorReset, err := conn.consumeWithIncarnationRetry(topic, map[int32]int64{0: 42}, attempt)
+	if err != nil {
+		t.Fatalf("consumeWithIncarnationRetry: %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want exactly 2 (one retry)", attempts)
+	}
+	if cursors[0] == nil || cursors[0][0] != 42 {
+		t.Fatalf("first attempt must use the caller's cursor, got %#v", cursors[0])
+	}
+	if cursors[1] != nil {
+		t.Fatalf("retry must drop the previous incarnation's cursor, got %#v", cursors[1])
+	}
+	if !cursorReset {
+		t.Fatalf("cursorReset must be true so the frontend replaces rows instead of appending")
+	}
+	if len(consumed.rows) != 1 || windows == nil {
+		t.Fatalf("retry result not returned: rows=%#v windows=%#v", consumed, windows)
+	}
+	fake.mu.Lock()
+	purged := append([]string(nil), fake.purgedTopics...)
+	fake.mu.Unlock()
+	if len(purged) != 1 || purged[0] != topic {
+		t.Fatalf("expected exactly one consumer-side purge of %q, got %#v", topic, purged)
+	}
+}
+
+// A second failure is not retried again — it becomes a typed, actionable error
+// rather than a raw 500 carrying a broker message.
+func TestConsumeWithIncarnationRetryGivesUpAfterOneRetry(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{}
+	conn := &KafkaConnector{consume: fake}
+
+	attempts := 0
+	attempt := func(map[int32]int64) (*consumeResult, map[int32]partitionWindow, error) {
+		attempts++
+		return nil, nil, fmt.Errorf("%w: stale id", errTopicIncarnationChanged)
+	}
+
+	_, _, _, err := conn.consumeWithIncarnationRetry(topic, nil, attempt)
+
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want exactly 2 (no unbounded retry loop)", attempts)
+	}
+	if !errors.Is(err, connector.ErrUnavailable) {
+		t.Fatalf("error = %v, want connector.ErrUnavailable", err)
+	}
+	if !strings.Contains(err.Error(), topic) {
+		t.Fatalf("error %q must name the topic so the message is actionable", err.Error())
+	}
+}
+
+// A normal failure must not trigger a purge or a retry.
+func TestConsumeWithIncarnationRetryLeavesOtherErrorsAlone(t *testing.T) {
+	t.Parallel()
+
+	fake := &fakeConsumer{}
+	conn := &KafkaConnector{consume: fake}
+
+	attempts := 0
+	want := errors.New("broker exploded")
+	attempt := func(map[int32]int64) (*consumeResult, map[int32]partitionWindow, error) {
+		attempts++
+		return nil, nil, want
+	}
+
+	_, _, cursorReset, err := conn.consumeWithIncarnationRetry("orders", nil, attempt)
+
+	if attempts != 1 || !errors.Is(err, want) || cursorReset {
+		t.Fatalf("attempts=%d err=%v cursorReset=%v, want a single attempt returning the original error", attempts, err, cursorReset)
+	}
+	fake.mu.Lock()
+	purged := len(fake.purgedTopics)
+	fake.mu.Unlock()
+	if purged != 0 {
+		t.Fatalf("no purge may happen for an unrelated error, got %d", purged)
+	}
+}
+
+// With KeepRetryableFetchErrors the client stops stripping retryable fetch errors,
+// so the reader must ignore them itself and keep polling — franz-go still retries
+// them internally (metadata moves, a briefly unhealthy broker). Only
+// UnknownTopicID is acted on. This is the pattern KeepRetryableFetchErrors' own
+// documentation prescribes: "watch for ... UNKNOWN_TOPIC_ID errors being returned
+// in fetches (and ignore the other errors)".
+func TestConsumeWindowsIgnoresOtherRetryableFetchErrors(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic, partitionFetch{partition: 0, err: kerr.NotLeaderForPartition}),
+		fetchRound(topic, partitionFetch{partition: 0, highWatermark: 10, records: []*kgo.Record{
+			fetchRecord(topic, 0, 8, `{"n":8}`),
+			fetchRecord(topic, 0, 9, `{"n":9}`),
+		}}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	result, err := conn.consumeWindows(
+		context.Background(),
+		topic,
+		map[int32]partitionWindow{0: {from: 8, upper: 10}},
+		10,
+		2*time.Second,
+	)
+	if err != nil {
+		t.Fatalf("a retryable fetch error must not fail the read: %v", err)
+	}
+	if len(result.rows) != 2 {
+		t.Fatalf("rows = %d, want the 2 records from the round after the retryable error", len(result.rows))
+	}
+}
+
+// A genuinely fatal fetch error still fails the read rather than being polled over.
+func TestConsumeWindowsStillFailsOnNonRetryableFetchError(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic, partitionFetch{partition: 0, err: kerr.TopicAuthorizationFailed}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	_, err := conn.consumeWindows(context.Background(), topic, map[int32]partitionWindow{0: {from: 0, upper: 10}}, 10, time.Second)
+	if !errors.Is(err, connector.ErrForbidden) {
+		t.Fatalf("error = %v, want connector.ErrForbidden", err)
+	}
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/zxchlorka/kizuna/internal/connector"
 	"golang.org/x/sync/errgroup"
@@ -78,7 +79,22 @@ type partitionConsumer interface {
 	PauseFetchPartitions(map[string][]int32) map[string][]int32
 	ResumeFetchPartitions(map[string][]int32)
 	PollFetches(context.Context) kgo.Fetches
+	// PurgeTopicsFromConsuming drops the client's cached name -> topic-UUID
+	// mapping for a topic. Deliberately the consuming-only purge: the full
+	// PurgeTopicsFromClient also clears producer state, which can cause
+	// out-of-order sequence errors on the next Produce. The consumer-side purge
+	// touches nothing the producer owns, so one shared client stays safe.
+	PurgeTopicsFromConsuming(...string)
 }
+
+// errTopicIncarnationChanged marks the stale-topic-ID failure that follows a
+// delete/recreate of a topic under the same name. Kafka addresses topics by UUID
+// in fetch requests (KIP-516) and the long-lived client caches name -> UUID, so
+// the recreated topic's new UUID makes every fetch fail with UnknownTopicID until
+// the mapping is purged. It is a distinct sentinel because normalizeKafkaError
+// folds the *kerr.Error into a message string, which would make the condition
+// undetectable further up.
+var errTopicIncarnationChanged = errors.New("kafka topic incarnation changed")
 
 type consumeResult struct {
 	rows      []map[string]any
@@ -200,38 +216,49 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		frontierWindows map[int32]partitionWindow
 	)
 	consumeStart := time.Now()
-	if scanning {
-		// Content search reads a larger, evenly divided window per partition under
-		// its own scan budget. This path is deliberately separate from the normal
-		// browse quota so reader tuning never changes the scan budget.
-		perPartition := dividedWindow(maxScanMessages, len(scoped))
-		windows := make(map[int32]partitionWindow, len(scoped))
-		for _, id := range scoped {
-			start, end := partitionOffsets(topic, id, starts, ends)
-			upper := end
-			if before, ok := beforeOffsets[id]; ok && before < upper {
-				upper = before
+	// One attempt at reading, parameterised by the pagination cursor so the
+	// topic-recreation retry can re-run it with a cleared cursor.
+	readAttempt := func(cursor map[int32]int64) (*consumeResult, map[int32]partitionWindow, error) {
+		if scanning {
+			// Content search reads a larger, evenly divided window per partition under
+			// its own scan budget. This path is deliberately separate from the normal
+			// browse quota so reader tuning never changes the scan budget.
+			perPartition := dividedWindow(maxScanMessages, len(scoped))
+			windows := make(map[int32]partitionWindow, len(scoped))
+			for _, id := range scoped {
+				start, end := partitionOffsets(topic, id, starts, ends)
+				upper := end
+				if before, ok := cursor[id]; ok && before < upper {
+					upper = before
+				}
+				if upper <= start {
+					continue
+				}
+				from := upper - perPartition
+				if from < start {
+					from = start
+				}
+				windows[id] = partitionWindow{from: from, upper: upper}
 			}
-			if upper <= start {
-				continue
+			result, scanErr := resolveScanConsume(c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget))
+			if scanErr != nil {
+				return nil, nil, scanErr
 			}
-			from := upper - perPartition
-			if from < start {
-				from = start
-			}
-			windows[id] = partitionWindow{from: from, upper: upper}
+			return result, windows, nil
 		}
-		consumed, err = resolveScanConsume(c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget))
-		if err != nil {
-			return nil, err
-		}
-		frontierWindows = windows
-	} else {
 		// Normal browse: bounded-quota fast snapshot with adaptive refill.
-		consumed, frontierWindows, err = c.snapshotRead(ctx, topic, scoped, starts, ends, beforeOffsets, limit)
-		if err != nil {
-			return nil, err
-		}
+		return c.snapshotRead(ctx, topic, scoped, starts, ends, cursor, limit)
+	}
+
+	consumed, frontierWindows, cursorReset, err := c.consumeWithIncarnationRetry(topic, beforeOffsets, readAttempt)
+	if err != nil {
+		return nil, err
+	}
+	if cursorReset {
+		// The retry read the recreated topic from its newest end, so this page is a
+		// fresh start; the caller must replace rows rather than append to a page
+		// built from the previous incarnation.
+		beforeOffsets = nil
 	}
 	consumeMs := time.Since(consumeStart).Milliseconds()
 
@@ -268,6 +295,11 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		"partitions_completed": len(consumed.completed),
 		"has_older":            hasOlder,
 		"candidates_read":      consumed.candidatesRead,
+	}
+	if cursorReset {
+		// The topic was recreated mid-session: this page starts a new incarnation,
+		// so the caller must replace whatever it already holds instead of appending.
+		meta["cursor_reset"] = true
 	}
 	if scanning {
 		meta["scanning"] = true
@@ -394,7 +426,20 @@ func (c *KafkaConnector) consumeWindows(
 			break
 		}
 		if fetchErr != nil {
-			return nil, normalizeKafkaError(fetchErr)
+			// UnknownTopicID is checked before normalizeKafkaError on purpose: that
+			// helper keeps only the message text, and the caller needs the typed cause
+			// to decide whether a purge-and-retry is warranted.
+			if errors.Is(fetchErr, kerr.UnknownTopicID) {
+				return nil, fmt.Errorf("%w: %w", errTopicIncarnationChanged, fetchErr)
+			}
+			// The client runs with KeepRetryableFetchErrors so the recreated-topic
+			// signal above is not silently stripped. That also surfaces the ordinary
+			// retryable errors franz-go used to hide (leader moved, broker briefly
+			// unhealthy); it retries them internally, so the reader keeps polling and
+			// lets the read budget decide, exactly as before the flag.
+			if !kerr.IsRetriable(fetchErr) {
+				return nil, normalizeKafkaError(fetchErr)
+			}
 		}
 
 		fetches.EachRecord(func(record *kgo.Record) {
@@ -954,6 +999,48 @@ func buildPaginationCursor(
 		}
 	}
 	return cursor, hasOlder
+}
+
+// consumeWithIncarnationRetry runs one read attempt and, if it fails because the
+// topic was deleted and recreated under the same name, purges the reader's stale
+// name -> topic-UUID mapping and retries EXACTLY once.
+//
+// The retry deliberately drops the caller's cursor: before_offsets describe the
+// previous incarnation of the topic, whose records no longer exist, so reusing
+// them could only skip messages in the new one. The returned cursorReset flag
+// tells the caller the page is a fresh start rather than a continuation.
+//
+// A second failure is not retried again — it is reported as a typed unavailable
+// error naming the topic, instead of the raw broker message that used to surface
+// as an opaque 500.
+func (c *KafkaConnector) consumeWithIncarnationRetry(
+	topic string,
+	cursor map[int32]int64,
+	attempt func(map[int32]int64) (*consumeResult, map[int32]partitionWindow, error),
+) (*consumeResult, map[int32]partitionWindow, bool, error) {
+	consumed, windows, err := attempt(cursor)
+	if !errors.Is(err, errTopicIncarnationChanged) {
+		return consumed, windows, false, err
+	}
+
+	c.consume.PurgeTopicsFromConsuming(topic)
+	slog.Info("kafka topic incarnation changed",
+		"topic", topic,
+		"action", "purged stale consumer topic id, retrying once",
+	)
+
+	consumed, windows, err = attempt(nil)
+	if errors.Is(err, errTopicIncarnationChanged) {
+		slog.Warn("kafka topic incarnation retry failed", "topic", topic)
+		return nil, nil, false, fmt.Errorf(
+			"%w: topic %q was recreated and its new id is not resolvable yet; retry in a moment",
+			connector.ErrUnavailable, topic,
+		)
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return consumed, windows, true, nil
 }
 
 // computeFrontier derives the per-partition pagination cursor for one GetData

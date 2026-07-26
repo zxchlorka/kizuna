@@ -71,6 +71,13 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Kafk
 	// TLS opt-count contract exercised by TestBuildClientOptsCoversAuthModes is
 	// unaffected.
 	opts = append(opts, kgo.FetchMaxWait(fetchMaxWait))
+	// Without this the client strips retryable fetch errors, including the
+	// UnknownTopicID that a delete/recreate of the same topic name produces — it
+	// only surfaces after 6 occurrences, which the 3s read budget never reaches, so
+	// the recreated topic looked like a plain timeout. franz-go's own docs point at
+	// this flag for reacting to topic deletion; consumeWindows ignores every other
+	// retryable error so the reader's behavior is otherwise unchanged.
+	opts = append(opts, kgo.KeepRetryableFetchErrors())
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {

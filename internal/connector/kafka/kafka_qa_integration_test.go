@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -765,4 +766,139 @@ func rowOffsetsDesc(t *testing.T, rows []map[string]any, partition int32) []int6
 	}
 	sort.Slice(offs, func(i, j int) bool { return offs[i] > offs[j] })
 	return offs
+}
+
+// TestKafkaTopicRecreateRecoveryIntegration reproduces the exact failure the user
+// hit: reseed a local fixture by deleting the topic and creating it again under
+// the same name, then keep browsing through the SAME Kizuna connection.
+//
+// Kafka gives the recreated topic a new UUID (KIP-516), the long-lived kgo.Client
+// still holds the old one, and every fetch fails with UnknownTopicID. Before the
+// recovery the only cure was deleting and recreating the whole connection.
+//
+// The connector must NOT be recreated between generation A and generation B — that
+// is the whole point of the test.
+func TestKafkaTopicRecreateRecoveryIntegration(t *testing.T) {
+	broker := os.Getenv("KAFKA_TEST_BROKER")
+	if broker == "" {
+		t.Skip("set KAFKA_TEST_BROKER to run the local Kafka topic-recreation test")
+	}
+	assertLocalBroker(t, broker)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	defer cancel()
+
+	seedClient, err := kgo.NewClient(kgo.SeedBrokers(broker), kgo.RecordPartitioner(kgo.ManualPartitioner()))
+	if err != nil {
+		t.Fatalf("create seed client: %v", err)
+	}
+	defer seedClient.Close()
+	admin := kadm.NewClient(seedClient)
+
+	topic := fmt.Sprintf("kizuna-recreate-%d", time.Now().UnixNano())
+	registerTopicCleanup(t, broker, topic)
+
+	produce := func(generation string, count int) {
+		t.Helper()
+		records := make([]*kgo.Record, 0, count)
+		for i := 0; i < count; i++ {
+			records = append(records, &kgo.Record{
+				Topic:     topic,
+				Partition: 0,
+				Timestamp: time.Now().Add(time.Duration(i) * time.Millisecond),
+				Value:     []byte(fmt.Sprintf(`{"generation":%q,"n":%d}`, generation, i)),
+			})
+		}
+		if err := seedClient.ProduceSync(ctx, records...).FirstErr(); err != nil {
+			t.Fatalf("produce %s: %v", generation, err)
+		}
+	}
+
+	createTopic := func() {
+		t.Helper()
+		created, err := admin.CreateTopics(ctx, 1, 1, nil, topic)
+		if err != nil {
+			t.Fatalf("create topic: %v", err)
+		}
+		if response := created[topic]; response.Err != nil {
+			t.Fatalf("create topic response: %v", response.Err)
+		}
+		if err := waitTopicReady(ctx, admin, topic); err != nil {
+			t.Fatalf("topic not ready: %v", err)
+		}
+	}
+
+	createTopic()
+	produce("A", 5)
+
+	// ONE connector for the whole test — the stale topic-id cache lives inside it.
+	conn, err := New(ctx, config.ConnectionConfig{
+		ID: "recreate-test", Name: "recreate-test", Type: "kafka",
+		Host: strings.Split(broker, ":")[0], Port: localBrokerPort(t, broker),
+	}, "test-key")
+	if err != nil {
+		t.Fatalf("create connector: %v", err)
+	}
+	defer conn.Close()
+
+	first, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 100})
+	if err != nil {
+		t.Fatalf("read generation A: %v", err)
+	}
+	if len(first.Rows) != 5 {
+		t.Fatalf("generation A rows = %d, want 5", len(first.Rows))
+	}
+
+	// Reseed exactly the way the local export demo does it.
+	if _, err := admin.DeleteTopics(ctx, topic); err != nil {
+		t.Fatalf("delete topic: %v", err)
+	}
+	for attempt := 0; attempt < 60; attempt++ {
+		meta, err := admin.Metadata(ctx, topic)
+		if err == nil && len(meta.Topics[topic].Partitions) == 0 {
+			break
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	createTopic()
+	produce("B", 3)
+
+	second, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 100})
+	if err != nil {
+		t.Fatalf("read generation B through the SAME connector: %v (this is the stale topic-id failure)", err)
+	}
+	if len(second.Rows) != 3 {
+		t.Fatalf("generation B rows = %d, want 3", len(second.Rows))
+	}
+	for _, row := range second.Rows {
+		value, _ := row["value"].(string)
+		if strings.Contains(value, `"A"`) {
+			t.Fatalf("generation A record leaked into the recreated topic read: %s", value)
+		}
+	}
+
+	// Produce must still work on the shared client: the recovery purges only the
+	// consuming side, so producer sequence state is untouched.
+	produce("C", 1)
+	third, err := conn.GetData(ctx, topic, connector.DataOpts{Limit: 100})
+	if err != nil {
+		t.Fatalf("read after post-recovery produce: %v", err)
+	}
+	if len(third.Rows) != 4 {
+		t.Fatalf("rows after producing again = %d, want 4", len(third.Rows))
+	}
+}
+
+// localBrokerPort extracts the port from an already-validated local broker address.
+func localBrokerPort(t *testing.T, broker string) int {
+	t.Helper()
+	parts := strings.Split(broker, ":")
+	if len(parts) != 2 {
+		t.Fatalf("broker %q must be host:port", broker)
+	}
+	port, err := strconv.Atoi(parts[1])
+	if err != nil {
+		t.Fatalf("broker port: %v", err)
+	}
+	return port
 }
