@@ -79,6 +79,11 @@ interface WorkspaceStore {
   treeErrorByKey: Record<string, string | null>
   treeLoadedByKey: Record<string, boolean>
   treeErrorsByConnection: Record<string, string | null>
+  // Scoped refresh indicator for the explicit Refresh button. Deliberately not
+  // the global treeLoading flag, which another connection can turn on, and
+  // deliberately separate from treeLoadingByKey so a refresh can never make a
+  // consumer swap the populated tree for a skeleton.
+  treeRefreshingByConnection: Record<string, boolean>
   expandedSchemas: Set<string>
   treeVisibility: TreeVisibility
   visibleSchemasByConnection: Record<string, string[] | null>
@@ -86,7 +91,7 @@ interface WorkspaceStore {
   selectedNodeByConnection: Record<string, string>
   treeConnByPage: Record<string, string>
 
-  fetchTree: (connId: string, path?: string) => Promise<void>
+  fetchTree: (connId: string, path?: string, opts?: { refresh?: boolean }) => Promise<void>
   setSelectedNode: (connId: string, node: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (connId: string, schema: string) => void
@@ -157,6 +162,15 @@ function buildObjectsQuery(connId: string, path: string, opts: { paged: boolean;
 
 const treeRequests = new Map<string, Promise<void>>()
 
+// Per-tree-key write sequence. Every fetch claims the next number and only
+// applies its result if it is still the newest claim for that key, so a slow
+// earlier response can never overwrite a newer one.
+const treeFetchSeq = new Map<string, number>()
+
+// Per-connection refresh generation, guarding the post-refresh prune and the
+// refreshing indicator against an older refresh finishing last.
+const treeRefreshSeq = new Map<string, number>()
+
 function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean {
   return Object.values(loadingByKey).some(Boolean)
 }
@@ -174,6 +188,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   treeErrorByKey: {},
   treeLoadedByKey: {},
   treeErrorsByConnection: {},
+  treeRefreshingByConnection: {},
   expandedSchemas: new Set(),
   treeVisibility: {
     showTables: true,
@@ -185,23 +200,38 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   selectedNodeByConnection: {},
   treeConnByPage: {},
 
-  fetchTree: async (connId: string, path?: string) => {
+  fetchTree: async (connId: string, path?: string, opts?: { refresh?: boolean }) => {
     const normalizedPath = path || ''
     const key = buildTreeKey(connId, normalizedPath)
-    const pending = treeRequests.get(key)
-    if (pending) {
-      return pending
+    const refresh = opts?.refresh === true
+
+    // A refresh must never join an in-flight load: doing so would answer an
+    // explicit user Refresh with the very response it is trying to supersede.
+    if (!refresh) {
+      const pending = treeRequests.get(key)
+      if (pending) {
+        return pending
+      }
     }
 
+    const seq = (treeFetchSeq.get(key) ?? 0) + 1
+    treeFetchSeq.set(key, seq)
+    const isNewest = () => treeFetchSeq.get(key) === seq
+
     const request = (async () => {
-      set((state) => {
-        const loadingByKey = { ...state.treeLoadingByKey, [key]: true }
-        return {
-          treeLoadingByKey: loadingByKey,
-          treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
-          treeLoading: hasLoadingTreeRequests(loadingByKey),
-        }
-      })
+      // In refresh mode the loading flags are left alone so the populated tree
+      // stays on screen (stale-while-revalidate); the scoped
+      // treeRefreshingByConnection flag drives the button spinner instead.
+      if (!refresh) {
+        set((state) => {
+          const loadingByKey = { ...state.treeLoadingByKey, [key]: true }
+          return {
+            treeLoadingByKey: loadingByKey,
+            treeErrorByKey: { ...state.treeErrorByKey, [key]: null },
+            treeLoading: hasLoadingTreeRequests(loadingByKey),
+          }
+        })
+      }
 
       const paged = isRedisConnection(connId)
       try {
@@ -220,6 +250,12 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           nextCursor = page.next_cursor ?? ''
         } else {
           items = await res.json()
+        }
+
+        // A superseded response is discarded entirely rather than written and
+        // then corrected, so the tree never flashes stale content.
+        if (!isNewest()) {
+          return
         }
 
         set((state) => {
@@ -246,12 +282,20 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           }
         })
       } catch (error) {
+        if (!isNewest()) {
+          return
+        }
+
         set((state) => {
           const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
           return {
             treeLoadingByKey: loadingByKey,
             treeErrorByKey: { ...state.treeErrorByKey, [key]: (error as Error).message },
-            treeLoadedByKey: { ...state.treeLoadedByKey, [key]: false },
+            // A failed refresh must not mark a populated key as unloaded, or the
+            // tree would fall back to a skeleton and lose the visible rows.
+            treeLoadedByKey: refresh
+              ? state.treeLoadedByKey
+              : { ...state.treeLoadedByKey, [key]: false },
             treeErrorsByConnection: {
               ...state.treeErrorsByConnection,
               [connId]: (error as Error).message,
@@ -260,11 +304,17 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
           }
         })
       } finally {
-        treeRequests.delete(key)
+        if (!refresh) {
+          treeRequests.delete(key)
+        }
       }
     })()
 
-    treeRequests.set(key, request)
+    // Only non-refresh loads are registered for de-duplication; a refresh is
+    // always a real request and must not be joined by a later caller.
+    if (!refresh) {
+      treeRequests.set(key, request)
+    }
     return request
   },
 
@@ -278,53 +328,78 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     await get().refreshTree(connId)
   },
 
+  // refreshTree re-reads the root plus every currently expanded namespace of one
+  // connection, stale-while-revalidate: the existing tree stays visible for the
+  // whole request and is replaced per key only when a newer response lands. It
+  // used to delete every cached page up front, which blanked the sidebar on each
+  // refresh and lost the rows entirely if the request then failed.
   refreshTree: async (connId: string) => {
-    const expandedSchemas = Array.from(get().expandedSchemas)
+    const expandedNamespaces = Array.from(get().expandedSchemas)
       .filter((key) => parseTreeKey(key).connId === connId)
       .map((key) => parseTreeKey(key).path)
+      .filter((path) => path !== '')
 
-    set((state) => {
-      const nextTreeItems = { ...state.treeItems }
-      const nextTreeCursors = { ...state.treeCursors }
-      const nextLoadingByKey = { ...state.treeLoadingByKey }
-      const nextErrorByKey = { ...state.treeErrorByKey }
-      const nextLoadedByKey = { ...state.treeLoadedByKey }
-      Object.keys(nextTreeItems).forEach((key) => {
-        if (parseTreeKey(key).connId === connId) {
-          delete nextTreeItems[key]
-        }
-      })
-      Object.keys(nextTreeCursors).forEach((key) => {
-        if (parseTreeKey(key).connId === connId) {
-          delete nextTreeCursors[key]
-        }
-      })
-      Object.keys(nextLoadingByKey).forEach((key) => {
-        if (parseTreeKey(key).connId === connId) {
-          delete nextLoadingByKey[key]
-        }
-      })
-      Object.keys(nextErrorByKey).forEach((key) => {
-        if (parseTreeKey(key).connId === connId) {
-          delete nextErrorByKey[key]
-        }
-      })
-      Object.keys(nextLoadedByKey).forEach((key) => {
-        if (parseTreeKey(key).connId === connId) {
-          delete nextLoadedByKey[key]
-        }
-      })
-      return {
-        treeItems: nextTreeItems,
-        treeCursors: nextTreeCursors,
-        treeLoadingByKey: nextLoadingByKey,
-        treeErrorByKey: nextErrorByKey,
-        treeLoadedByKey: nextLoadedByKey,
-        treeLoading: false,
+    const generation = (treeRefreshSeq.get(connId) ?? 0) + 1
+    treeRefreshSeq.set(connId, generation)
+    const isNewestRefresh = () => treeRefreshSeq.get(connId) === generation
+
+    set((state) => ({
+      treeRefreshingByConnection: { ...state.treeRefreshingByConnection, [connId]: true },
+    }))
+
+    try {
+      await Promise.all([
+        get().fetchTree(connId, '', { refresh: true }),
+        ...expandedNamespaces.map((namespace) => get().fetchTree(connId, namespace, { refresh: true })),
+      ])
+
+      if (!isNewestRefresh()) {
+        return
       }
-    })
 
-    await Promise.all([get().fetchTree(connId), ...expandedSchemas.map((schema) => get().fetchTree(connId, schema))])
+      // Prune only on a successful root read: without a trustworthy new root there
+      // is no basis for deciding which cached namespace disappeared.
+      const rootKey = buildTreeKey(connId, '')
+      if (get().treeErrorByKey[rootKey]) {
+        return
+      }
+
+      const liveNamespaces = new Set((get().treeItems[rootKey] ?? []).map((item) => item.name))
+      set((state) => {
+        const nextTreeItems = { ...state.treeItems }
+        const nextTreeCursors = { ...state.treeCursors }
+        const nextLoadedByKey = { ...state.treeLoadedByKey }
+        const nextErrorByKey = { ...state.treeErrorByKey }
+        const nextExpanded = new Set(state.expandedSchemas)
+
+        Object.keys(state.treeItems).forEach((key) => {
+          const parsed = parseTreeKey(key)
+          if (parsed.connId !== connId || parsed.path === '' || liveNamespaces.has(parsed.path)) {
+            return
+          }
+          delete nextTreeItems[key]
+          delete nextTreeCursors[key]
+          delete nextLoadedByKey[key]
+          delete nextErrorByKey[key]
+          nextExpanded.delete(key)
+        })
+
+        return {
+          treeItems: nextTreeItems,
+          treeCursors: nextTreeCursors,
+          treeLoadedByKey: nextLoadedByKey,
+          treeErrorByKey: nextErrorByKey,
+          expandedSchemas: nextExpanded,
+        }
+      })
+    } finally {
+      // A superseded refresh must not clear the indicator the newer one owns.
+      if (isNewestRefresh()) {
+        set((state) => ({
+          treeRefreshingByConnection: { ...state.treeRefreshingByConnection, [connId]: false },
+        }))
+      }
+    }
   },
 
   toggleSchema: (connId: string, schema: string) => {
