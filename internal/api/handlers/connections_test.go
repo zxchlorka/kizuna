@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/zxchlorka/kizuna/internal/config"
 	"github.com/zxchlorka/kizuna/internal/connector"
 )
@@ -288,5 +289,99 @@ func TestConnectionsHandlerTestTransientConnectionDoesNotPingAfterFactory(t *tes
 	}
 	if fake.pingCount != 0 {
 		t.Fatalf("expected no extra ping after factory, got %d", fake.pingCount)
+	}
+}
+
+// TestConnectionsHandlerDeleteCascadesLinks proves DELETE /api/connections/:id
+// removes the connection's cross-source links in the same request and persists
+// that to disk, so orphan links cannot reappear after a restart. Before the
+// cascade, links keyed to a deleted connection stayed in config forever and the
+// frontend kept rendering them.
+func TestConnectionsHandlerDeleteCascadesLinks(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Connections = []config.ConnectionConfig{
+		{ID: "redis-1", Name: "redis", Type: "redis", Host: "localhost", Port: 6379},
+		{ID: "kafka-1", Name: "kafka", Type: "kafka", Host: "localhost", Port: 9092},
+	}
+	cfg.EncryptionKey = "test-key"
+	cfg.Links = []config.LinkConfig{
+		{ID: "l-out", SourceConnID: "redis-1", SourceKind: "redis", TargetConnID: "kafka-1", TargetKind: "kafka", TargetTopic: "events"},
+		{ID: "l-in", SourceConnID: "kafka-1", SourceKind: "kafka", SourceScope: "events", SourceField: "uid", TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "w:*"},
+		{ID: "l-self", SourceConnID: "redis-1", SourceKind: "redis", TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "s:*"},
+		{ID: "l-other", SourceConnID: "kafka-1", SourceKind: "kafka", SourceScope: "events", SourceField: "uid", TargetConnID: "kafka-1", TargetKind: "kafka", TargetTopic: "audit"},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	handler := NewConnectionsHandler(cfg, connector.NewConnectionManager(cfg))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/connections/redis-1", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "redis-1")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	handler.Delete(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: got %d, want %d", rec.Code, http.StatusNoContent)
+	}
+
+	remaining := cfg.GetLinks()
+	if len(remaining) != 1 || remaining[0].ID != "l-other" {
+		t.Fatalf("unrelated link must survive and every redis-1 link must go, got %#v", remaining)
+	}
+
+	reloaded, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("reload config: %v", err)
+	}
+	if got := reloaded.GetLinks(); len(got) != 1 || got[0].ID != "l-other" {
+		t.Fatalf("cascade not persisted, orphan links returned from disk: %#v", got)
+	}
+	if _, ok := reloaded.GetConnection("redis-1"); ok {
+		t.Fatalf("deleted connection still present on disk")
+	}
+}
+
+// TestConnectionsHandlerDeleteUnknownKeepsLinks pins the idempotency semantics:
+// a DELETE for an id that does not exist is a 404 and must not touch links.
+func TestConnectionsHandlerDeleteUnknownKeepsLinks(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	cfg.Connections = []config.ConnectionConfig{{ID: "redis-1", Name: "redis", Type: "redis"}}
+	cfg.EncryptionKey = "test-key"
+	cfg.Links = []config.LinkConfig{
+		{ID: "l1", SourceConnID: "redis-1", SourceKind: "redis", TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "w:*"},
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save config: %v", err)
+	}
+	handler := NewConnectionsHandler(cfg, connector.NewConnectionManager(cfg))
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/connections/nope", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("id", "nope")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	rec := httptest.NewRecorder()
+
+	handler.Delete(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unexpected status: got %d, want %d", rec.Code, http.StatusNotFound)
+	}
+	if got := cfg.GetLinks(); len(got) != 1 || got[0].ID != "l1" {
+		t.Fatalf("unknown-connection delete must not touch links, got %#v", got)
 	}
 }
