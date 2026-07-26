@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="400" viewBox="0 0 1200 400" role="img" aria-labelledby="title desc">
+  <title id="title">Kizuna — единый интерфейс для PostgreSQL, Redis и Kafka</title>
+  <desc id="desc">Три источника данных соединены через центральный узел связей Kizuna.</desc>
+  <rect width="1200" height="400" rx="26" fill="#111827"/>
+  <path d="M64 76H1136M64 324H1136" stroke="#334155" stroke-width="2"/>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,sans-serif">
+    <text x="64" y="86" fill="#f59e0b" font-size="18" font-weight="700" letter-spacing="3">UNIFIED DATA WORKBENCH</text>
+    <text x="64" y="170" fill="#f8fafc" font-size="62" font-weight="750">絆 kizuna</text>
+    <text x="64" y="215" fill="#cbd5e1" font-size="24">Данные, сообщения и связи — вместе.</text>
+    <text x="64" y="278" fill="#94a3b8" font-size="20">Browse · edit · produce · follow the relationship</text>
+  </g>
+  <g fill="none" stroke="#f59e0b" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M718 153C760 153 770 166 804 188"/>
+    <path d="M718 247C760 247 770 234 804 212"/>
+    <path d="M1018 188C1054 166 1064 153 1104 153"/>
+    <path d="M1018 212C1054 234 1064 247 1104 247"/>
+  </g>
+  <g font-family="-apple-system,BlinkMacSystemFont,Segoe UI,PingFang SC,sans-serif">
+    <g transform="translate(650 116)">
+      <rect width="118" height="74" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
+      <text x="16" y="32" fill="#93c5fd" font-size="19" font-weight="700">POSTGRES</text>
+      <text x="16" y="55" fill="#cbd5e1" font-size="16">tables · SQL</text>
+    </g>
+    <g transform="translate(650 210)">
+      <rect width="118" height="74" rx="14" fill="#3f1418" stroke="#fb7185" stroke-width="2"/>
+      <text x="16" y="32" fill="#fda4af" font-size="19" font-weight="700">REDIS</text>
+      <text x="16" y="55" fill="#cbd5e1" font-size="16">keys · CLI</text>
+    </g>
+    <g transform="translate(804 145)">
+      <rect width="214" height="110" rx="20" fill="#3a2608" stroke="#f59e0b" stroke-width="3"/>
+      <circle cx="40" cy="54" r="18" fill="#f59e0b"/>
+      <path d="M34 54h12M40 48v12" stroke="#111827" stroke-width="3" stroke-linecap="round"/>
+      <text x="76" y="48" fill="#f8fafc" font-size="28" font-weight="750">LINKS</text>
+      <text x="76" y="76" fill="#fde68a" font-size="18">jump across sources</text>
+    </g>
+    <g transform="translate(1082 116)">
+      <rect width="82" height="74" rx="14" fill="#3b1d0c" stroke="#fb923c" stroke-width="2"/>
+      <text x="13" y="32" fill="#fdba74" font-size="18" font-weight="700">KAFKA</text>
+      <text x="13" y="55" fill="#cbd5e1" font-size="15">events</text>
+    </g>
+    <g transform="translate(1082 210)">
+      <rect width="82" height="74" rx="14" fill="#172554" stroke="#60a5fa" stroke-width="2"/>
+      <text x="13" y="32" fill="#93c5fd" font-size="18" font-weight="700">SQL</text>
+      <text x="13" y="55" fill="#cbd5e1" font-size="15">results</text>
+    </g>
+  </g>
+</svg>
