@@ -282,3 +282,98 @@ describe('refreshTree — stale-while-revalidate', () => {
     await refresh
   })
 })
+
+describe('purgeConnection — deleted-connection cleanup', () => {
+  const objectTab = (id: string, connId: string, anchorConnId?: string) => ({
+    kind: 'object' as const,
+    id,
+    connId,
+    anchorConnId,
+    object: 'k',
+    label: 'k',
+    objectType: 'key' as const,
+  })
+
+  it('removes tabs whose data source is the deleted connection', () => {
+    useWorkspaceStore.setState({
+      tabs: [objectTab('t1', CONN), objectTab('t2', 'other')] as never,
+      openConnectionIds: [CONN, 'other'],
+      activeTabId: 't1',
+      activeTabByConnection: { [CONN]: 't1', other: 't2' },
+    })
+
+    useWorkspaceStore.getState().purgeConnection(CONN)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.tabs.map((tab) => tab.id)).toEqual(['t2'])
+    expect(state.openConnectionIds).toEqual(['other'])
+    expect(state.activeTabByConnection[CONN]).toBeUndefined()
+    expect(state.activeTabId).toBeNull()
+  })
+
+  // The stale-tab bug from the screenshot: a tab anchored on ANOTHER connection's
+  // page but reading from the deleted one kept firing requests with the dead UUID
+  // and rendering `connection "..." not found`. closeConnection only ever matched
+  // tabPageId, so this tab survived.
+  it('removes a tab anchored elsewhere that still reads from the deleted connection', () => {
+    useWorkspaceStore.setState({
+      tabs: [objectTab('t1', CONN, 'other'), objectTab('t2', 'other', 'other')] as never,
+      openConnectionIds: ['other'],
+      activeTabId: 't1',
+    })
+
+    useWorkspaceStore.getState().purgeConnection(CONN)
+
+    expect(useWorkspaceStore.getState().tabs.map((tab) => tab.id)).toEqual(['t2'])
+  })
+
+  it('removes tabs living on the deleted connection page even when reading elsewhere', () => {
+    useWorkspaceStore.setState({
+      tabs: [objectTab('t1', 'other', CONN), objectTab('t2', 'other', 'other')] as never,
+      activeTabId: 't2',
+    })
+
+    useWorkspaceStore.getState().purgeConnection(CONN)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.tabs.map((tab) => tab.id)).toEqual(['t2'])
+    expect(state.activeTabId).toBe('t2')
+  })
+
+  it('drops every per-connection cache entry', () => {
+    useWorkspaceStore.setState({
+      treeItems: { [rootKey]: [] as never, 'other::': [] as never },
+      treeCursors: { [rootKey]: 'c', 'other::': 'c2' },
+      treeLoadedByKey: { [rootKey]: true, 'other::': true },
+      treeErrorByKey: { [rootKey]: null, 'other::': null },
+      treeErrorsByConnection: { [CONN]: 'boom', other: null },
+      treeRefreshingByConnection: { [CONN]: true, other: false },
+      expandedSchemas: new Set([nsKey('profile'), 'other::ns']),
+      selectedNodeByConnection: { [CONN]: 'node-1', other: 'node-2' },
+      availableSchemasByConnection: { [CONN]: ['a'], other: ['b'] },
+      visibleSchemasByConnection: { [CONN]: ['a'], other: ['b'] },
+      treeConnByPage: { [CONN]: CONN, other: CONN, third: 'third' },
+    })
+
+    useWorkspaceStore.getState().purgeConnection(CONN)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.treeItems[rootKey]).toBeUndefined()
+    expect(state.treeItems['other::']).toBeDefined()
+    expect(state.treeCursors[rootKey]).toBeUndefined()
+    expect(state.treeLoadedByKey[rootKey]).toBeUndefined()
+    expect(state.treeErrorByKey[rootKey]).toBeUndefined()
+    expect(state.treeErrorsByConnection[CONN]).toBeUndefined()
+    expect(state.treeRefreshingByConnection[CONN]).toBeUndefined()
+    expect(state.expandedSchemas.has(nsKey('profile'))).toBe(false)
+    expect(state.expandedSchemas.has('other::ns')).toBe(true)
+    expect(state.selectedNodeByConnection[CONN]).toBeUndefined()
+    expect(state.availableSchemasByConnection[CONN]).toBeUndefined()
+    expect(state.visibleSchemasByConnection[CONN]).toBeUndefined()
+    // A page pointing its tree at the deleted connection must not keep that
+    // binding, or the page would query a dead UUID on next render.
+    expect(state.treeConnByPage[CONN]).toBeUndefined()
+    expect(state.treeConnByPage['other']).toBeUndefined()
+    expect(state.treeConnByPage['third']).toBe('third')
+  })
+})

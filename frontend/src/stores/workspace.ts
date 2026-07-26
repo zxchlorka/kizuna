@@ -115,6 +115,7 @@ interface WorkspaceStore {
   setActiveTab: (tabId: string) => void
   openConnection: (connId: string) => void
   closeConnection: (connId: string) => void
+  purgeConnection: (connId: string) => void
 }
 
 function buildFilterSignature(filters: FilterExpr[]): string {
@@ -721,6 +722,84 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
               (tab) => tab.connId === connId && (tab.id === entry.fromTabId || tab.id === entry.toTabId)
             )
         ),
+      }
+    })
+  },
+
+  // purgeConnection forgets everything about a connection that no longer exists.
+  // It is distinct from closeConnection, which merely closes a page the user can
+  // reopen: closeConnection matches tabPageId only, so a tab anchored on another
+  // connection's page but READING from the deleted one survived it and kept
+  // requesting a dead UUID, surfacing as `connection "..." not found`.
+  purgeConnection: (connId: string) => {
+    set((state) => {
+      const isDead = (tab: WorkspaceTab) =>
+        tab.connId === connId || tab.anchorConnId === connId || tabPageId(tab) === connId
+      const removedTabIds = new Set(state.tabs.filter(isDead).map((tab) => tab.id))
+      const remainingTabs = state.tabs.filter((tab) => !isDead(tab))
+
+      const nextActiveByConnection: Record<string, string> = {}
+      Object.entries(state.activeTabByConnection).forEach(([id, tabId]) => {
+        if (id !== connId && !removedTabIds.has(tabId)) {
+          nextActiveByConnection[id] = tabId
+        }
+      })
+
+      const nextTreeItems = { ...state.treeItems }
+      const nextTreeCursors = { ...state.treeCursors }
+      const nextLoadingByKey = { ...state.treeLoadingByKey }
+      const nextErrorByKey = { ...state.treeErrorByKey }
+      const nextLoadedByKey = { ...state.treeLoadedByKey }
+      const nextExpanded = new Set<string>()
+      state.expandedSchemas.forEach((key) => {
+        if (parseTreeKey(key).connId !== connId) {
+          nextExpanded.add(key)
+        }
+      })
+      for (const record of [nextTreeItems, nextTreeCursors, nextLoadingByKey, nextErrorByKey, nextLoadedByKey]) {
+        Object.keys(record).forEach((key) => {
+          if (parseTreeKey(key).connId === connId) {
+            delete (record as Record<string, unknown>)[key]
+          }
+        })
+      }
+
+      const dropKey = <T,>(record: Record<string, T>): Record<string, T> => {
+        const next = { ...record }
+        delete next[connId]
+        return next
+      }
+
+      // A page whose tree was switched to the deleted connection loses that
+      // binding too, otherwise the page would query the dead UUID on next render.
+      const nextTreeConnByPage: Record<string, string> = {}
+      Object.entries(state.treeConnByPage).forEach(([pageId, viewConnId]) => {
+        if (pageId !== connId && viewConnId !== connId) {
+          nextTreeConnByPage[pageId] = viewConnId
+        }
+      })
+
+      return {
+        tabs: remainingTabs,
+        openConnectionIds: state.openConnectionIds.filter((id) => id !== connId),
+        activeTabByConnection: nextActiveByConnection,
+        activeTabId: state.activeTabId && removedTabIds.has(state.activeTabId) ? null : state.activeTabId,
+        navigationHistory: state.navigationHistory.filter(
+          (entry) => !removedTabIds.has(entry.fromTabId) && !removedTabIds.has(entry.toTabId)
+        ),
+        treeItems: nextTreeItems,
+        treeCursors: nextTreeCursors,
+        treeLoadingByKey: nextLoadingByKey,
+        treeErrorByKey: nextErrorByKey,
+        treeLoadedByKey: nextLoadedByKey,
+        treeLoading: hasLoadingTreeRequests(nextLoadingByKey),
+        expandedSchemas: nextExpanded,
+        treeErrorsByConnection: dropKey(state.treeErrorsByConnection),
+        treeRefreshingByConnection: dropKey(state.treeRefreshingByConnection),
+        selectedNodeByConnection: dropKey(state.selectedNodeByConnection),
+        availableSchemasByConnection: dropKey(state.availableSchemasByConnection),
+        visibleSchemasByConnection: dropKey(state.visibleSchemasByConnection),
+        treeConnByPage: nextTreeConnByPage,
       }
     })
   },
