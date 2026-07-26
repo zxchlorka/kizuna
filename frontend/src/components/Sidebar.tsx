@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
+import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, RefreshCw, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
 import { RedisKeyLookup } from '@/components/redis/RedisKeyLookup'
@@ -44,6 +44,7 @@ export function Sidebar({ connId }: SidebarProps) {
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
+  const treeRefreshing = useWorkspaceStore((state) => state.treeRefreshingByConnection[connId] ?? false)
   const selectedNode = useWorkspaceStore((state) => state.selectedNodeByConnection[connId] ?? '')
   const setSelectedNode = useWorkspaceStore((state) => state.setSelectedNode)
   const [clusterNodes, setClusterNodes] = useState<string[]>([])
@@ -230,27 +231,43 @@ export function Sidebar({ connId }: SidebarProps) {
                   <SlidersHorizontal className="h-3.5 w-3.5" />
                   Redis Tree
                 </div>
-                {readOnly ? (
-                  <span className="inline-flex items-center gap-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
-                    <Lock className="h-3 w-3" />
-                    Read-only
-                  </span>
-                ) : (
-                  <div className="flex items-center gap-2">
-                    <BulkActions connId={connId} />
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="outline"
-                      className="h-7 w-7 shrink-0 p-0"
-                      title="New Key"
-                      aria-label="New Key"
-                      onClick={() => setCreateKeyOpen(true)}
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                )}
+                <div className="flex items-center gap-2">
+                  {readOnly ? (
+                    <span className="inline-flex items-center gap-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-1.5 py-0.5 text-[9px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
+                      <Lock className="h-3 w-3" />
+                      Read-only
+                    </span>
+                  ) : (
+                    <>
+                      <BulkActions connId={connId} />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        className="h-7 w-7 shrink-0 p-0"
+                        title="New Key"
+                        aria-label="New Key"
+                        onClick={() => setCreateKeyOpen(true)}
+                      >
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    </>
+                  )}
+                  {/* Refresh is a read, so it stays available on read-only
+                      connections. Disabled only while THIS connection refreshes. */}
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 w-7 shrink-0 p-0"
+                    title="Refresh Redis tree"
+                    aria-label="Refresh Redis tree"
+                    disabled={treeRefreshing}
+                    onClick={() => void refreshTree(connId)}
+                  >
+                    <RefreshCw className={cn('h-3.5 w-3.5', treeRefreshing && 'animate-spin')} />
+                  </Button>
+                </div>
               </div>
               {isClusterConnection && clusterNodes.length > 0 && (
                 <div className="mt-2 flex items-center gap-2">
