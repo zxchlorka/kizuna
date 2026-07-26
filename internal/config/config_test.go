@@ -196,3 +196,150 @@ func TestLinkBackwardCompatAndScopeMatch(t *testing.T) {
 		t.Fatalf("expected no match for non-matching key, got %#v", got)
 	}
 }
+
+// TestRemoveConnectionCascade covers the cascade contract from the
+// 2026-07-21 plan: deleting a connection must remove every link where it is the
+// source OR the target, in a single config mutation, without touching unrelated
+// links. Orphaned links with a dangling source_conn_id/target_conn_id were
+// previously persisted forever because RemoveConnection only filtered
+// Connections.
+func TestRemoveConnectionCascade(t *testing.T) {
+	link := func(id, source, target string) LinkConfig {
+		return LinkConfig{
+			ID: id, SourceConnID: source, SourceKind: "kafka", SourceScope: "topic",
+			SourceField: "user_id", TargetConnID: target, TargetKind: "redis", KeyPattern: "w:*",
+		}
+	}
+
+	tests := []struct {
+		name          string
+		links         []LinkConfig
+		remove        string
+		wantRemoved   bool
+		wantLinkIDs   []string // links that must REMAIN, in order
+		wantRemovedID []string // link ids the call must report as removed
+	}{
+		{
+			name:          "connection used only as source",
+			links:         []LinkConfig{link("l1", "conn-a", "conn-b"), link("l2", "conn-c", "conn-d")},
+			remove:        "conn-a",
+			wantRemoved:   true,
+			wantLinkIDs:   []string{"l2"},
+			wantRemovedID: []string{"l1"},
+		},
+		{
+			name:          "connection used only as target",
+			links:         []LinkConfig{link("l1", "conn-a", "conn-b"), link("l2", "conn-c", "conn-d")},
+			remove:        "conn-b",
+			wantRemoved:   true,
+			wantLinkIDs:   []string{"l2"},
+			wantRemovedID: []string{"l1"},
+		},
+		{
+			name:          "connection on both sides of different links",
+			links:         []LinkConfig{link("l1", "conn-a", "conn-b"), link("l2", "conn-c", "conn-a"), link("l3", "conn-c", "conn-d")},
+			remove:        "conn-a",
+			wantRemoved:   true,
+			wantLinkIDs:   []string{"l3"},
+			wantRemovedID: []string{"l1", "l2"},
+		},
+		{
+			name:          "self link removed exactly once",
+			links:         []LinkConfig{link("l1", "conn-a", "conn-a"), link("l2", "conn-c", "conn-d")},
+			remove:        "conn-a",
+			wantRemoved:   true,
+			wantLinkIDs:   []string{"l2"},
+			wantRemovedID: []string{"l1"},
+		},
+		{
+			name:          "connection with no links",
+			links:         []LinkConfig{link("l1", "conn-c", "conn-d")},
+			remove:        "conn-a",
+			wantRemoved:   true,
+			wantLinkIDs:   []string{"l1"},
+			wantRemovedID: nil,
+		},
+		{
+			name:          "unknown connection removes nothing",
+			links:         []LinkConfig{link("l1", "conn-a", "conn-b")},
+			remove:        "conn-missing",
+			wantRemoved:   false,
+			wantLinkIDs:   []string{"l1"},
+			wantRemovedID: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &AppConfig{}
+			// Every connection referenced by the fixtures exists, plus the one the
+			// "no links" case deletes.
+			for _, id := range []string{"conn-a", "conn-b", "conn-c", "conn-d"} {
+				cfg.AddConnection(ConnectionConfig{ID: id, Name: id, Type: "redis"})
+			}
+			for _, l := range tt.links {
+				cfg.AddLink(l)
+			}
+
+			removed, removedLinkIDs := cfg.RemoveConnectionCascade(tt.remove)
+
+			if removed != tt.wantRemoved {
+				t.Fatalf("removed = %v, want %v", removed, tt.wantRemoved)
+			}
+			if len(removedLinkIDs) != len(tt.wantRemovedID) {
+				t.Fatalf("removedLinkIDs = %v, want %v", removedLinkIDs, tt.wantRemovedID)
+			}
+			for i, want := range tt.wantRemovedID {
+				if removedLinkIDs[i] != want {
+					t.Fatalf("removedLinkIDs = %v, want %v", removedLinkIDs, tt.wantRemovedID)
+				}
+			}
+
+			gotLinks := cfg.GetLinks()
+			if len(gotLinks) != len(tt.wantLinkIDs) {
+				t.Fatalf("remaining links = %d %v, want %v", len(gotLinks), gotLinks, tt.wantLinkIDs)
+			}
+			for i, want := range tt.wantLinkIDs {
+				if gotLinks[i].ID != want {
+					t.Fatalf("remaining link[%d].ID = %q, want %q", i, gotLinks[i].ID, want)
+				}
+			}
+			if tt.wantRemoved {
+				if _, ok := cfg.GetConnection(tt.remove); ok {
+					t.Fatalf("connection %q still present after cascade", tt.remove)
+				}
+			}
+		})
+	}
+}
+
+// TestRemoveConnectionCascadePersists proves the cascade survives a save/load
+// round trip — the original defect was that orphan links came back from disk.
+func TestRemoveConnectionCascadePersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	cfg := &AppConfig{}
+	cfg.SetPathForTest(path)
+	cfg.AddConnection(ConnectionConfig{ID: "redis-1", Name: "redis", Type: "redis"})
+	cfg.AddConnection(ConnectionConfig{ID: "kafka-1", Name: "kafka", Type: "kafka"})
+	cfg.AddLink(LinkConfig{ID: "l1", SourceConnID: "kafka-1", SourceKind: "kafka", TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "w:*"})
+	cfg.AddLink(LinkConfig{ID: "l2", SourceConnID: "redis-1", SourceKind: "redis", TargetConnID: "kafka-1", TargetKind: "kafka", TargetTopic: "events"})
+
+	removed, removedLinkIDs := cfg.RemoveConnectionCascade("redis-1")
+	if !removed || len(removedLinkIDs) != 2 {
+		t.Fatalf("cascade removed=%v links=%v, want true and 2 links", removed, removedLinkIDs)
+	}
+	if err := cfg.Save(path); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	reloaded, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if got := reloaded.GetLinks(); len(got) != 0 {
+		t.Fatalf("orphan links came back from disk: %#v", got)
+	}
+	if got := reloaded.GetConnections(); len(got) != 1 || got[0].ID != "kafka-1" {
+		t.Fatalf("unexpected connections after reload: %#v", got)
+	}
+}

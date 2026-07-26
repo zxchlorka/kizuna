@@ -107,16 +107,42 @@ func (c *AppConfig) AddConnection(conn ConnectionConfig) {
 	c.Connections = append(c.Connections, cloneConnection(conn))
 }
 
-func (c *AppConfig) RemoveConnection(id string) bool {
+// RemoveConnectionCascade removes the connection with the given id together with
+// every cross-source link that references it as source or target, as one
+// mutation under a single lock. It reports whether the connection existed and
+// the ids of the links removed along with it.
+//
+// The cascade is deliberately NOT implemented by calling RemoveLink in a loop:
+// RemoveLink takes the same mutex, so that would self-deadlock. A self-link
+// (source and target both this connection) matches the first branch and is
+// therefore removed exactly once.
+func (c *AppConfig) RemoveConnectionCascade(id string) (bool, []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	removed := false
 	for i, conn := range c.Connections {
 		if conn.ID == id {
 			c.Connections = append(c.Connections[:i], c.Connections[i+1:]...)
-			return true
+			removed = true
+			break
 		}
 	}
-	return false
+	if !removed {
+		return false, nil
+	}
+
+	var removedLinkIDs []string
+	kept := make([]LinkConfig, 0, len(c.Links))
+	for _, link := range c.Links {
+		if link.SourceConnID == id || link.TargetConnID == id {
+			removedLinkIDs = append(removedLinkIDs, link.ID)
+			continue
+		}
+		kept = append(kept, link)
+	}
+	c.Links = kept
+	return true, removedLinkIDs
 }
 
 func (c *AppConfig) GetConnection(id string) (ConnectionConfig, bool) {
