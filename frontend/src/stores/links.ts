@@ -9,6 +9,7 @@ interface LinksStore {
   create: (input: LinkInput) => Promise<LinkRecord>
   update: (id: string, input: LinkInput) => Promise<LinkRecord>
   remove: (id: string) => Promise<void>
+  removeForConnection: (connId: string) => void
   linksFor: (sourceConnId: string, scope: string) => LinkRecord[]
 }
 
@@ -63,6 +64,18 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
       throw new Error(body.error || res.statusText)
     }
     set({ links: get().links.filter((link) => link.id !== id) })
+  },
+
+  // Local half of the connection-delete cascade. DELETE /api/connections/:id
+  // already removed these links server-side in the same mutation, so this only
+  // forgets them locally — deliberately without a request per link.
+  removeForConnection: (connId: string) => {
+    const links = get().links
+    const remaining = links.filter((link) => link.source_conn_id !== connId && link.target_conn_id !== connId)
+    if (remaining.length === links.length) {
+      return
+    }
+    set({ links: remaining })
   },
 
   linksFor: (sourceConnId, scope) =>

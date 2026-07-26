@@ -3,6 +3,7 @@ import { useTheme } from 'next-themes'
 import { Plus, Sun, Moon, Settings } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ConnectionTypeTabs, type ConnectionTypeFilter } from '@/components/ConnectionTypeTabs'
+import { deleteConnectionEverywhere } from '@/lib/connectionDeletion'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { ConnectionCard } from '@/components/ConnectionCard'
@@ -17,7 +18,7 @@ export default function ConnectionListPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const { resolvedTheme, setTheme } = useTheme()
-  const { connections, loading, loadedOnce, error, fetch: fetchConnections, remove } = useConnectionStore()
+  const { connections, loading, loadedOnce, error, fetch: fetchConnections } = useConnectionStore()
   const hydrateHealth = useConnectionHealthStore((state) => state.hydrate)
   const pruneHealth = useConnectionHealthStore((state) => state.prune)
   const refreshStaleHealth = useConnectionHealthStore((state) => state.refreshStale)
@@ -191,7 +192,7 @@ export default function ConnectionListPage() {
                     className="animate-fade-in-up"
                     style={{ animationDelay: `${80 + i * 55}ms`, animationFillMode: 'both' }}
                   >
-                    <ConnectionCard connection={conn} onDelete={remove} onEdit={openEdit} />
+                    <ConnectionCard connection={conn} onDelete={deleteConnectionEverywhere} onEdit={openEdit} />
                   </div>
                 ))}
               </div>
