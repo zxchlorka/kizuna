@@ -403,3 +403,82 @@ describe('Clearing a search returns to browse', () => {
     expect(browseUrl).not.toContain('match_field')
   })
 })
+
+// A topic deleted and recreated under the same name is a NEW topic: its offsets
+// restart, and the rows already on screen belong to an incarnation whose records
+// no longer exist. The backend signals this with meta.cursor_reset after its
+// purge-and-retry, and "Load older" must then REPLACE the page instead of
+// appending to it — otherwise the table shows a mix of two topics whose
+// partition/offset identities overlap but mean different records.
+describe('Load older — topic recreated mid-session', () => {
+  it('replaces the loaded page when the backend reports cursor_reset', async () => {
+    const oldRow = { partition: 0, offset: 5, timestamp: '', key: '', value: '{"generation":"A"}', format: 'json' }
+    const newRow = { partition: 0, offset: 1, timestamp: '', key: '', value: '{"generation":"B"}', format: 'json' }
+
+    useKafkaStore.setState({
+      tabs: {
+        'tab-recreate': {
+          ...useKafkaStore.getState().tabs['tab-recreate'],
+          messages: [oldRow],
+          hasOlder: true,
+          nextBeforeOffsets: { '0': 5 },
+          loadingOlder: false,
+          messagesError: null,
+        },
+      },
+    } as never)
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          columns: [],
+          rows: [newRow],
+          total: 1,
+          has_more: false,
+          meta: { cursor_reset: true, has_older: false, partitions_total: 1, partitions_completed: 1 },
+        })
+      ) as unknown as typeof fetch
+    )
+
+    await useKafkaStore.getState().fetchOlderMessages('conn-1', 'orders', 'tab-recreate')
+
+    const tab = useKafkaStore.getState().tabs['tab-recreate']
+    expect(tab.messages).toEqual([newRow])
+  })
+
+  it('still appends when the topic is unchanged', async () => {
+    const first = { partition: 0, offset: 5, timestamp: '', key: '', value: '{"n":5}', format: 'json' }
+    const older = { partition: 0, offset: 4, timestamp: '', key: '', value: '{"n":4}', format: 'json' }
+
+    useKafkaStore.setState({
+      tabs: {
+        'tab-normal': {
+          ...useKafkaStore.getState().tabs['tab-normal'],
+          messages: [first],
+          hasOlder: true,
+          nextBeforeOffsets: { '0': 5 },
+          loadingOlder: false,
+          messagesError: null,
+        },
+      },
+    } as never)
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        jsonResponse({
+          columns: [],
+          rows: [older],
+          total: 2,
+          has_more: false,
+          meta: { has_older: false, partitions_total: 1, partitions_completed: 1 },
+        })
+      ) as unknown as typeof fetch
+    )
+
+    await useKafkaStore.getState().fetchOlderMessages('conn-1', 'orders', 'tab-normal')
+
+    expect(useKafkaStore.getState().tabs['tab-normal'].messages).toEqual([first, older])
+  })
+})

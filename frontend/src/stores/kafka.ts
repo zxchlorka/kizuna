@@ -172,6 +172,11 @@ interface MessagesResponse {
     partial?: boolean
     partial_reason?: string
     messages_returned?: number
+    // Set when the backend detected the topic was deleted and recreated under the
+    // same name mid-session and recovered by purging its stale topic id. The rows
+    // belong to a NEW incarnation whose offsets restart, so an in-progress page
+    // must be replaced rather than appended to.
+    cursor_reset?: boolean
     // Content-search (scanning) path only — see match_field/match_value in
     // requestMessages. Unrelated to partial/messages_returned above.
     // `scanned` counts candidates inspected in the step; `matched` counts hits
@@ -501,14 +506,19 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, null)
           set((state) => {
             const tab = ensureState(state.tabs, tabId)
-            const seen = new Set(tab.messages.map((row) => `${row.partition}:${row.offset}`))
+            // On cursor_reset the rows on screen came from a topic incarnation that
+            // no longer exists; their (partition, offset) identities collide with the
+            // new topic's but denote different records, so dedup-and-append would
+            // interleave two unrelated topics. Replace instead.
+            const recreated = Boolean(data.meta?.cursor_reset)
+            const seen = new Set(recreated ? [] : tab.messages.map((row) => `${row.partition}:${row.offset}`))
             const older = (data.rows ?? []).filter((row) => !seen.has(`${row.partition}:${row.offset}`))
             return {
               tabs: {
                 ...state.tabs,
                 [tabId]: {
                   ...tab,
-                  messages: [...tab.messages, ...older],
+                  messages: recreated ? older : [...tab.messages, ...older],
                   hasOlder: Boolean(data.meta?.has_older),
                   nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
                   partial: Boolean(data.meta?.partial),
