@@ -23,11 +23,20 @@ const (
 	maxMessageLimit     = 500
 
 	// readBudget bounds one fast-snapshot refresh across all of its adaptive
-	// rounds. It is deliberately much smaller than the old all-or-nothing
-	// consumeTimeout (6s): a normal browse returns a recent snapshot quickly and,
-	// if some partitions are slow, returns the safely completed ones as a partial
-	// page instead of failing the whole request.
-	readBudget = 3 * time.Second
+	// rounds. A normal browse returns a recent snapshot quickly and, if some
+	// partitions are slow, returns the safely completed ones as a partial page
+	// instead of failing the whole request.
+	//
+	// This is a safety net for a genuinely slow cluster, not the mechanism that
+	// keeps a browse fast — that is fetchMaxPartitionBytes in kafka.go. While the
+	// reader still used franz-go's 1 MiB default a wide topic pulled ~100 MB per
+	// page and a 3s budget cut it off with less than half the partitions
+	// finished, which the UI then reported as a handful of messages. With the
+	// fetch sized to the window a full round moves a few MB, so the budget stops
+	// being the binding constraint and can afford to be generous: an incomplete
+	// partition contributes nothing to the page, so expiring early is far more
+	// costly to the user than waiting.
+	readBudget = 6 * time.Second
 	// maxAdaptiveRounds caps how many times snapshotRead widens partition windows
 	// to backfill a short page, guaranteeing the refill terminates.
 	maxAdaptiveRounds = 5
