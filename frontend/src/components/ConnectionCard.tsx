@@ -6,6 +6,7 @@ import { DeleteConnectionDialog } from '@/components/DeleteConnectionDialog'
 import { getConnectionTagClass } from '@/lib/connectionTags'
 import { cn } from '@/lib/utils'
 import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
+import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import type { Connection } from '@/types/api'
 
@@ -23,6 +24,15 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
   const [retesting, setRetesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  // Undefined until the links store has loaded, so the dialog can tell "no links"
+  // apart from "not known yet" and never claims zero on unloaded data.
+  const affectedLinkCount = useLinksStore((state) =>
+    state.loaded
+      ? state.links.filter(
+          (link) => link.source_conn_id === connection.id || link.target_conn_id === connection.id
+        ).length
+      : undefined
+  )
 
   const handleOpen = async () => {
     if (deleting || retesting) {
@@ -285,6 +295,7 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
         open={deleteDialogOpen}
         connectionName={connection.name}
         deleting={deleting}
+        linkCount={affectedLinkCount}
         onOpenChange={setDeleteDialogOpen}
         onConfirm={handleDeleteConfirm}
       />

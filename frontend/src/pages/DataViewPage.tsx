@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useParams } from 'react-router-dom'
-import { AlertTriangle, Loader2, Lock, RefreshCw } from 'lucide-react'
+import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { Sidebar } from '@/components/Sidebar'
 import { TabBar } from '@/components/TabBar'
 import { ConnectionChips } from '@/components/ConnectionChips'
@@ -122,12 +122,6 @@ export default function DataViewPage() {
                 <RefreshCw className="h-3.5 w-3.5" />
                 Retry
               </Button>
-            </div>
-          )}
-          {currentConnection?.read_only && (
-            <div className="flex items-center gap-2 border-b border-amber-500/30 bg-amber-500/5 px-4 py-1.5 font-mono text-[11px] text-amber-600 dark:text-amber-400">
-              <Lock className="h-3.5 w-3.5" />
-              Read-only connection — data-modifying commands are blocked.
             </div>
           )}
           <TabBar connId={id} />

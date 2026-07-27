@@ -10,6 +10,7 @@ import (
 	"net"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/twmb/franz-go/pkg/kadm"
@@ -24,6 +25,52 @@ import (
 const (
 	pingTimeout     = 5 * time.Second
 	metadataTimeout = 10 * time.Second
+
+	// fetchMaxWait bounds how long a broker holds a single fetch waiting for more
+	// records. Kept well below the reader's overall readBudget (see messages.go)
+	// so the poll loop stays responsive to the request's deadline instead of
+	// blocking on a slow or idle partition.
+	fetchMaxWait = 500 * time.Millisecond
+
+	// fetchMaxPartitionBytes caps how much a broker returns per partition in one
+	// fetch. franz-go's default is 1 MiB, which is wildly oversized for how this
+	// connector reads: a browse page divides its limit across every partition
+	// (initialPartitionQuota in messages.go), so a 100-message page over a
+	// 54-partition topic wants ~2 records per partition — tens of kilobytes — yet
+	// the broker would happily ship a megabyte of each partition's tail that the
+	// window filter then discards. Measured against a 54-partition topic with
+	// ~10 KB records that meant ~100 MB pulled to display 48 rows, and the read
+	// budget expired with less than half the partitions finished.
+	//
+	// The value is not simply "the window in bytes": franz-go buffers a run of
+	// consecutive fetches before the reader's first PollFetches, so what actually
+	// arrives is roughly this cap times that prefetch factor. Measured against a
+	// local 54-partition topic of ~10 KB records, reading one 100-message page,
+	// total records pulled scale linearly with the cap:
+	//
+	//	1 MiB (default)  21708 records / 212 MB
+	//	128 KiB          14144 records / 138 MB   (1.5x)
+	//	 64 KiB           5940 records /  58 MB   (3.7x)
+	//	 32 KiB           2970 records /  29 MB   (7.3x)
+	//	 16 KiB           1458 records /  14 MB   (14.9x)
+	//
+	// 32 KiB is the knee: still ~3 records per fetch at that record size against
+	// the ~2 a page needs, with a 7x cut in bytes moved. Large messages are not
+	// starved — since KIP-74 a broker always returns at least one complete record
+	// batch even when it exceeds the requested maximum.
+	//
+	// The content-search path (maxScanMessages / dividedWindow) wants roughly an
+	// order of magnitude more per partition and therefore trades one large fetch
+	// for several smaller ones. That is a deliberate call: the round trips
+	// pipeline per broker and scanTimeBudget is far more generous than the browse
+	// budget, so a single shared client stays simpler than a second connection
+	// pool to every broker.
+	fetchMaxPartitionBytes = 32 << 10
+
+	// fetchMaxBytes caps a whole fetch response from one broker. With the
+	// per-partition cap above doing the real work this is only a backstop against
+	// a broker that leads an unusually large share of a wide topic.
+	fetchMaxBytes = 4 << 20
 )
 
 type kafkaSettings struct {
@@ -36,10 +83,16 @@ type kafkaSettings struct {
 }
 
 type KafkaConnector struct {
-	client   *kgo.Client
-	admin    *kadm.Client
-	config   config.ConnectionConfig
-	settings kafkaSettings
+	client *kgo.Client
+	// consume is the fetch-loop seam used by consumeWindows. In production it is
+	// the same *kgo.Client as client; tests inject a deterministic fake so
+	// partial/timeout/cancellation reader behavior can be exercised without a
+	// live broker. See partitionConsumer in messages.go.
+	consume   partitionConsumer
+	admin     *kadm.Client
+	config    config.ConnectionConfig
+	settings  kafkaSettings
+	consumeMu sync.Mutex
 }
 
 // New creates a KafkaConnector and verifies broker reachability.
@@ -53,6 +106,22 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Kafk
 	if err != nil {
 		return nil, err
 	}
+	// FetchMaxWait keeps the message reader's poll loop responsive to its overall
+	// read budget. Appended here rather than inside buildClientOpts so the auth/
+	// TLS opt-count contract exercised by TestBuildClientOptsCoversAuthModes is
+	// unaffected.
+	opts = append(opts, kgo.FetchMaxWait(fetchMaxWait))
+	// Sized to what the reader's partition windows actually consume rather than
+	// franz-go's defaults; see the constants for the measurements behind them.
+	opts = append(opts, kgo.FetchMaxPartitionBytes(fetchMaxPartitionBytes))
+	opts = append(opts, kgo.FetchMaxBytes(fetchMaxBytes))
+	// Without this the client strips retryable fetch errors, including the
+	// UnknownTopicID that a delete/recreate of the same topic name produces — it
+	// only surfaces after 6 occurrences, which the 3s read budget never reaches, so
+	// the recreated topic looked like a plain timeout. franz-go's own docs point at
+	// this flag for reacting to topic deletion; consumeWindows ignores every other
+	// retryable error so the reader's behavior is otherwise unchanged.
+	opts = append(opts, kgo.KeepRetryableFetchErrors())
 
 	client, err := kgo.NewClient(opts...)
 	if err != nil {
@@ -61,6 +130,7 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Kafk
 
 	conn := &KafkaConnector{
 		client:   client,
+		consume:  client,
 		admin:    kadm.NewClient(client),
 		config:   cfg,
 		settings: settings,

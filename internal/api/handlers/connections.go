@@ -292,7 +292,11 @@ func (h *ConnectionsHandler) UpdateVisibleSchemas(w http.ResponseWriter, r *http
 func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	if !h.cfg.RemoveConnection(id) {
+	// Cascade: a link whose source or target connection is gone can never resolve,
+	// so it is removed in the same config mutation. Without this the link stayed in
+	// config.json forever and came back on every restart.
+	removed, removedLinkIDs := h.cfg.RemoveConnectionCascade(id)
+	if !removed {
 		writeError(w, http.StatusNotFound, "connection not found")
 		return
 	}
@@ -304,6 +308,10 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "failed to save configuration")
 		return
 	}
+
+	// Count only — link scopes/patterns can carry business identifiers, so the
+	// values themselves are deliberately not logged.
+	slog.Info("connection deleted", "connection_id", id, "removed_links", len(removedLinkIDs))
 
 	w.WriteHeader(http.StatusNoContent)
 }
