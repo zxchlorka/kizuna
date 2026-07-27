@@ -11,6 +11,13 @@
 
 Русский · [English](README.en.md)
 
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Переход из Kafka-сообщения в Redis-профиль, затем в отфильтрованные заказы PostgreSQL">
+  </picture>
+</p>
+
 </div>
 
 ## Зачем Kizuna
@@ -111,13 +118,12 @@ go run ./cmd/kizuna
 
 Связи — центральная идея Kizuna. Опишите один раз, как значение из PostgreSQL, Redis или Kafka указывает на другую систему, и дальше открывайте связанные данные из контекстного меню.
 
-На демонстрации ниже цепочка выглядит так: Kafka-сообщение `user_id` → Redis-ключ `profile:1003` → строки `public.orders` в PostgreSQL, отфильтрованные по этому же `user_id`. Фильтр, breadcrumb и меню обратного перехода формируются автоматически.
+Цепочка в начале страницы выглядит так: Kafka-сообщение `user_id` → Redis-ключ `profile:1003` → строки `public.orders` в PostgreSQL, отфильтрованные по этому же `user_id`. Фильтр, breadcrumb и обратные переходы формируются автоматически.
+
+Меню связей работает в обе стороны: из открытой записи видно и куда перейти дальше, и откуда вы пришли.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Переход из Kafka-сообщения в Redis-профиль, затем в отфильтрованные заказы PostgreSQL и обратно в Redis">
-  </picture>
+  <img src=".github/assets/links-menu.png" width="960" alt="Меню связей у Redis-ключа: прямой переход в PostgreSQL и обратные переходы к Kafka и к заказам">
 </p>
 
 <p align="center">

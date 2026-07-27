@@ -11,6 +11,13 @@ Browse data, work with messages, and follow related records without switching to
 
 [Русский](README.md) · English
 
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Jumping from a Kafka message to a Redis profile, then to filtered PostgreSQL orders">
+  </picture>
+</p>
+
 </div>
 
 ## Why Kizuna
@@ -111,13 +118,12 @@ The producer can send one message, a batch of comma-separated JSON objects in **
 
 Links are Kizuna's core idea. Describe once how a value from PostgreSQL, Redis, or Kafka points to another system, then open related data from its context menu.
 
-In the demo below, the path is: Kafka message `user_id` → Redis key `profile:1003` → `public.orders` rows in PostgreSQL filtered by that same `user_id`. The filter, breadcrumb, and reverse-navigation menu are created automatically.
+The chain at the top of this page goes: Kafka message `user_id` → Redis key `profile:1003` → `public.orders` rows in PostgreSQL filtered by that same `user_id`. The filter, breadcrumb, and reverse jumps are created automatically.
+
+The links menu works both ways: an open record shows where you can go next and where you came from.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Jumping from a Kafka message to a Redis profile, then filtered PostgreSQL orders, and back to Redis">
-  </picture>
+  <img src=".github/assets/links-menu.png" width="960" alt="The links menu on a Redis key: a forward jump into PostgreSQL and reverse jumps back to Kafka and to the orders">
 </p>
 
 <p align="center">
