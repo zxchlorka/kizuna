@@ -38,6 +38,8 @@ interface KafkaMessageBrowserProps {
   // Browse anchor — where reading starts. Composes with the search above rather
   // than replacing it: the seek narrows the range, the search narrows the rows.
   seek: KafkaSeek
+  partitionsWindowed: number
+  partitionsTotal: number
   // Which end of the log the tab reads from. Changes what "more" means, so it
   // also changes the paging button's wording.
   direction: KafkaDirection
@@ -84,6 +86,8 @@ export function KafkaMessageBrowser({
   scanned,
   scanPartial,
   seek,
+  partitionsWindowed,
+  partitionsTotal,
   direction,
   onPartitionChange,
   onSeekChange,
@@ -172,6 +176,8 @@ export function KafkaMessageBrowser({
           <KafkaSeekControl
             seek={seek}
             partitionFilter={partitionFilter}
+            partitionsWindowed={partitionsWindowed}
+            partitionsTotal={partitionsTotal}
             disabled={loading || scanning}
             onApply={onSeekChange}
           />

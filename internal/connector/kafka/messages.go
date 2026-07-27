@@ -282,7 +282,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	}
 	matchField, matchValue := parseMatchFilter(opts.Filters)
 	scanning := matchField != ""
-	seek, err := parseSeek(opts.Filters, partitionFilter)
+	seek, err := parseSeek(opts.Filters)
 	if err != nil {
 		return nil, err
 	}
@@ -334,7 +334,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	// Resolved once per request, then folded into each partition's window bound
 	// alongside the pagination cursor: the seek fixes where paging starts, the
 	// cursor tracks how far it has walked, and whichever is tighter wins.
-	seekBounds, err := c.resolveSeekBounds(ctx, topic, seek, direction, partitionFilter)
+	seekBounds, err := c.resolveSeekBounds(ctx, topic, seek, direction, scoped)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +438,13 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	// meta.partitions from the topic-listing and consumer-group endpoints, not
 	// this one), so this is a plain rename rather than an additive field.
 	meta := map[string]any{
-		"partitions_total":     len(scoped),
+		"partitions_total": len(scoped),
+		// Scoped partitions that actually had something to read this request.
+		// With an offset seek across many partitions this is the honest answer to
+		// "did that number mean anything here": one number lands inside only the
+		// partitions whose range contains it, and the caller deserves to see that
+		// rather than wonder why the page looks thin.
+		"partitions_windowed":  len(frontierWindows),
 		"partitions_completed": len(consumed.completed),
 		direction.moreField():  hasMore,
 		"candidates_read":      consumed.candidatesRead,
@@ -526,10 +532,10 @@ func (c *KafkaConnector) consumeWindows(
 	timeout time.Duration,
 ) (*consumeResult, error) {
 	result := &consumeResult{
-		rows:          make([]map[string]any, 0, target),
-		completed:     make(map[int32]bool, len(windows)),
+		rows:            make([]map[string]any, 0, target),
+		completed:       make(map[int32]bool, len(windows)),
 		completedWindow: make(map[int32]partitionWindow, len(windows)),
-		recordsRead:   make(map[int32]bool, len(windows)),
+		recordsRead:     make(map[int32]bool, len(windows)),
 	}
 	if len(windows) == 0 {
 		return result, nil
@@ -730,11 +736,11 @@ func resolveScanConsume(consumed *consumeResult, err error) (*consumeResult, err
 		// exhausted result. timedOut drives meta["partial_scan"], scanned/matched
 		// become 0, and the cursor is untouched, so the scan loop continues deeper.
 		return &consumeResult{
-			rows:          make([]map[string]any, 0),
-			completed:     make(map[int32]bool),
+			rows:            make([]map[string]any, 0),
+			completed:       make(map[int32]bool),
 			completedWindow: make(map[int32]partitionWindow),
-			recordsRead:   make(map[int32]bool),
-			timedOut:      true,
+			recordsRead:     make(map[int32]bool),
+			timedOut:        true,
 		}, nil
 	}
 	return nil, err
@@ -806,10 +812,10 @@ func (c *KafkaConnector) snapshotRead(
 	}
 
 	aggregate := &consumeResult{
-		rows:          make([]map[string]any, 0, limit),
-		completed:     make(map[int32]bool, len(frontierWindows)),
+		rows:            make([]map[string]any, 0, limit),
+		completed:       make(map[int32]bool, len(frontierWindows)),
 		completedWindow: make(map[int32]partitionWindow, len(frontierWindows)),
-		recordsRead:   make(map[int32]bool, len(frontierWindows)),
+		recordsRead:     make(map[int32]bool, len(frontierWindows)),
 	}
 	if len(frontierWindows) == 0 {
 		// Every scoped partition is empty at/below the cursor: a clean empty page.
@@ -1172,13 +1178,15 @@ type seekRequest struct {
 
 func (s seekRequest) empty() bool { return !s.hasOffset && !s.hasTime }
 
-// parseSeek reads the from_offset / from_timestamp filters. from_offset is
-// rejected without a single-partition filter on purpose: offsets are per
-// partition and diverge widely across a topic's partitions, so one number
-// applied to all of them would silently return an arbitrary slice of some and
-// nothing at all from others. A timestamp has no such ambiguity — it resolves
-// independently within each partition — so it stays available for every scope.
-func parseSeek(filters []connector.FilterExpr, partitionFilter int32) (seekRequest, error) {
+// parseSeek reads the from_offset / from_timestamp filters.
+//
+// An offset seek applies to every scoped partition. Offsets are per-partition
+// identifiers, so one number means a different position in each — on a topic
+// whose partitions have drifted apart it lands inside only a few of them and
+// the rest legitimately contribute nothing. That is not an error and the window
+// maths handles it exactly (see resolveSeekBounds), but it IS something the
+// caller should see, so GetData reports partitions_windowed alongside the page.
+func parseSeek(filters []connector.FilterExpr) (seekRequest, error) {
 	var seek seekRequest
 	for _, filter := range filters {
 		column := strings.ToLower(strings.TrimSpace(filter.Column))
@@ -1188,12 +1196,6 @@ func parseSeek(filters []connector.FilterExpr, partitionFilter int32) (seekReque
 		}
 		switch column {
 		case "from_offset":
-			if partitionFilter < 0 {
-				return seekRequest{}, fmt.Errorf(
-					"%w: from_offset requires a single partition — offsets are not comparable across partitions",
-					connector.ErrBadRequest,
-				)
-			}
 			offset, err := strconv.ParseInt(value, 10, 64)
 			if err != nil || offset < 0 {
 				return seekRequest{}, fmt.Errorf("%w: invalid from_offset %q", connector.ErrBadRequest, filter.Value)
@@ -1244,18 +1246,31 @@ func (c *KafkaConnector) resolveSeekBounds(
 	topic string,
 	seek seekRequest,
 	direction readDirection,
-	partitionFilter int32,
+	scoped []int32,
 ) (map[int32]int64, error) {
 	if seek.empty() {
 		return nil, nil
 	}
-	bounds := make(map[int32]int64, 1)
+	inScope := make(map[int32]bool, len(scoped))
+	for _, id := range scoped {
+		inScope[id] = true
+	}
+	bounds := make(map[int32]int64, len(scoped))
 
 	if seek.hasOffset {
-		if direction.oldestFirst() {
-			bounds[partitionFilter] = seek.offset
-		} else {
-			bounds[partitionFilter] = seek.offset + 1
+		// The same number for every scoped partition. Where it falls outside a
+		// partition's range the window maths resolves it without inventing data:
+		// a bound past the far end covers the whole partition, and a bound past
+		// the near end leaves nothing to read and the partition is skipped. That
+		// is stricter than Kafka UI, which clamps an out-of-range offset to the
+		// nearest edge and so presents that partition's edge as if it answered
+		// the query.
+		for _, id := range scoped {
+			if direction.oldestFirst() {
+				bounds[id] = seek.offset
+			} else {
+				bounds[id] = seek.offset + 1
+			}
 		}
 	}
 
@@ -1279,7 +1294,7 @@ func (c *KafkaConnector) resolveSeekBounds(
 			if offset.Err != nil {
 				continue
 			}
-			if partitionFilter >= 0 && id != partitionFilter {
+			if !inScope[id] {
 				continue
 			}
 			// When both forms are given, keep whichever bound is more restrictive

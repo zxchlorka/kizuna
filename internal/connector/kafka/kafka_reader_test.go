@@ -2074,7 +2074,7 @@ func TestResolveSeekBoundsOffsetIsInclusiveInBothDirections(t *testing.T) {
 	conn := &KafkaConnector{}
 	seek := seekRequest{offset: 500, hasOffset: true}
 
-	newest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionNewest, 3)
+	newest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionNewest, []int32{3})
 	if err != nil {
 		t.Fatalf("newest: %v", err)
 	}
@@ -2082,7 +2082,7 @@ func TestResolveSeekBoundsOffsetIsInclusiveInBothDirections(t *testing.T) {
 		t.Errorf("paging older, the bound is an exclusive ceiling one past the seeked offset: got %d, want 501", newest[3])
 	}
 
-	oldest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionOldest, 3)
+	oldest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionOldest, []int32{3})
 	if err != nil {
 		t.Fatalf("oldest: %v", err)
 	}
@@ -2192,5 +2192,136 @@ func TestSnapshotReadOldestWidensWithoutRereadingEarlierRounds(t *testing.T) {
 	}
 	if got := fake.added[1][topic][0].EpochOffset().Offset; got != 3 {
 		t.Errorf("round 2 must resume at offset 3 (one past round 1's window), got %d", got)
+	}
+}
+
+// An offset seek applies to every scoped partition, and one number means a
+// different position in each. Partitions whose range does not contain it must
+// resolve without inventing anything: a bound past the FAR end covers the whole
+// partition, a bound past the NEAR end leaves nothing and the partition is
+// skipped entirely. Kafka UI instead clamps to the nearest edge, which presents
+// that partition's edge as though it answered the query.
+func TestSnapshotReadOffsetSeekAcrossPartitionsSkipsOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	// Three partitions whose ranges have drifted apart, as on a long-lived topic.
+	starts := kadm.ListedOffsets{topic: {
+		0: {Topic: topic, Partition: 0, Offset: 1000},
+		1: {Topic: topic, Partition: 1, Offset: 5000},
+		2: {Topic: topic, Partition: 2, Offset: 100},
+	}}
+	ends := kadm.ListedOffsets{topic: {
+		0: {Topic: topic, Partition: 0, Offset: 2000}, // contains 1500
+		1: {Topic: topic, Partition: 1, Offset: 6000}, // entirely ABOVE 1500
+		2: {Topic: topic, Partition: 2, Offset: 500},  // entirely BELOW 1500
+	}}
+	scoped := []int32{0, 1, 2}
+
+	// A high watermark above every window with no records completes each windowed
+	// partition immediately (reachedEmptyEnd), so the read terminates on its own
+	// and the assertion is about which windows were BUILT, not about timing.
+	emptyButComplete := func() *fakeConsumer {
+		return &fakeConsumer{rounds: []kgo.Fetches{
+			fetchRound(topic,
+				partitionFetch{partition: 0, highWatermark: 1_000_000},
+				partitionFetch{partition: 1, highWatermark: 1_000_000},
+				partitionFetch{partition: 2, highWatermark: 1_000_000},
+			),
+		}}
+	}
+
+	tests := []struct {
+		name      string
+		direction readDirection
+		seekBound int64 // what resolveSeekBounds produces for offset 1500
+		want      map[int32]partitionWindow
+	}{
+		{
+			// "everything at or below 1500": p0 is bounded mid-range, p1 has
+			// nothing that low, p2 is entirely below it so all of it qualifies.
+			name:      "newest",
+			direction: directionNewest,
+			seekBound: 1501,
+			want: map[int32]partitionWindow{
+				0: {from: 1000, upper: 1501},
+				2: {from: 100, upper: 500},
+			},
+		},
+		{
+			// "everything at or above 1500": p0 is bounded from 1500 up, p1 is
+			// entirely above it so all of it qualifies, p2 has nothing that high.
+			name:      "oldest",
+			direction: directionOldest,
+			seekBound: 1500,
+			want: map[int32]partitionWindow{
+				0: {from: 1500, upper: 2000},
+				1: {from: 5000, upper: 6000},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			bounds := map[int32]int64{}
+			for _, id := range scoped {
+				bounds[id] = tc.seekBound
+			}
+
+			conn := &KafkaConnector{consume: emptyButComplete()}
+			_, frontierWindows, err := conn.snapshotRead(
+				context.Background(), topic, scoped, starts, ends, tc.direction, bounds, nil, 10,
+			)
+			if err != nil {
+				t.Fatalf("snapshotRead: %v", err)
+			}
+
+			if len(frontierWindows) != len(tc.want) {
+				t.Fatalf("windowed partitions = %v, want %v", frontierWindows, tc.want)
+			}
+			for id, want := range tc.want {
+				got, ok := frontierWindows[id]
+				if !ok {
+					t.Errorf("partition %d must have a window %v", id, want)
+					continue
+				}
+				if got != want {
+					t.Errorf("partition %d window = %v, want %v", id, got, want)
+				}
+			}
+		})
+	}
+}
+
+// resolveSeekBounds must place an offset bound on EVERY scoped partition, not
+// just one, and keep the direction's inclusive semantics for each.
+func TestResolveSeekBoundsOffsetCoversEveryScopedPartition(t *testing.T) {
+	t.Parallel()
+
+	conn := &KafkaConnector{}
+	scoped := []int32{0, 3, 7}
+	seek := seekRequest{offset: 500, hasOffset: true}
+
+	newest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionNewest, scoped)
+	if err != nil {
+		t.Fatalf("newest: %v", err)
+	}
+	oldest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionOldest, scoped)
+	if err != nil {
+		t.Fatalf("oldest: %v", err)
+	}
+
+	for _, id := range scoped {
+		if newest[id] != 501 {
+			t.Errorf("newest bound for partition %d = %d, want 501", id, newest[id])
+		}
+		if oldest[id] != 500 {
+			t.Errorf("oldest bound for partition %d = %d, want 500", id, oldest[id])
+		}
+	}
+	if len(newest) != len(scoped) || len(oldest) != len(scoped) {
+		t.Errorf("bounds must cover exactly the scoped partitions, got %v / %v", newest, oldest)
 	}
 }
