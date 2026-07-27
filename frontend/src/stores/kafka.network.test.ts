@@ -482,3 +482,81 @@ describe('Load older — topic recreated mid-session', () => {
     expect(useKafkaStore.getState().tabs['tab-normal'].messages).toEqual([first, older])
   })
 })
+
+// A seek narrows WHICH PART of the log is read; a field search narrows WHICH of
+// those messages are shown. The two are meant to compose, so setting a seek must
+// keep an active search running (re-anchored) rather than dropping it, and the
+// scan request must carry both filter sets.
+describe('Seek — browse anchor', () => {
+  function filtersOf(fetchMock: ReturnType<typeof vi.fn>, call = 0): Array<{ column: string; value: string }> {
+    const url = String(fetchMock.mock.calls[call][0])
+    const raw = new URL(url, 'http://localhost').searchParams.get('filters')
+    return raw ? JSON.parse(raw) : []
+  }
+
+  it('sends from_timestamp alongside an active search and keeps the search alive', async () => {
+    useKafkaStore.setState({
+      tabs: {
+        'tab-seek': {
+          ...useKafkaStore.getState().tabs['tab-seek'],
+          searchActive: true,
+          searchField: 'src.event_data.events[].name',
+          searchValue: 'Auth',
+          messages: [scanRow(0, 9)],
+        },
+      },
+    } as never)
+
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        columns: [],
+        rows: [scanRow(0, 3)],
+        total: 1,
+        has_more: false,
+        meta: { scanning: true, scanned: 1, matched: 1, has_older: false },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore
+      .getState()
+      .setSeek('conn-1', 'orders', 'tab-seek', { offset: '', timestamp: '2026-07-27T08:41:45.000Z' })
+
+    const filters = filtersOf(fetchMock)
+    expect(filters).toEqual(
+      expect.arrayContaining([
+        { column: 'from_timestamp', op: 'eq', value: '2026-07-27T08:41:45.000Z' },
+        { column: 'match_field', op: 'eq', value: 'src.event_data.events[].name' },
+      ])
+    )
+
+    const tab = useKafkaStore.getState().tabs['tab-seek']
+    expect(tab.searchActive).toBe(true)
+    expect(tab.seekTimestamp).toBe('2026-07-27T08:41:45.000Z')
+  })
+
+  it('drops an offset seek when widening back to all partitions', async () => {
+    useKafkaStore.setState({
+      tabs: {
+        'tab-widen': {
+          ...useKafkaStore.getState().tabs['tab-widen'],
+          partitionFilter: 3,
+          seekOffset: '500',
+          seekTimestamp: '',
+        },
+      },
+    } as never)
+
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ columns: [], rows: [], total: 0, has_more: false, meta: { has_older: false } })
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().setPartitionFilter('conn-1', 'orders', 'tab-widen', null)
+
+    // An offset means nothing without a partition and the backend rejects the
+    // pair, so the view must not keep sending it.
+    expect(useKafkaStore.getState().tabs['tab-widen'].seekOffset).toBe('')
+    expect(filtersOf(fetchMock).some((filter) => filter.column === 'from_offset')).toBe(false)
+  })
+})

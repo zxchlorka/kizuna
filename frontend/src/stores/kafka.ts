@@ -26,6 +26,10 @@ interface KafkaTopicTabState {
   hasOlder: boolean
   nextBeforeOffsets: Record<string, number> | null
   partitionFilter: number | null
+  // Browse anchor — see KafkaSeek. Persisted on the tab so Refresh and
+  // "Load older" keep reading from the same starting point.
+  seekOffset: string
+  seekTimestamp: string
 
   // "Filter loaded" — a pure client-side predicate over the already-loaded raw
   // `messages`, run in the browser with zero network requests. It never touches
@@ -67,6 +71,33 @@ interface KafkaSearch {
   value: string
 }
 
+// Where a browse starts reading, the reader's equivalent of Kafka UI's "Seek
+// Type". Both forms name the newest message a page may show and the reader walks
+// backwards from there — the only direction it reads. A seek is orthogonal to
+// the field search: it narrows WHICH PART of the log is read, the search narrows
+// WHICH of those messages are shown, and the two combine.
+export interface KafkaSeek {
+  // Raw user input, '' when unset. Only meaningful with a single partition
+  // selected; the backend rejects it otherwise, because offsets are not
+  // comparable across partitions.
+  offset: string
+  // RFC3339, '' when unset. Resolves independently inside each partition, so it
+  // works at any partition scope.
+  timestamp: string
+}
+
+function seekIsSet(seek: KafkaSeek | null | undefined): seek is KafkaSeek {
+  return Boolean(seek && (seek.offset.trim() !== '' || seek.timestamp.trim() !== ''))
+}
+
+// Tolerates a tab that predates these fields: ensureState only fills defaults
+// for a tab it has never seen, so a partially-populated existing tab (which is
+// how the store tests inject state) would otherwise read undefined here.
+function seekOf(tab: { seekOffset?: string; seekTimestamp?: string }): KafkaSeek | null {
+  const seek = { offset: tab.seekOffset ?? '', timestamp: tab.seekTimestamp ?? '' }
+  return seekIsSet(seek) ? seek : null
+}
+
 interface KafkaStore {
   tabs: Record<string, KafkaTopicTabState>
   fetchTopicChildren: (connId: string, topic: string, tabId: string) => Promise<void>
@@ -87,6 +118,10 @@ interface KafkaStore {
   refreshMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   fetchOlderMessages: (connId: string, topic: string, tabId: string) => Promise<void>
   setPartitionFilter: (connId: string, topic: string, tabId: string, partition: number | null) => Promise<void>
+  // Move the browse anchor (see KafkaSeek). Reloads from the new starting point;
+  // an active "Search topic" session is re-run from there rather than dropped,
+  // because a seek narrows the range a search covers rather than replacing it.
+  setSeek: (connId: string, topic: string, tabId: string, seek: KafkaSeek) => Promise<void>
   // Filter loaded (client-side, no network).
   setLoadedFilter: (tabId: string, field: string, value: string) => void
   clearLoadedFilter: (tabId: string) => void
@@ -111,6 +146,8 @@ function defaultTabState(): KafkaTopicTabState {
     hasOlder: false,
     nextBeforeOffsets: null,
     partitionFilter: null,
+    seekOffset: '',
+    seekTimestamp: '',
     filterField: '',
     filterValue: '',
     filterActive: false,
@@ -215,6 +252,7 @@ async function requestMessages(
   partition: number | null,
   beforeOffsets: Record<string, number> | null,
   search: KafkaSearch | null,
+  seek: KafkaSeek | null,
   signal?: AbortSignal
 ): Promise<MessagesResponse> {
   const filters: Array<{ column: string; op: string; value: string }> = []
@@ -223,6 +261,17 @@ async function requestMessages(
   }
   if (beforeOffsets && Object.keys(beforeOffsets).length > 0) {
     filters.push({ column: 'before_offsets', op: 'eq', value: JSON.stringify(beforeOffsets) })
+  }
+  // Sent alongside before_offsets rather than instead of it: the seek fixes
+  // where paging starts, the cursor tracks how far down it has walked, and the
+  // backend takes whichever bound is tighter.
+  if (seekIsSet(seek)) {
+    if (seek.offset.trim() !== '') {
+      filters.push({ column: 'from_offset', op: 'eq', value: seek.offset.trim() })
+    }
+    if (seek.timestamp.trim() !== '') {
+      filters.push({ column: 'from_timestamp', op: 'eq', value: seek.timestamp.trim() })
+    }
   }
   if (search) {
     filters.push({ column: 'match_field', op: 'eq', value: search.field })
@@ -285,7 +334,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     })
 
     try {
-      const data = await requestMessages(connId, topic, current.partitionFilter, beforeOffsets, search, controller.signal)
+      const data = await requestMessages(connId, topic, current.partitionFilter, beforeOffsets, search, seekOf(current), controller.signal)
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         const base = reset ? [] : tab.messages
@@ -423,7 +472,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         }))
         try {
-          const data = await requestMessages(connId, topic, current.partitionFilter, null, null)
+          const data = await requestMessages(connId, topic, current.partitionFilter, null, null, seekOf(current))
           set((state) => ({
             tabs: {
               ...state.tabs,
@@ -503,7 +552,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         }))
         try {
-          const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, null)
+          const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, null, seekOf(current))
           set((state) => {
             const tab = ensureState(state.tabs, tabId)
             // On cursor_reset the rows on screen came from a topic incarnation that
@@ -562,6 +611,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           [tabId]: {
             ...ensureState(state.tabs, tabId),
             partitionFilter: partition,
+            // An offset seek is only meaningful within one partition, and the
+            // backend rejects it otherwise — so widening back to all partitions
+            // drops it rather than leaving the view stuck on an error. The
+            // timestamp seek resolves per partition and survives.
+            ...(partition === null ? { seekOffset: '' } : {}),
             messages: [],
             nextBeforeOffsets: null,
             hasOlder: false,
@@ -582,6 +636,41 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         },
       }))
+      await get().fetchMessages(connId, topic, tabId)
+    },
+
+    setSeek: async (connId, topic, tabId, seek) => {
+      // A seek re-anchors the whole view, so the accumulated page and its cursor
+      // are no longer valid. The search session is deliberately KEPT: seeking
+      // narrows where a search looks, so dropping it would undo the composition
+      // the two are meant to have.
+      kafkaScanControllers.get(tabId)?.abort()
+      const previous = ensureState(get().tabs, tabId)
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            seekOffset: seek.offset,
+            seekTimestamp: seek.timestamp,
+            messages: [],
+            nextBeforeOffsets: null,
+            hasOlder: false,
+            scanning: false,
+            scanned: 0,
+            scanPartial: false,
+            partial: false,
+            partialReason: null,
+            partitionsTotal: 0,
+            partitionsCompleted: 0,
+            messagesReturned: 0,
+          },
+        },
+      }))
+      if (previous.searchActive && previous.searchField) {
+        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue)
+        return
+      }
       await get().fetchMessages(connId, topic, tabId)
     },
 

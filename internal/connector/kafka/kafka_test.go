@@ -246,6 +246,127 @@ func TestParsePartitionFilter(t *testing.T) {
 	}
 }
 
+func TestParseSeek(t *testing.T) {
+	t.Parallel()
+
+	seekFilter := func(column, value string) []connector.FilterExpr {
+		return []connector.FilterExpr{{Column: column, Op: "eq", Value: value}}
+	}
+
+	tests := []struct {
+		name            string
+		filters         []connector.FilterExpr
+		partitionFilter int32
+		wantEmpty       bool
+		wantOffset      int64
+		wantHasOffset   bool
+		wantMillis      int64
+		wantHasTime     bool
+		wantErr         bool
+	}{
+		{name: "no seek", partitionFilter: -1, wantEmpty: true},
+		{
+			name:            "offset with a single partition",
+			filters:         seekFilter("from_offset", "137820399911"),
+			partitionFilter: 17,
+			wantOffset:      137820399911,
+			wantHasOffset:   true,
+		},
+		{
+			// Offsets are per partition, so one number across all of them would
+			// return an arbitrary slice of some partitions and nothing from others.
+			name:            "offset across all partitions is rejected",
+			filters:         seekFilter("from_offset", "100"),
+			partitionFilter: -1,
+			wantErr:         true,
+		},
+		{
+			name:            "negative offset",
+			filters:         seekFilter("from_offset", "-1"),
+			partitionFilter: 0,
+			wantErr:         true,
+		},
+		{
+			// A timestamp resolves independently inside each partition, so it needs
+			// no partition scope.
+			name:            "rfc3339 timestamp across all partitions",
+			filters:         seekFilter("from_timestamp", "2026-07-27T08:41:45Z"),
+			partitionFilter: -1,
+			wantMillis:      time.Date(2026, 7, 27, 8, 41, 45, 0, time.UTC).UnixMilli(),
+			wantHasTime:     true,
+		},
+		{
+			name:            "epoch millis timestamp",
+			filters:         seekFilter("from_timestamp", "1784889705000"),
+			partitionFilter: -1,
+			wantMillis:      1784889705000,
+			wantHasTime:     true,
+		},
+		{
+			name:            "garbage timestamp",
+			filters:         seekFilter("from_timestamp", "yesterday"),
+			partitionFilter: -1,
+			wantErr:         true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := parseSeek(tc.filters, tc.partitionFilter)
+			if tc.wantErr {
+				if !errors.Is(err, connector.ErrBadRequest) {
+					t.Fatalf("expected bad request, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseSeek: %v", err)
+			}
+			if got.empty() != tc.wantEmpty {
+				t.Errorf("empty() = %v, want %v", got.empty(), tc.wantEmpty)
+			}
+			if got.hasOffset != tc.wantHasOffset {
+				t.Errorf("hasOffset = %v, want %v", got.hasOffset, tc.wantHasOffset)
+			}
+			if got.hasOffset && got.offset != tc.wantOffset {
+				t.Errorf("offset = %d, want %d", got.offset, tc.wantOffset)
+			}
+			if got.hasTime != tc.wantHasTime {
+				t.Errorf("hasTime = %v, want %v", got.hasTime, tc.wantHasTime)
+			}
+			if got.hasTime && got.at.UnixMilli() != tc.wantMillis {
+				t.Errorf("at = %d ms, want %d ms", got.at.UnixMilli(), tc.wantMillis)
+			}
+		})
+	}
+}
+
+// An offset seek names the newest message a page may show, so the exclusive
+// window bound sits one past it. Off by one here would silently hide the very
+// message the user seeked to.
+func TestResolveSeekCeilingsOffsetIsInclusive(t *testing.T) {
+	t.Parallel()
+
+	conn := &KafkaConnector{}
+	ceilings, err := conn.resolveSeekCeilings(
+		context.Background(),
+		"orders",
+		seekRequest{offset: 500, hasOffset: true},
+		3,
+	)
+	if err != nil {
+		t.Fatalf("resolveSeekCeilings: %v", err)
+	}
+	if got := ceilings[3]; got != 501 {
+		t.Fatalf("ceiling for partition 3 = %d, want 501 (exclusive bound one past the seeked offset)", got)
+	}
+	if len(ceilings) != 1 {
+		t.Fatalf("an offset seek must only bound its own partition, got %d entries", len(ceilings))
+	}
+}
+
 func TestParseBeforeOffsets(t *testing.T) {
 	t.Parallel()
 

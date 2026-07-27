@@ -1172,7 +1172,7 @@ func TestSnapshotReadSkipsPartitionWhoseCursorIsAtStart(t *testing.T) {
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	res, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, beforeOffsets, 100)
+	res, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, beforeOffsets, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1264,7 +1264,7 @@ func TestSnapshotReadDoesNotAdvanceCursorPastRecordsWithheldFromPage(t *testing.
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1, 2}, starts, ends, nil, limit)
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1, 2}, starts, ends, nil, nil, limit)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1343,7 +1343,7 @@ func TestSnapshotReadLaterEmptyRoundCannotLeapfrogEarlierWithheldRecords(t *test
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, limit)
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, nil, limit)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1425,7 +1425,7 @@ func TestSnapshotReadPartialNeverReportsAllPartitionsCompleted(t *testing.T) {
 	defer cancel()
 
 	scoped := []int32{0, 1, 2}
-	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, 100)
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, nil, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1489,7 +1489,7 @@ func TestSnapshotReadPartialAfterErroredRoundExcludesAttemptedPartitions(t *test
 	defer cancel()
 
 	scoped := []int32{0, 1, 2}
-	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, 100)
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, nil, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead must return the earlier round's work as a partial page, not an error: %v", err)
 	}
