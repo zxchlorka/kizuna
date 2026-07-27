@@ -13,6 +13,10 @@ interface DeleteConnectionDialogProps {
   open: boolean
   connectionName: string
   deleting: boolean
+  // Number of cross-source links that will be removed with this connection, when
+  // the links store already knows. Undefined means "not loaded" — the count is an
+  // enhancement, never a precondition for the delete.
+  linkCount?: number
   onOpenChange: (open: boolean) => void
   onConfirm: () => Promise<void> | void
 }
@@ -21,6 +25,7 @@ export function DeleteConnectionDialog({
   open,
   connectionName,
   deleting,
+  linkCount,
   onOpenChange,
   onConfirm,
 }: DeleteConnectionDialogProps) {
@@ -37,8 +42,14 @@ export function DeleteConnectionDialog({
                 Delete connection
               </DialogTitle>
               <DialogDescription className="mt-2 text-sm leading-6 text-muted-foreground">
-                This removes <span className="font-mono text-foreground">{connectionName}</span> from Kizuna. The
-                saved access settings for this connection will be deleted.
+                This deletes the saved connection{' '}
+                <span className="font-mono text-foreground">{connectionName}</span>, its open tabs, and all
+                cross-source links where it is a source or target.
+                {linkCount !== undefined && linkCount > 0 && (
+                  <span className="mt-2 block font-mono text-[11px] text-amber-600 dark:text-amber-400">
+                    {linkCount} {linkCount === 1 ? 'link' : 'links'} will also be removed
+                  </span>
+                )}
               </DialogDescription>
             </div>
           </div>

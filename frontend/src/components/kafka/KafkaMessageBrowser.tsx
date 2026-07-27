@@ -1,8 +1,10 @@
-import { Fragment, useEffect, useState, type FormEvent, type MouseEvent } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, Loader2, RefreshCw, Search, X } from 'lucide-react'
+import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
+import { ChevronDown, ChevronRight, ChevronsDown, Filter, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
+import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
+import { KafkaSeekControl } from '@/components/kafka/KafkaSeekControl'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -11,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
-import type { KafkaMessageRow } from '@/stores/kafka'
+import { filterLoadedMessages, type KafkaDirection, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -19,21 +21,39 @@ interface KafkaMessageBrowserProps {
   loading: boolean
   loadingOlder: boolean
   error: string | null
-  hasOlder: boolean
+  hasMore: boolean
   partitionCount: number
   partitionFilter: number | null
+  // Filter loaded (client-side).
+  filterActive: boolean
+  filterField: string
+  filterValue: string
+  // Search topic (backend scan).
   searchActive: boolean
   searchField: string
   searchValue: string
+  scanning: boolean
   scanned: number
+  scanPartial: boolean
+  // Browse anchor — where reading starts. Composes with the search above rather
+  // than replacing it: the seek narrows the range, the search narrows the rows.
+  seek: KafkaSeek
+  partitionsWindowed: number
+  partitionsTotal: number
+  // Which end of the log the tab reads from. Changes what "more" means, so it
+  // also changes the paging button's wording.
+  direction: KafkaDirection
   onPartitionChange: (partition: number | null) => void
+  onSeekChange: (seek: KafkaSeek) => void
+  onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
-  onSearch: (field: string, value: string) => void
+  onFilterLoaded: (field: string, value: string) => void
+  onClearFilter: () => void
+  onSearchTopic: (field: string, value: string) => void
+  onScanMore: () => void
+  onCancelScan: () => void
   onClearSearch: () => void
-  deepScanning: boolean
-  onDeepScan: (field: string, value: string) => void
-  onCancelDeepScan: () => void
   links: LinkRecord[]
   onOpenLink: (link: LinkRecord, value: string) => void
   onCreateLink: (message: KafkaMessageRow) => void
@@ -53,21 +73,33 @@ export function KafkaMessageBrowser({
   loading,
   loadingOlder,
   error,
-  hasOlder,
+  hasMore,
   partitionCount,
   partitionFilter,
+  filterActive,
+  filterField,
+  filterValue,
   searchActive,
   searchField,
   searchValue,
+  scanning,
   scanned,
+  scanPartial,
+  seek,
+  partitionsWindowed,
+  partitionsTotal,
+  direction,
   onPartitionChange,
+  onSeekChange,
+  onDirectionChange,
   onRefresh,
   onLoadOlder,
-  onSearch,
+  onFilterLoaded,
+  onClearFilter,
+  onSearchTopic,
+  onScanMore,
+  onCancelScan,
   onClearSearch,
-  deepScanning,
-  onDeepScan,
-  onCancelDeepScan,
   links,
   onOpenLink,
   onCreateLink,
@@ -80,31 +112,41 @@ export function KafkaMessageBrowser({
   const [valueInput, setValueInput] = useState('')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  const [pickerOpen, setPickerOpen] = useState(false)
 
-  // Seed the editable inputs from the active search (e.g. a link jump sets it
-  // programmatically) so the user sees what's being searched and can refine it.
+  // Seed the editable inputs when a search is set programmatically (e.g. a link
+  // jump populates the topic scan) so the user sees and can refine what's being
+  // searched. Guarded on a non-empty field so clearing a search never wipes what
+  // the user typed.
   useEffect(() => {
-    setFieldInput(searchField)
-    setValueInput(searchValue)
+    if (searchField) {
+      setFieldInput(searchField)
+      setValueInput(searchValue)
+    }
   }, [searchField, searchValue])
+
+  // The visible table rows: raw loaded messages, narrowed by the client-side
+  // "Filter loaded" predicate when one is applied. During a topic search the
+  // messages ARE the scan matches and no client filter applies.
+  const visibleMessages = useMemo(
+    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue) : messages),
+    [filterActive, filterField, filterValue, messages]
+  )
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY, message })
   }
 
-  const submitSearch = (event: FormEvent) => {
-    event.preventDefault()
-    if (!fieldInput.trim() || loading) {
-      return
-    }
-    onSearch(fieldInput, valueInput)
-  }
+  const canFilter = Boolean(fieldInput.trim()) && !searchActive && messages.length > 0
+  const canSearch = Boolean(fieldInput.trim()) && !scanning
 
-  const handleClear = () => {
-    setFieldInput('')
-    setValueInput('')
-    onClearSearch()
+  // Enter applies the cheap, instant client-side filter — never the expensive
+  // topic scan, which stays an explicit, confirmed button click.
+  const submitFilter = (event: FormEvent) => {
+    event.preventDefault()
+    if (!canFilter) return
+    onFilterLoaded(fieldInput, valueInput)
   }
 
   return (
@@ -128,71 +170,157 @@ export function KafkaMessageBrowser({
               ))}
             </SelectContent>
           </Select>
+
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+
+          <KafkaSeekControl
+            seek={seek}
+            partitionFilter={partitionFilter}
+            partitionsWindowed={partitionsWindowed}
+            partitionsTotal={partitionsTotal}
+            disabled={loading || scanning}
+            onApply={onSeekChange}
+          />
+
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+
+          {/* Which end of the log to read from. Two states, so a segmented pair
+              keeps the current one visible without opening anything. */}
+          <div className="flex items-center rounded-sm border border-border p-0.5" role="group" aria-label="Read order">
+            {(['newest', 'oldest'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={direction === option}
+                disabled={loading || scanning}
+                onClick={() => onDirectionChange(option)}
+                className={cn(
+                  'rounded-[2px] px-2 py-0.5 font-mono text-[11px] transition-colors disabled:opacity-50',
+                  direction === option ? 'bg-orange-500/15 text-orange-500' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {option === 'newest' ? 'Newest' : 'Oldest'}
+              </button>
+            ))}
+          </div>
         </div>
-        <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRefresh} disabled={loading}>
-          <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {loading && messages.length > 0 && (
+            <span className="flex items-center gap-1.5 font-mono text-[10px] text-muted-foreground">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Refreshing…
+            </span>
+          )}
+          <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRefresh} disabled={loading || scanning}>
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            Refresh
+          </Button>
+        </div>
       </div>
 
-      <form onSubmit={submitSearch} className="flex flex-wrap items-center gap-2">
+      <form onSubmit={submitFilter} className="flex flex-wrap items-center gap-2">
         <input
           value={fieldInput}
           onChange={(event) => setFieldInput(event.target.value)}
-          placeholder="JSON field (e.g. product_id, user.id)"
+          placeholder="JSON path (e.g. events[].name)"
+          aria-label="JSON field path"
+          title="Nested paths and arrays are supported, for example events[].name"
           spellCheck={false}
           autoComplete="off"
           className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
         />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 font-mono text-[11px]"
+          onClick={() => setPickerOpen(true)}
+          title="Browse sampled messages and pick a field"
+        >
+          <ListTree className="h-3.5 w-3.5" />
+          Choose field
+        </Button>
         <input
           value={valueInput}
           onChange={(event) => setValueInput(event.target.value)}
           placeholder="equals value"
+          aria-label="Expected JSON field value"
           spellCheck={false}
           autoComplete="off"
           className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
         />
-        <Button type="submit" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" disabled={loading || !fieldInput.trim()}>
-          <Search className="h-3.5 w-3.5" />
-          Search
+        <Button
+          type="submit"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 font-mono text-[11px]"
+          disabled={!canFilter}
+          title="Filter the messages already loaded below — instant, no request"
+        >
+          <Filter className="h-3.5 w-3.5" />
+          Filter loaded
         </Button>
         <Button
           type="button"
           size="sm"
           variant="outline"
           className="h-8 gap-1.5 font-mono text-[11px]"
-          disabled={loading || deepScanning || !fieldInput.trim()}
+          disabled={!canSearch}
           onClick={() => setConfirmOpen(true)}
+          title="Scan the whole topic on the server — slower, one request per step"
         >
-          <ChevronsDown className="h-3.5 w-3.5" />
-          Search all
+          <Search className="h-3.5 w-3.5" />
+          Search topic
         </Button>
-        {searchActive && (
-          <Button type="button" size="sm" variant="ghost" className="h-8 gap-1.5 font-mono text-[11px]" onClick={handleClear}>
-            <X className="h-3.5 w-3.5" />
-            Clear
-          </Button>
-        )}
       </form>
 
+      {filterActive && (
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          <span>
+            Filtered {messages.length.toLocaleString()} loaded messages · {visibleMessages.length.toLocaleString()} matches
+          </span>
+          <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onClearFilter}>
+            <X className="h-3 w-3" />
+            Clear filter
+          </Button>
+        </div>
+      )}
+
       {searchActive && (
-        <div className="font-mono text-[11px] text-muted-foreground">
-          Scanned {scanned.toLocaleString()} · found {messages.length.toLocaleString()}
-          {!hasOlder && ' · reached beginning'}
+        <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
+          {scanning && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
+          <span>
+            {scanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} · {messages.length.toLocaleString()} matches
+            {!scanning && scanPartial && ' · stopped at scan budget'}
+            {!scanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
+          </span>
+          {scanning ? (
+            <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onCancelScan}>
+              <X className="h-3 w-3" />
+              Cancel
+            </Button>
+          ) : (
+            <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onClearSearch}>
+              <X className="h-3 w-3" />
+              Clear search
+            </Button>
+          )}
         </div>
       )}
 
       {error && <ErrorBanner message={error} onRetry={onRefresh} />}
 
-      {!error && messages.length === 0 && !loading ? (
+      {!error && visibleMessages.length === 0 && !loading && !scanning ? (
         <EmptyState
           variant="no_tables"
           compact
-          title={searchActive ? 'No matches' : 'No messages'}
+          title={searchActive ? 'No matches' : filterActive ? 'No loaded matches' : 'No messages'}
           description={
             searchActive
-              ? 'No messages matched in the scanned window. Try “Scan more” to look deeper.'
-              : 'The selected partitions returned no messages in the newest window.'
+              ? 'No messages matched the scanned windows. Try “Scan more” to look deeper.'
+              : filterActive
+                ? 'No loaded messages match this filter. Adjust the path or value, or clear the filter.'
+                : 'The selected partitions returned no messages in the newest window.'
           }
         />
       ) : (
@@ -213,7 +341,7 @@ export function KafkaMessageBrowser({
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
-              {messages.map((message) => {
+              {visibleMessages.map((message) => {
                 const rowKey = `${message.partition}:${message.offset}`
                 const isExpanded = expanded === rowKey
                 return (
@@ -252,27 +380,47 @@ export function KafkaMessageBrowser({
         </div>
       )}
 
-      {hasOlder && (
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="h-8 w-full gap-1.5 font-mono text-[11px]"
-          disabled={loadingOlder || deepScanning}
-          onClick={onLoadOlder}
-        >
-          {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-          {searchActive
-            ? loadingOlder
-              ? 'Scanning…'
-              : 'Scan more'
-            : loadingOlder
-              ? 'Loading older messages…'
-              : 'Load older messages'}
-        </Button>
-      )}
+      {hasMore &&
+        (searchActive ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-full gap-1.5 font-mono text-[11px]"
+            disabled={scanning}
+            onClick={onScanMore}
+          >
+            {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
+            {scanning ? 'Scanning…' : 'Scan more'}
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="h-8 w-full gap-1.5 font-mono text-[11px]"
+            disabled={loadingOlder}
+            onClick={onLoadOlder}
+          >
+            {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
+            {loadingOlder
+              ? direction === 'oldest'
+                ? 'Loading newer messages…'
+                : 'Loading older messages…'
+              : direction === 'oldest'
+                ? 'Load newer messages'
+                : 'Load older messages'}
+          </Button>
+        ))}
 
       <KafkaMessageModal message={modalMessage} onClose={() => setModalMessage(null)} />
+
+      <JsonFieldPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        messages={messages}
+        onUseField={(path) => setFieldInput(path)}
+      />
 
       {menu && (
         <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
@@ -330,8 +478,9 @@ export function KafkaMessageBrowser({
             <DialogTitle>Search the whole topic?</DialogTitle>
           </DialogHeader>
           <p className="text-xs text-muted-foreground">
-            Scans the entire topic from newest to oldest in batches until a match is found or the beginning is
-            reached. This can take a long time and many requests. You can cancel anytime.
+            Scans the topic on the server from newest to oldest, one budgeted step at a time, and shows matches as
+            they are found. Each step is a request that can take several seconds. Continue deeper with “Scan more”,
+            and cancel a running step anytime.
           </p>
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(false)}>
@@ -342,24 +491,14 @@ export function KafkaMessageBrowser({
               size="sm"
               onClick={() => {
                 setConfirmOpen(false)
-                onDeepScan(fieldInput, valueInput)
+                onSearchTopic(fieldInput, valueInput)
               }}
             >
-              Continue
+              Search topic
             </Button>
           </div>
         </DialogContent>
       </Dialog>
-
-      {deepScanning && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-3 rounded-sm bg-background/85 backdrop-blur-sm">
-          <Loader2 className="h-6 w-6 animate-spin text-orange-500" />
-          <div className="font-mono text-xs text-muted-foreground">Deep scan · scanned {scanned.toLocaleString()}…</div>
-          <Button type="button" size="sm" variant="outline" onClick={onCancelDeepScan}>
-            Cancel
-          </Button>
-        </div>
-      )}
     </div>
   )
 }
