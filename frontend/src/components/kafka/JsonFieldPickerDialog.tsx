@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
 import { ListTree, Search } from 'lucide-react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { JsonFieldTreeNode } from '@/components/kafka/JsonFieldTreeNode'
+import { JsonFieldTreeNode, fieldRowGrid } from '@/components/kafka/JsonFieldTreeNode'
 import { buildSchemaTree, type SampleRow, type SchemaNode } from '@/lib/jsonSchemaSample'
 import { cn } from '@/lib/utils'
 
@@ -59,7 +59,10 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
   const [filter, setFilter] = useState('')
   const [userExpanded, setUserExpanded] = useState<Set<string>>(() => new Set())
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
-  const [selectedPath, setSelectedPath] = useState<string | null>(null)
+  // The node, not just its path: the footer reads its parsed segments to show
+  // how the path is built, which is what teaches the grammar.
+  const [selected, setSelected] = useState<SchemaNode | null>(null)
+  const selectedPath = selected?.path ?? null
 
   const needle = filter.trim().toLowerCase()
   const filtering = needle !== ''
@@ -92,7 +95,7 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
   useEffect(() => {
     if (!open) return
     setFilter('')
-    setSelectedPath(null)
+    setSelected(null)
     const firstLevel = new Set<string>()
     for (const child of root.children) {
       if (child.expandable) firstLevel.add(child.path)
@@ -119,7 +122,7 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
 
   const selectNode = (node: SchemaNode) => {
     setFocusedPath(node.path)
-    setSelectedPath(node.path)
+    setSelected(node)
   }
 
   const focusAt = (index: number) => {
@@ -193,7 +196,13 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-2xl">
+      {/* min-w-0 is load-bearing, not cosmetic: DialogContent is a grid, and a
+          grid item defaults to min-width:auto. A single unbreakable sampled
+          value (a percent-encoded query string, a user agent) then sets the
+          item's min-content width and pushes the row out from under the
+          dialog's max-width, which is what made values run beneath the
+          presence column. */}
+      <DialogContent className="max-w-4xl [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListTree className="h-4 w-4 text-orange-500" />
@@ -236,55 +245,94 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
                 autoComplete="off"
                 className="h-8 w-full rounded-sm border border-border bg-background pl-7 pr-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
               />
-            </div>
-
-            <div
-              ref={treeRef}
-              role="tree"
-              aria-label="JSON fields"
-              tabIndex={0}
-              onKeyDown={handleTreeKeyDown}
-              onFocus={() => {
-                if (!focusedPath) focusAt(0)
-              }}
-              className="max-h-[52vh] min-h-[16rem] overflow-y-auto rounded-sm border border-border bg-background/40 p-1 outline-none focus-visible:ring-1 focus-visible:ring-orange-500/40"
-            >
-              {noMatches ? (
-                <p className="px-2 py-6 text-center font-mono text-[11px] text-muted-foreground">
-                  No fields match “{filter.trim()}”.
-                </p>
-              ) : (
-                displayRoot.children.map((child) => (
-                  <JsonFieldTreeNode
-                    key={child.path}
-                    node={child}
-                    depth={0}
-                    expanded={effectiveExpanded}
-                    focusedPath={focusedPath}
-                    selectedPath={selectedPath}
-                    onToggle={toggle}
-                    onFocus={setFocusedPath}
-                    onSelect={selectNode}
-                  />
-                ))
+              {filtering && (
+                <span className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 font-mono text-[10px] tabular-nums text-muted-foreground">
+                  {visible.length} {visible.length === 1 ? 'field' : 'fields'}
+                </span>
               )}
             </div>
 
-            <p className="text-[11px] text-muted-foreground">
-              Only scalar fields can be selected. Array items fold into a single{' '}
-              <span className="font-mono text-cyan-600 dark:text-cyan-400">[ ]</span> step.
-            </p>
+            {/* Labels and rows share one grid and one flow item so the headings
+                sit directly over the columns they name. "Seen" also carries the
+                meaning of the presence column, which stays blank on every field
+                present in all sampled messages. */}
+            <div>
+              <div
+                className={cn(
+                  fieldRowGrid,
+                  'px-2 pb-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-muted-foreground/70'
+                )}
+              >
+                <span>Field</span>
+                <span>Type</span>
+                <span>Example</span>
+                <span className="text-right" title="Shown only when a field is missing from some sampled messages">
+                  Seen
+                </span>
+              </div>
+
+              <div
+                ref={treeRef}
+                role="tree"
+                aria-label="JSON fields"
+                tabIndex={0}
+                onKeyDown={handleTreeKeyDown}
+                onFocus={() => {
+                  if (!focusedPath) focusAt(0)
+                }}
+                className="max-h-[52vh] min-h-[16rem] overflow-y-auto overflow-x-hidden rounded-sm border border-border bg-background/40 p-1 outline-none focus-visible:ring-1 focus-visible:ring-orange-500/40"
+              >
+                {noMatches ? (
+                  <p className="px-2 py-6 text-center font-mono text-[11px] text-muted-foreground">
+                    No fields match “{filter.trim()}”.
+                  </p>
+                ) : (
+                  displayRoot.children.map((child) => (
+                    <JsonFieldTreeNode
+                      key={child.path}
+                      node={child}
+                      depth={0}
+                      expanded={effectiveExpanded}
+                      focusedPath={focusedPath}
+                      selectedPath={selectedPath}
+                      onToggle={toggle}
+                      onFocus={setFocusedPath}
+                      onSelect={selectNode}
+                    />
+                  ))
+                )}
+              </div>
+            </div>
           </div>
         )}
 
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+          {/* The path broken into its steps. This is what the picker is FOR, so
+              it gets the one piece of colour down here, and it demonstrates the
+              grammar — the cyan [ ] step for array fan-out, the orange leaf —
+              in place of a sentence explaining it. */}
           <div className="min-w-0 flex-1">
-            {selectedPath ? (
-              <span className="block truncate font-mono text-xs text-foreground" title={selectedPath}>
-                {selectedPath}
+            {selected ? (
+              <span className="flex min-w-0 flex-wrap items-center font-mono text-xs" title={selected.path}>
+                {selected.segments.map((segment, index) => {
+                  const last = index === selected.segments.length - 1
+                  return (
+                    <Fragment key={`${segment.type}-${index}`}>
+                      {index > 0 && segment.type === 'key' && <span className="text-muted-foreground/50">.</span>}
+                      {segment.type === 'index' ? (
+                        <span className="text-cyan-600 dark:text-cyan-400">[ ]</span>
+                      ) : (
+                        <span className={last ? 'text-orange-500' : 'text-muted-foreground'}>{segment.key}</span>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </span>
             ) : (
-              <span className="font-mono text-[11px] text-muted-foreground">Select a scalar field to continue</span>
+              <span className="font-mono text-[11px] text-muted-foreground">
+                Pick a scalar field. Array items fold into one{' '}
+                <span className="text-cyan-600 dark:text-cyan-400">[ ]</span> step.
+              </span>
             )}
           </div>
           <div className="flex items-center gap-2">

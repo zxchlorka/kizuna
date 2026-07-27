@@ -4,6 +4,7 @@ import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
+import { KafkaSeekControl } from '@/components/kafka/KafkaSeekControl'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
@@ -12,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
-import { filterLoadedMessages, type KafkaMessageRow } from '@/stores/kafka'
+import { filterLoadedMessages, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -34,7 +35,11 @@ interface KafkaMessageBrowserProps {
   scanning: boolean
   scanned: number
   scanPartial: boolean
+  // Browse anchor — where reading starts. Composes with the search above rather
+  // than replacing it: the seek narrows the range, the search narrows the rows.
+  seek: KafkaSeek
   onPartitionChange: (partition: number | null) => void
+  onSeekChange: (seek: KafkaSeek) => void
   onRefresh: () => void
   onLoadOlder: () => void
   onFilterLoaded: (field: string, value: string) => void
@@ -74,7 +79,9 @@ export function KafkaMessageBrowser({
   scanning,
   scanned,
   scanPartial,
+  seek,
   onPartitionChange,
+  onSeekChange,
   onRefresh,
   onLoadOlder,
   onFilterLoaded,
@@ -153,6 +160,15 @@ export function KafkaMessageBrowser({
               ))}
             </SelectContent>
           </Select>
+
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+
+          <KafkaSeekControl
+            seek={seek}
+            partitionFilter={partitionFilter}
+            disabled={loading || scanning}
+            onApply={onSeekChange}
+          />
         </div>
         <div className="flex items-center gap-2">
           {loading && messages.length > 0 && (

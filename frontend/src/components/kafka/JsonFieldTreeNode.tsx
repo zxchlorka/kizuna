@@ -27,23 +27,26 @@ const typeBadgeStyles: Record<JsonTypeCategory, string> = {
   array: 'border-cyan-500/20 bg-cyan-500/5 text-cyan-600 dark:text-cyan-400',
 }
 
-function TypeBadges({ types }: { types: JsonTypeCategory[] }) {
-  return (
-    <span className="flex shrink-0 items-center gap-1">
-      {types.map((type) => (
-        <span
-          key={type}
-          className={cn(
-            'rounded-sm border px-1 py-px font-mono text-[9px] uppercase tracking-[0.08em]',
-            typeBadgeStyles[type]
-          )}
-        >
-          {type}
-        </span>
-      ))}
-    </span>
-  )
+// Abbreviated so several unioned types still fit the fixed type column without
+// breaking the alignment the rest of the row depends on.
+const typeAbbrev: Record<JsonTypeCategory, string> = {
+  string: 'str',
+  number: 'num',
+  boolean: 'bool',
+  null: 'null',
+  object: 'obj',
+  array: 'arr',
 }
+
+// A sampled value can be a multi-kilobyte token (percent-encoded query strings,
+// user agents). CSS truncation alone still forces the browser to lay the whole
+// string out, so cap it here and keep the full text in the row's title.
+const exampleLimit = 140
+
+// Row template. Every column is a fixed share rather than content-sized, so the
+// type, example and presence columns line up straight down the list no matter
+// how deep a row sits — the tree indent is absorbed inside the name column.
+export const fieldRowGrid = 'grid grid-cols-[minmax(0,1fr)_4.25rem_minmax(0,1.15fr)_2.5rem] items-center gap-2'
 
 export function JsonFieldTreeNode({
   node,
@@ -62,7 +65,16 @@ export function JsonFieldTreeNode({
   // picked. Mixed shapes (both) fall through to expand — the rare scalar branch
   // is still reachable by drilling in.
   const primaryAction = node.expandable ? () => onToggle(node.path) : node.selectable ? () => onSelect(node) : undefined
+
+  // Presence is only worth showing when a field is NOT in every sampled message.
+  // Rendering "100/100" on every row buries the handful of rows that carry real
+  // information, so a silent presence column reads as "always there" and only a
+  // gap in coverage earns a mark.
   const partial = node.sampleCount > 0 && node.seenCount < node.sampleCount
+  const presencePct = node.sampleCount > 0 ? Math.round((node.seenCount / node.sampleCount) * 100) : 0
+
+  const example = node.example !== undefined && node.example !== '' ? node.example : null
+  const exampleShort = example && example.length > exampleLimit ? `${example.slice(0, exampleLimit)}…` : example
 
   return (
     <Fragment>
@@ -73,9 +85,9 @@ export function JsonFieldTreeNode({
         aria-selected={isSelected}
         onMouseDown={() => onFocus(node.path)}
         onClick={primaryAction}
-        style={{ paddingLeft: depth * 14 + 8 }}
         className={cn(
-          'group flex items-center gap-2 rounded-sm py-1 pr-2 transition-colors',
+          fieldRowGrid,
+          'rounded-sm py-1 pr-2 transition-colors',
           primaryAction ? 'cursor-pointer' : 'cursor-default',
           isSelected
             ? 'bg-orange-500/10 ring-1 ring-inset ring-orange-500/40'
@@ -84,38 +96,55 @@ export function JsonFieldTreeNode({
               : 'hover:bg-muted/40'
         )}
       >
-        {/* Expand / collapse affordance, or an alignment spacer for leaves. */}
-        {node.expandable ? (
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
-            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          </span>
-        ) : (
-          <span className="h-4 w-4 shrink-0" aria-hidden="true" />
-        )}
-
-        <span
-          className={cn(
-            'shrink-0 font-mono text-xs',
-            node.label === '[]' ? 'text-cyan-600 dark:text-cyan-400' : 'text-foreground'
+        {/* Name — indent lives here so every following column stays aligned. */}
+        <span className="flex min-w-0 items-center gap-1.5" style={{ paddingLeft: depth * 14 + 8 }}>
+          {node.expandable ? (
+            <span className="flex h-4 w-4 shrink-0 items-center justify-center text-muted-foreground">
+              {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+            </span>
+          ) : (
+            <span className="h-4 w-4 shrink-0" aria-hidden="true" />
           )}
-        >
-          {node.label === '[]' ? '[ ]' : node.label}
+          <span
+            className={cn(
+              'truncate font-mono text-xs',
+              node.label === '[]' ? 'text-cyan-600 dark:text-cyan-400' : 'text-foreground'
+            )}
+            title={node.label}
+          >
+            {node.label === '[]' ? '[ ]' : node.label}
+          </span>
         </span>
 
-        <TypeBadges types={node.types} />
+        {/* Type */}
+        <span className="flex items-center gap-1 overflow-hidden">
+          {node.types.map((type) => (
+            <span
+              key={type}
+              className={cn(
+                'rounded-sm border px-1 py-px font-mono text-[9px] uppercase tracking-[0.06em]',
+                typeBadgeStyles[type]
+              )}
+            >
+              {typeAbbrev[type]}
+            </span>
+          ))}
+        </span>
 
-        {node.example !== undefined && node.example !== '' && (
-          <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">{node.example}</span>
-        )}
+        {/* Example */}
+        <span className="truncate font-mono text-[11px] text-muted-foreground" title={example ?? undefined}>
+          {exampleShort}
+        </span>
 
+        {/* Presence — silent at full coverage, see `partial` above. */}
         <span
           className={cn(
-            'ml-auto shrink-0 rounded-sm px-1 font-mono text-[10px] tabular-nums',
-            partial ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground/70'
+            'text-right font-mono text-[10px] tabular-nums',
+            partial ? 'text-amber-600 dark:text-amber-400' : 'text-transparent'
           )}
           title={`Present in ${node.seenCount} of ${node.sampleCount} sampled messages`}
         >
-          {node.seenCount}/{node.sampleCount}
+          {partial ? `${presencePct}%` : ''}
         </span>
       </div>
 

@@ -192,6 +192,10 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	}
 	matchField, matchValue := parseMatchFilter(opts.Filters)
 	scanning := matchField != ""
+	seek, err := parseSeek(opts.Filters, partitionFilter)
+	if err != nil {
+		return nil, err
+	}
 
 	metaCtx, cancelMeta := context.WithTimeout(ctx, metadataTimeout)
 	defer cancelMeta()
@@ -237,6 +241,14 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		return nil, fmt.Errorf("%w: partition %d not found in topic %q", connector.ErrBadRequest, partitionFilter, topic)
 	}
 
+	// Resolved once per request, then folded into each partition's window bound
+	// alongside the pagination cursor: the seek fixes where paging starts, the
+	// cursor tracks how far down it has walked, and the tighter of the two wins.
+	seekCeilings, err := c.resolveSeekCeilings(ctx, topic, seek, partitionFilter)
+	if err != nil {
+		return nil, err
+	}
+
 	var (
 		consumed        *consumeResult
 		frontierWindows map[int32]partitionWindow
@@ -254,6 +266,9 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			for _, id := range scoped {
 				start, end := partitionOffsets(topic, id, starts, ends)
 				upper := end
+				if ceiling, ok := seekCeilings[id]; ok && ceiling < upper {
+					upper = ceiling
+				}
 				if before, ok := cursor[id]; ok && before < upper {
 					upper = before
 				}
@@ -273,7 +288,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			return result, windows, nil
 		}
 		// Normal browse: bounded-quota fast snapshot with adaptive refill.
-		return c.snapshotRead(ctx, topic, scoped, starts, ends, cursor, limit)
+		return c.snapshotRead(ctx, topic, scoped, starts, ends, seekCeilings, cursor, limit)
 	}
 
 	consumed, frontierWindows, cursorReset, err := c.consumeWithIncarnationRetry(topic, beforeOffsets, readAttempt)
@@ -636,6 +651,7 @@ func (c *KafkaConnector) snapshotRead(
 	topic string,
 	scoped []int32,
 	starts, ends kadm.ListedOffsets,
+	seekCeilings map[int32]int64,
 	beforeOffsets map[int32]int64,
 	limit int,
 ) (*consumeResult, map[int32]partitionWindow, error) {
@@ -649,6 +665,9 @@ func (c *KafkaConnector) snapshotRead(
 	for _, id := range scoped {
 		low, end := partitionOffsets(topic, id, starts, ends)
 		upper := end
+		if ceiling, ok := seekCeilings[id]; ok && ceiling < upper {
+			upper = ceiling
+		}
 		if before, ok := beforeOffsets[id]; ok && before < upper {
 			upper = before
 		}
@@ -970,6 +989,125 @@ func parsePartitionFilter(filters []connector.FilterExpr) (int32, error) {
 		return int32(partition), nil
 	}
 	return -1, nil
+}
+
+// seekRequest is the user-chosen starting point for a browse, the reader's
+// equivalent of Kafka UI's "Seek Type". Both forms name the NEWEST message the
+// page may show and the reader walks backwards from there, which is the only
+// direction it reads (see GetData):
+//
+//   - offset: start at this offset inclusive, then older.
+//   - timestamp: start at this instant inclusive, then older.
+//
+// A seek is orthogonal to the field search: it narrows which part of the log is
+// read, while match_field/match_value narrow which of those messages are shown.
+type seekRequest struct {
+	offset    int64
+	hasOffset bool
+	at        time.Time
+	hasTime   bool
+}
+
+func (s seekRequest) empty() bool { return !s.hasOffset && !s.hasTime }
+
+// parseSeek reads the from_offset / from_timestamp filters. from_offset is
+// rejected without a single-partition filter on purpose: offsets are per
+// partition and diverge widely across a topic's partitions, so one number
+// applied to all of them would silently return an arbitrary slice of some and
+// nothing at all from others. A timestamp has no such ambiguity — it resolves
+// independently within each partition — so it stays available for every scope.
+func parseSeek(filters []connector.FilterExpr, partitionFilter int32) (seekRequest, error) {
+	var seek seekRequest
+	for _, filter := range filters {
+		column := strings.ToLower(strings.TrimSpace(filter.Column))
+		value := strings.TrimSpace(filter.Value)
+		if value == "" {
+			continue
+		}
+		switch column {
+		case "from_offset":
+			if partitionFilter < 0 {
+				return seekRequest{}, fmt.Errorf(
+					"%w: from_offset requires a single partition — offsets are not comparable across partitions",
+					connector.ErrBadRequest,
+				)
+			}
+			offset, err := strconv.ParseInt(value, 10, 64)
+			if err != nil || offset < 0 {
+				return seekRequest{}, fmt.Errorf("%w: invalid from_offset %q", connector.ErrBadRequest, filter.Value)
+			}
+			seek.offset, seek.hasOffset = offset, true
+		case "from_timestamp":
+			at, err := parseSeekTime(value)
+			if err != nil {
+				return seekRequest{}, err
+			}
+			seek.at, seek.hasTime = at, true
+		}
+	}
+	return seek, nil
+}
+
+// parseSeekTime accepts RFC3339 (what the browser sends) or epoch milliseconds
+// (convenient for scripted callers).
+func parseSeekTime(value string) (time.Time, error) {
+	if at, err := time.Parse(time.RFC3339, value); err == nil {
+		return at, nil
+	}
+	if millis, err := strconv.ParseInt(value, 10, 64); err == nil && millis >= 0 {
+		return time.UnixMilli(millis), nil
+	}
+	return time.Time{}, fmt.Errorf(
+		"%w: invalid from_timestamp %q — expected RFC3339 or epoch milliseconds",
+		connector.ErrBadRequest, value,
+	)
+}
+
+// resolveSeekCeilings turns a seek into an exclusive upper offset per partition,
+// the same shape as the pagination cursor so both fold into the window bound the
+// same way. Returns nil when no seek is set.
+func (c *KafkaConnector) resolveSeekCeilings(
+	ctx context.Context,
+	topic string,
+	seek seekRequest,
+	partitionFilter int32,
+) (map[int32]int64, error) {
+	if seek.empty() {
+		return nil, nil
+	}
+	ceilings := make(map[int32]int64, 1)
+
+	if seek.hasOffset {
+		// Inclusive of the named offset, and the bound is exclusive.
+		ceilings[partitionFilter] = seek.offset + 1
+	}
+
+	if seek.hasTime {
+		// "At or after T+1ms" is the first message strictly newer than T, so as an
+		// exclusive bound it keeps every message at or before T — matching the
+		// inclusive semantics the UI offers. kadm reports a partition with nothing
+		// newer as its end offset, which is the correct no-op ceiling.
+		listCtx, cancel := context.WithTimeout(ctx, metadataTimeout)
+		defer cancel()
+		listed, err := c.admin.ListOffsetsAfterMilli(listCtx, seek.at.UnixMilli()+1, topic)
+		if err != nil {
+			return nil, normalizeKafkaError(err)
+		}
+		for id, offset := range listed[topic] {
+			if offset.Err != nil {
+				continue
+			}
+			if partitionFilter >= 0 && id != partitionFilter {
+				continue
+			}
+			// The tighter of the two wins when both forms are given.
+			if existing, ok := ceilings[id]; !ok || offset.Offset < existing {
+				ceilings[id] = offset.Offset
+			}
+		}
+	}
+
+	return ceilings, nil
 }
 
 func parseBeforeOffsets(filters []connector.FilterExpr) (map[int32]int64, error) {

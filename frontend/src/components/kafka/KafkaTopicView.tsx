@@ -44,6 +44,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const refreshMessages = useKafkaStore((state) => state.refreshMessages)
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
+  const setSeek = useKafkaStore((state) => state.setSeek)
   const setLoadedFilter = useKafkaStore((state) => state.setLoadedFilter)
   const clearLoadedFilter = useKafkaStore((state) => state.clearLoadedFilter)
   const searchTopic = useKafkaStore((state) => state.searchTopic)
@@ -223,7 +224,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
             scanPartial={tab?.scanPartial ?? false}
+            seek={{ offset: tab?.seekOffset ?? '', timestamp: tab?.seekTimestamp ?? '' }}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
+            onSeekChange={(next) => void setSeek(connId, topic, tabId, next)}
             onRefresh={() => void refreshMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
             onFilterLoaded={(field, value) => setLoadedFilter(tabId, field, value)}
