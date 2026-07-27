@@ -48,7 +48,10 @@ go run ./cmd/kizuna
 Подключайте три типа источников в одном мастере: **PostgreSQL**, **Redis** и **Kafka**. Redis поддерживает standalone, Cluster и Sentinel; для Kafka доступны несколько брокеров, SASL и TLS с пользовательским CA bundle.
 
 <p align="center">
-  <img src=".github/assets/connections-types.gif" width="960" alt="Мастер нового подключения с выбором PostgreSQL, Redis и Kafka">
+  <picture>
+    <source srcset=".github/assets/connections-types.webp" type="image/webp">
+    <img src=".github/assets/connections-types.png" width="960" alt="Мастер нового подключения с выбором PostgreSQL, Redis и Kafka">
+  </picture>
 </p>
 
 ## PostgreSQL — от схемы до запроса
@@ -56,14 +59,19 @@ go run ./cmd/kizuna
 Откройте схему, таблицу или представление прямо из дерева. В табличном режиме есть сортировка, фильтры, пагинация, типы колонок и быстрые переходы по foreign key. Режим редактирования поддерживает массовые изменения, добавление и удаление строк, а breadcrumbs сохраняют контекст навигации.
 
 <p align="center">
-  <img src=".github/assets/postgres-explorer.gif" width="960" alt="Переход от дерева схем PostgreSQL к таблице orders и фильтрации по user_id">
+  <picture>
+    <source srcset=".github/assets/postgres-explorer.webp" type="image/webp">
+    <img src=".github/assets/postgres-explorer.png" width="960" alt="Переход от дерева схем PostgreSQL к таблице orders и фильтрации по user_id">
+  </picture>
 </p>
 
 - SQL-консоль: автодополнение, история, многооператорные скрипты, безопасный `EXPLAIN` и подтверждаемый `EXPLAIN ANALYZE`.
 - DDL-операции и инспектор индексов — без переключения в отдельный клиент.
 - Прямые и обратные внешние ключи: переход к родительской записи, **Referenced By** и возврат по breadcrumbs.
 
-![SQL-консоль Kizuna](.github/assets/sql-console.png)
+<p align="center">
+  <img src=".github/assets/sql-console.png" width="960" alt="SQL-консоль Kizuna">
+</p>
 
 ## Redis — ключи, типы и CLI
 
@@ -72,10 +80,15 @@ go run ./cmd/kizuna
 Встроенный Redis CLI форматирует результат команды и показывает кнопку `open <key>` для распознанного ключа. Например, после `HGETALL profile:1001` можно сразу открыть `profile:1001` в типизированном редакторе — без копирования имени ключа.
 
 <p align="center">
-  <img src=".github/assets/redis-cli.gif" width="960" alt="Redis CLI выполняет HGETALL profile:1001 и предлагает сразу открыть этот ключ">
+  <picture>
+    <source srcset=".github/assets/redis-cli.webp" type="image/webp">
+    <img src=".github/assets/redis-cli.png" width="960" alt="Redis CLI выполняет HGETALL profile:1001 и предлагает сразу открыть этот ключ">
+  </picture>
 </p>
 
-![Типизированный просмотр Redis-ключа](.github/assets/redis-keys.png)
+<p align="center">
+  <img src=".github/assets/redis-keys.png" width="960" alt="Типизированный просмотр Redis-ключа">
+</p>
 
 ## Kafka — сообщения и управляемый produce
 
@@ -84,22 +97,32 @@ go run ./cmd/kizuna
 Производитель умеет отправлять одно сообщение, набор JSON-объектов в режиме **Multi** или пакет, развёрнутый из шаблона в режиме **Loop**. Перед отправкой Kizuna показывает точный preview каждого сообщения: выражения `{{i}}`, шаг и количество можно проверить до записи в Kafka.
 
 <p align="center">
-  <img src=".github/assets/kafka-produce.gif" width="960" alt="Kafka producer переключается между режимами Multi и Loop и показывает предварительный просмотр пакета сообщений">
+  <picture>
+    <source srcset=".github/assets/kafka-produce.webp" type="image/webp">
+    <img src=".github/assets/kafka-produce.png" width="960" alt="Kafka producer переключается между режимами Multi и Loop и показывает предварительный просмотр пакета сообщений">
+  </picture>
 </p>
 
-![Браузер Kafka-сообщений](.github/assets/kafka-messages.png)
+<p align="center">
+  <img src=".github/assets/kafka-messages.png" width="960" alt="Браузер Kafka-сообщений">
+</p>
 
 ## Связи между источниками
 
 Связи — центральная идея Kizuna. Опишите один раз, как значение из PostgreSQL, Redis или Kafka указывает на другую систему, и дальше открывайте связанные данные из контекстного меню.
 
-На демонстрации ниже цепочка выглядит так: Kafka-сообщение `user_id` → Redis-ключ `profile:1001` → строки `public.orders` в PostgreSQL → обратно к профилю Redis. Фильтр, breadcrumb и меню обратного перехода формируются автоматически.
+На демонстрации ниже цепочка выглядит так: Kafka-сообщение `user_id` → Redis-ключ `profile:1003` → строки `public.orders` в PostgreSQL, отфильтрованные по этому же `user_id`. Фильтр, breadcrumb и меню обратного перехода формируются автоматически.
 
 <p align="center">
-  <img src=".github/assets/cross-source-links.gif" width="960" alt="Переход из Kafka-сообщения в Redis-профиль, затем в отфильтрованные заказы PostgreSQL и обратно в Redis">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Переход из Kafka-сообщения в Redis-профиль, затем в отфильтрованные заказы PostgreSQL и обратно в Redis">
+  </picture>
 </p>
 
-![Настройка cross-source links](.github/assets/links-settings.png)
+<p align="center">
+  <img src=".github/assets/links-settings.png" width="960" alt="Настройка cross-source links">
+</p>
 
 ## В одном контейнере
 

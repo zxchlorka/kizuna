@@ -48,7 +48,10 @@ The frontend is embedded in one Go binary; the app listens on port `9090`.
 Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and **Kafka**. Redis supports standalone, Cluster, and Sentinel; Kafka supports multiple brokers, SASL, and TLS with a custom CA bundle.
 
 <p align="center">
-  <img src=".github/assets/connections-types.gif" width="960" alt="New connection wizard choosing PostgreSQL, Redis, and Kafka">
+  <picture>
+    <source srcset=".github/assets/connections-types.webp" type="image/webp">
+    <img src=".github/assets/connections-types.png" width="960" alt="New connection wizard choosing PostgreSQL, Redis, and Kafka">
+  </picture>
 </p>
 
 ## PostgreSQL — from schema to query
@@ -56,14 +59,19 @@ Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and *
 Open a schema, table, or view directly from the tree. The table view provides sorting, filters, pagination, column types, and quick foreign-key navigation. Edit mode supports bulk changes, row creation, and deletion, while breadcrumbs retain navigation context.
 
 <p align="center">
-  <img src=".github/assets/postgres-explorer.gif" width="960" alt="Moving from a PostgreSQL schema tree to the orders table and filtering by user_id">
+  <picture>
+    <source srcset=".github/assets/postgres-explorer.webp" type="image/webp">
+    <img src=".github/assets/postgres-explorer.png" width="960" alt="Moving from a PostgreSQL schema tree to the orders table and filtering by user_id">
+  </picture>
 </p>
 
 - SQL console with autocomplete, history, multi-statement scripts, safe `EXPLAIN`, and confirmed `EXPLAIN ANALYZE`.
 - DDL actions and an index inspector without switching to another client.
 - Forward and reverse foreign keys: jump to a parent row, inspect **Referenced By**, and return through breadcrumbs.
 
-![Kizuna SQL console](.github/assets/sql-console.png)
+<p align="center">
+  <img src=".github/assets/sql-console.png" width="960" alt="Kizuna SQL console">
+</p>
 
 ## Redis — keys, types, and CLI
 
@@ -72,10 +80,15 @@ The key tree is grouped by prefix. Kizuna opens the right editor for String, Has
 The built-in Redis CLI formats command output and adds an `open <key>` button for a recognized key. After `HGETALL profile:1001`, for example, you can open `profile:1001` in its typed editor immediately—without copying the key name.
 
 <p align="center">
-  <img src=".github/assets/redis-cli.gif" width="960" alt="Redis CLI runs HGETALL profile:1001 and offers to open that key immediately">
+  <picture>
+    <source srcset=".github/assets/redis-cli.webp" type="image/webp">
+    <img src=".github/assets/redis-cli.png" width="960" alt="Redis CLI runs HGETALL profile:1001 and offers to open that key immediately">
+  </picture>
 </p>
 
-![Typed Redis key view](.github/assets/redis-keys.png)
+<p align="center">
+  <img src=".github/assets/redis-keys.png" width="960" alt="Typed Redis key view">
+</p>
 
 ## Kafka — messages and controlled produce
 
@@ -84,22 +97,32 @@ Browse topics, partitions, consumer groups, and JSON messages in one view. Messa
 The producer can send one message, a batch of comma-separated JSON objects in **Multi** mode, or a template-expanded batch in **Loop** mode. Before publishing, Kizuna previews every exact message, so you can validate `{{i}}` expressions, step, and count before writing to Kafka.
 
 <p align="center">
-  <img src=".github/assets/kafka-produce.gif" width="960" alt="Kafka producer switches between Multi and Loop modes and previews the expanded message batch">
+  <picture>
+    <source srcset=".github/assets/kafka-produce.webp" type="image/webp">
+    <img src=".github/assets/kafka-produce.png" width="960" alt="Kafka producer switches between Multi and Loop modes and previews the expanded message batch">
+  </picture>
 </p>
 
-![Kafka message browser](.github/assets/kafka-messages.png)
+<p align="center">
+  <img src=".github/assets/kafka-messages.png" width="960" alt="Kafka message browser">
+</p>
 
 ## Cross-source links
 
 Links are Kizuna's core idea. Describe once how a value from PostgreSQL, Redis, or Kafka points to another system, then open related data from its context menu.
 
-In the demo below, the path is: Kafka message `user_id` → Redis key `profile:1001` → filtered `public.orders` rows in PostgreSQL → back to the Redis profile. The filter, breadcrumb, and reverse-navigation menu are created automatically.
+In the demo below, the path is: Kafka message `user_id` → Redis key `profile:1003` → `public.orders` rows in PostgreSQL filtered by that same `user_id`. The filter, breadcrumb, and reverse-navigation menu are created automatically.
 
 <p align="center">
-  <img src=".github/assets/cross-source-links.gif" width="960" alt="Jumping from a Kafka message to a Redis profile, then filtered PostgreSQL orders, and back to Redis">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Jumping from a Kafka message to a Redis profile, then filtered PostgreSQL orders, and back to Redis">
+  </picture>
 </p>
 
-![Cross-source link settings](.github/assets/links-settings.png)
+<p align="center">
+  <img src=".github/assets/links-settings.png" width="960" alt="Cross-source link settings">
+</p>
 
 ## One container
 
