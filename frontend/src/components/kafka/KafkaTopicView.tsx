@@ -226,6 +226,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanned={tab?.scanned ?? 0}
             scanPartial={tab?.scanPartial ?? false}
             seek={{ offset: tab?.seekOffset ?? '', timestamp: tab?.seekTimestamp ?? '' }}
+            partitionsWindowed={tab?.partitionsWindowed ?? 0}
+            partitionsTotal={tab?.partitionsTotal ?? 0}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onSeekChange={(next) => void setSeek(connId, topic, tabId, next)}
             direction={tab?.direction ?? 'newest'}

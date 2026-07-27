@@ -68,6 +68,10 @@ interface KafkaTopicTabState {
   partialReason: string | null
   partitionsTotal: number
   partitionsCompleted: number
+  // Scoped partitions that actually had something to read. With an offset seek
+  // across many partitions this is what tells the user whether that one number
+  // meant anything on this topic — see KafkaSeekControl.
+  partitionsWindowed: number
   messagesReturned: number
 }
 
@@ -193,6 +197,7 @@ function defaultTabState(): KafkaTopicTabState {
     partialReason: null,
     partitionsTotal: 0,
     partitionsCompleted: 0,
+    partitionsWindowed: 0,
     messagesReturned: 0,
   }
 }
@@ -239,6 +244,7 @@ interface MessagesResponse {
     // yourself; drive it off `partial` instead.
     partitions_total?: number
     partitions_completed?: number
+    partitions_windowed?: number
     candidates_read?: number
     elapsed_ms?: number
     // Normal browse path only (no match_field/match_value filters active).
@@ -532,6 +538,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
                 partialReason: data.meta?.partial_reason ?? null,
                 partitionsTotal: data.meta?.partitions_total ?? 0,
                 partitionsCompleted: data.meta?.partitions_completed ?? 0,
+                partitionsWindowed: data.meta?.partitions_windowed ?? 0,
                 messagesReturned: data.meta?.messages_returned ?? 0,
                 messagesLoading: false,
               },
@@ -620,6 +627,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
                   partialReason: data.meta?.partial_reason ?? null,
                   partitionsTotal: data.meta?.partitions_total ?? 0,
                   partitionsCompleted: data.meta?.partitions_completed ?? 0,
+                  partitionsWindowed: data.meta?.partitions_windowed ?? 0,
                   messagesReturned: data.meta?.messages_returned ?? 0,
                   loadingOlder: false,
                 },
@@ -657,11 +665,6 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           [tabId]: {
             ...ensureState(state.tabs, tabId),
             partitionFilter: partition,
-            // An offset seek is only meaningful within one partition, and the
-            // backend rejects it otherwise — so widening back to all partitions
-            // drops it rather than leaving the view stuck on an error. The
-            // timestamp seek resolves per partition and survives.
-            ...(partition === null ? { seekOffset: '' } : {}),
             messages: [],
             nextCursor: null,
             hasMore: false,
@@ -678,6 +681,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             partialReason: null,
             partitionsTotal: 0,
             partitionsCompleted: 0,
+            partitionsWindowed: 0,
             messagesReturned: 0,
           },
         },
@@ -709,6 +713,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             partialReason: null,
             partitionsTotal: 0,
             partitionsCompleted: 0,
+            partitionsWindowed: 0,
             messagesReturned: 0,
           },
         },
@@ -740,6 +745,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             partialReason: null,
             partitionsTotal: 0,
             partitionsCompleted: 0,
+            partitionsWindowed: 0,
             messagesReturned: 0,
           },
         },

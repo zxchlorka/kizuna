@@ -6,9 +6,12 @@ import type { KafkaSeek } from '@/stores/kafka'
 
 interface KafkaSeekControlProps {
   seek: KafkaSeek
-  // An offset seek needs a single partition; null means "All partitions", where
-  // only the timestamp form is offered.
   partitionFilter: number | null
+  // Coverage of the last response: how many scoped partitions had anything to
+  // read, out of how many are scoped. Only meaningful to show for an offset seek
+  // over several partitions — see the readout below.
+  partitionsWindowed: number
+  partitionsTotal: number
   disabled: boolean
   onApply: (seek: KafkaSeek) => void
 }
@@ -34,30 +37,38 @@ function rfc3339ToLocalInput(rfc: string): string {
   )}:${pad(parsed.getMinutes())}`
 }
 
-// Where a browse starts reading. Both forms are inclusive and read backwards
-// from the chosen point, which is the only direction the reader goes, so the
-// control is labelled "From" rather than offering a direction the reader cannot
-// honour. It sits beside the partition selector because the offset form is only
-// available once a single partition is chosen.
-export function KafkaSeekControl({ seek, partitionFilter, disabled, onApply }: KafkaSeekControlProps) {
-  const offsetAvailable = partitionFilter !== null
-
+// Where a browse starts reading. Both forms are inclusive and continue in the
+// tab's direction, so the control is labelled "From" and the Newest/Oldest
+// toggle beside it decides which way.
+//
+// An offset applies to every scoped partition. Offsets are per-partition
+// identifiers, so one number lands inside only the partitions whose range
+// contains it — on a topic whose partitions have drifted far apart that can be a
+// handful out of dozens. That is a real answer, not an error, so the control
+// allows it and reports the coverage instead of refusing the input.
+export function KafkaSeekControl({
+  seek,
+  partitionFilter,
+  partitionsWindowed,
+  partitionsTotal,
+  disabled,
+  onApply,
+}: KafkaSeekControlProps) {
   const [mode, setMode] = useState<SeekMode>(() => (seek.offset ? 'offset' : 'timestamp'))
   const [offsetInput, setOffsetInput] = useState(seek.offset)
   const [timestampInput, setTimestampInput] = useState(() => rfc3339ToLocalInput(seek.timestamp))
 
-  // Re-sync when the tab's anchor changes from elsewhere — switching to all
-  // partitions drops an offset seek, and the inputs must follow.
+  // Re-sync when the tab's anchor changes from elsewhere (a cleared seek, a
+  // restored tab) so the inputs never show a point the reader is not using.
   useEffect(() => {
     setOffsetInput(seek.offset)
     setTimestampInput(rfc3339ToLocalInput(seek.timestamp))
   }, [seek.offset, seek.timestamp])
 
-  useEffect(() => {
-    if (!offsetAvailable) setMode('timestamp')
-  }, [offsetAvailable])
-
   const active = seek.offset !== '' || seek.timestamp !== ''
+  // Only an offset spread over several partitions can partially miss; a single
+  // partition or a timestamp seek always resolves everywhere it applies.
+  const showCoverage = seek.offset !== '' && partitionFilter === null && partitionsTotal > 1
 
   const apply = (event: FormEvent) => {
     event.preventDefault()
@@ -82,25 +93,19 @@ export function KafkaSeekControl({ seek, partitionFilter, disabled, onApply }: K
       {/* Mode toggle. Two options only, so a segmented pair reads faster than a
           select and keeps the chosen mode visible without opening anything. */}
       <div className="flex items-center rounded-sm border border-border p-0.5">
-        {(['timestamp', 'offset'] as const).map((option) => {
-          const unavailable = option === 'offset' && !offsetAvailable
-          return (
-            <button
-              key={option}
-              type="button"
-              disabled={unavailable}
-              onClick={() => setMode(option)}
-              title={unavailable ? 'Select a single partition to seek by offset' : undefined}
-              className={cn(
-                'rounded-[2px] px-2 py-0.5 font-mono text-[11px] transition-colors',
-                mode === option ? 'bg-orange-500/15 text-orange-500' : 'text-muted-foreground hover:text-foreground',
-                unavailable && 'cursor-not-allowed opacity-40 hover:text-muted-foreground'
-              )}
-            >
-              {option === 'timestamp' ? 'Time' : 'Offset'}
-            </button>
-          )
-        })}
+        {(['timestamp', 'offset'] as const).map((option) => (
+          <button
+            key={option}
+            type="button"
+            onClick={() => setMode(option)}
+            className={cn(
+              'rounded-[2px] px-2 py-0.5 font-mono text-[11px] transition-colors',
+              mode === option ? 'bg-orange-500/15 text-orange-500' : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            {option === 'timestamp' ? 'Time' : 'Offset'}
+          </button>
+        ))}
       </div>
 
       {mode === 'offset' ? (
@@ -135,6 +140,22 @@ export function KafkaSeekControl({ seek, partitionFilter, disabled, onApply }: K
         Seek
       </Button>
 
+      {/* Coverage of an offset seek spread over several partitions. A partition
+          whose range does not contain the number contributes nothing, so this is
+          the difference between "the topic is quiet" and "that offset does not
+          exist here". Amber once some partitions dropped out. */}
+      {showCoverage && (
+        <span
+          className={cn(
+            'font-mono text-[11px] tabular-nums',
+            partitionsWindowed < partitionsTotal ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'
+          )}
+          title="Partitions whose offset range contains this offset. The rest have nothing at that position."
+        >
+          {partitionsWindowed} of {partitionsTotal} partitions in range
+        </span>
+      )}
+
       {active && (
         <Button
           type="button"
@@ -145,7 +166,7 @@ export function KafkaSeekControl({ seek, partitionFilter, disabled, onApply }: K
           disabled={disabled}
         >
           <X className="h-3 w-3" />
-          Back to newest
+          Clear
         </Button>
       )}
     </form>

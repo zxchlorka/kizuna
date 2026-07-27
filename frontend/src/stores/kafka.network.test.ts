@@ -535,7 +535,7 @@ describe('Seek — browse anchor', () => {
     expect(tab.seekTimestamp).toBe('2026-07-27T08:41:45.000Z')
   })
 
-  it('drops an offset seek when widening back to all partitions', async () => {
+  it('keeps an offset seek when widening back to all partitions', async () => {
     useKafkaStore.setState({
       tabs: {
         'tab-widen': {
@@ -554,10 +554,14 @@ describe('Seek — browse anchor', () => {
 
     await useKafkaStore.getState().setPartitionFilter('conn-1', 'orders', 'tab-widen', null)
 
-    // An offset means nothing without a partition and the backend rejects the
-    // pair, so the view must not keep sending it.
-    expect(useKafkaStore.getState().tabs['tab-widen'].seekOffset).toBe('')
-    expect(filtersOf(fetchMock).some((filter) => filter.column === 'from_offset')).toBe(false)
+    // An offset applies to every scoped partition: it lands inside the ones
+    // whose range contains it and the rest contribute nothing, which the
+    // partitions_windowed readout reports. So widening keeps the anchor rather
+    // than silently discarding what the user asked for.
+    expect(useKafkaStore.getState().tabs['tab-widen'].seekOffset).toBe('500')
+    expect(filtersOf(fetchMock)).toEqual(
+      expect.arrayContaining([{ column: 'from_offset', op: 'eq', value: '500' }])
+    )
   })
 })
 

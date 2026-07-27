@@ -254,59 +254,55 @@ func TestParseSeek(t *testing.T) {
 	}
 
 	tests := []struct {
-		name            string
-		filters         []connector.FilterExpr
-		partitionFilter int32
-		wantEmpty       bool
-		wantOffset      int64
-		wantHasOffset   bool
-		wantMillis      int64
-		wantHasTime     bool
-		wantErr         bool
+		name          string
+		filters       []connector.FilterExpr
+		wantEmpty     bool
+		wantOffset    int64
+		wantHasOffset bool
+		wantMillis    int64
+		wantHasTime   bool
+		wantErr       bool
 	}{
-		{name: "no seek", partitionFilter: -1, wantEmpty: true},
+		{name: "no seek", wantEmpty: true},
 		{
-			name:            "offset with a single partition",
-			filters:         seekFilter("from_offset", "137820399911"),
-			partitionFilter: 17,
-			wantOffset:      137820399911,
-			wantHasOffset:   true,
+			name:          "offset",
+			filters:       seekFilter("from_offset", "137820399911"),
+			wantOffset:    137820399911,
+			wantHasOffset: true,
 		},
 		{
-			// Offsets are per partition, so one number across all of them would
-			// return an arbitrary slice of some partitions and nothing from others.
-			name:            "offset across all partitions is rejected",
-			filters:         seekFilter("from_offset", "100"),
-			partitionFilter: -1,
-			wantErr:         true,
+			// Offsets are per partition, so one number means a different position
+			// in each — but that is a question about the RESULT, not a malformed
+			// request. It is accepted and GetData reports how many partitions the
+			// number actually landed inside.
+			name:          "offset across all partitions is accepted",
+			filters:       seekFilter("from_offset", "100"),
+			wantOffset:    100,
+			wantHasOffset: true,
 		},
 		{
-			name:            "negative offset",
-			filters:         seekFilter("from_offset", "-1"),
-			partitionFilter: 0,
-			wantErr:         true,
+			name:    "negative offset",
+			filters: seekFilter("from_offset", "-1"),
+			wantErr: true,
 		},
 		{
 			// A timestamp resolves independently inside each partition, so it needs
 			// no partition scope.
-			name:            "rfc3339 timestamp across all partitions",
-			filters:         seekFilter("from_timestamp", "2026-07-27T08:41:45Z"),
-			partitionFilter: -1,
-			wantMillis:      time.Date(2026, 7, 27, 8, 41, 45, 0, time.UTC).UnixMilli(),
-			wantHasTime:     true,
+			name:        "rfc3339 timestamp",
+			filters:     seekFilter("from_timestamp", "2026-07-27T08:41:45Z"),
+			wantMillis:  time.Date(2026, 7, 27, 8, 41, 45, 0, time.UTC).UnixMilli(),
+			wantHasTime: true,
 		},
 		{
-			name:            "epoch millis timestamp",
-			filters:         seekFilter("from_timestamp", "1784889705000"),
-			partitionFilter: -1,
-			wantMillis:      1784889705000,
-			wantHasTime:     true,
+			name:        "epoch millis timestamp",
+			filters:     seekFilter("from_timestamp", "1784889705000"),
+			wantMillis:  1784889705000,
+			wantHasTime: true,
 		},
 		{
-			name:            "garbage timestamp",
-			filters:         seekFilter("from_timestamp", "yesterday"),
-			partitionFilter: -1,
-			wantErr:         true,
+			name:    "garbage timestamp",
+			filters: seekFilter("from_timestamp", "yesterday"),
+			wantErr: true,
 		},
 	}
 
@@ -314,7 +310,7 @@ func TestParseSeek(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got, err := parseSeek(tc.filters, tc.partitionFilter)
+			got, err := parseSeek(tc.filters)
 			if tc.wantErr {
 				if !errors.Is(err, connector.ErrBadRequest) {
 					t.Fatalf("expected bad request, got %v", err)
@@ -355,7 +351,7 @@ func TestResolveSeekCeilingsOffsetIsInclusive(t *testing.T) {
 		"orders",
 		seekRequest{offset: 500, hasOffset: true},
 		directionNewest,
-		3,
+		[]int32{3},
 	)
 	if err != nil {
 		t.Fatalf("resolveSeekBounds: %v", err)
