@@ -11,8 +11,6 @@
 
 Русский · [English](README.en.md)
 
-<img src=".github/assets/kizuna-hero.svg" width="100%" alt="Kizuna связывает PostgreSQL, Redis и Kafka через единый слой связей">
-
 </div>
 
 ## Зачем Kizuna

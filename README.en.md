@@ -11,8 +11,6 @@ Browse data, work with messages, and follow related records without switching to
 
 [Русский](README.md) · English
 
-<img src=".github/assets/kizuna-hero.svg" width="100%" alt="Kizuna connects PostgreSQL, Redis, and Kafka through one relationship layer">
-
 </div>
 
 ## Why Kizuna
