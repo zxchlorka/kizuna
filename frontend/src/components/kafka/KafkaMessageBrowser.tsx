@@ -1,6 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
 import { ChevronDown, ChevronRight, ChevronsDown, Filter, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react'
-import { KafkaCoverageBanner } from '@/components/kafka/KafkaCoverageBanner'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
@@ -35,11 +34,6 @@ interface KafkaMessageBrowserProps {
   scanning: boolean
   scanned: number
   scanPartial: boolean
-  // Browse-coverage (Task 4) — distinct from scanPartial above.
-  partial: boolean
-  partialReason: string | null
-  partitionsTotal: number
-  partitionsCompleted: number
   onPartitionChange: (partition: number | null) => void
   onRefresh: () => void
   onLoadOlder: () => void
@@ -80,10 +74,6 @@ export function KafkaMessageBrowser({
   scanning,
   scanned,
   scanPartial,
-  partial,
-  partialReason,
-  partitionsTotal,
-  partitionsCompleted,
   onPartitionChange,
   onRefresh,
   onLoadOlder,
@@ -269,15 +259,6 @@ export function KafkaMessageBrowser({
       )}
 
       {error && <ErrorBanner message={error} onRetry={onRefresh} />}
-
-      {partial && !searchActive && (
-        <KafkaCoverageBanner
-          messageCount={messages.length}
-          partitionsCompleted={partitionsCompleted}
-          partitionsTotal={partitionsTotal}
-          reason={partialReason}
-        />
-      )}
 
       {!error && visibleMessages.length === 0 && !loading && !scanning ? (
         <EmptyState
