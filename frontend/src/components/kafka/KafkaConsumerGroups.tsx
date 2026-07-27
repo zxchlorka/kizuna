@@ -1,6 +1,7 @@
 import { Fragment, useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
+import { formatCompactCount, formatExactCount, splitSharedPrefix } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
 import type { ObjectItem } from '@/types/api'
 
@@ -16,14 +17,19 @@ function groupLags(group: ObjectItem): PartitionLag[] {
   return Array.isArray(raw) ? (raw as PartitionLag[]) : []
 }
 
-function lagTone(lag: number): string {
-  if (lag < 100) {
-    return 'bg-emerald-500/70'
+// One severity read per group, not per partition. The absolute thresholds below
+// saturate at 10k, so on a group lagging by millions every partition bar came
+// out the same red and the colour said nothing while the eye still had to
+// process it. Severity is stated once by the group's badge; inside the group the
+// bars share that one tone and LENGTH does the comparing.
+function lagBarTone(groupLag: number): string {
+  if (groupLag < 100) {
+    return 'bg-emerald-500/60'
   }
-  if (lag < 10000) {
-    return 'bg-amber-500/70'
+  if (groupLag < 10000) {
+    return 'bg-amber-500/60'
   }
-  return 'bg-red-500/70'
+  return 'bg-red-500/50'
 }
 
 function lagBadgeTone(lag: number): string {
@@ -83,8 +89,11 @@ export function KafkaConsumerGroups({ groups }: { groups: ObjectItem[] }) {
                   <td className="px-3 py-2 font-mono text-xs text-muted-foreground">{state}</td>
                   <td className="px-3 py-2 font-mono text-xs">{members}</td>
                   <td className="px-3 py-2">
-                    <span className={cn('rounded-sm border px-1.5 py-0.5 font-mono text-[10px]', lagBadgeTone(group.row_count))}>
-                      {group.row_count.toLocaleString()}
+                    <span
+                      className={cn('rounded-sm border px-1.5 py-0.5 font-mono text-[10px] tabular-nums', lagBadgeTone(group.row_count))}
+                      title={`${formatExactCount(group.row_count)} messages behind`}
+                    >
+                      {formatCompactCount(group.row_count)}
                     </span>
                   </td>
                 </tr>
@@ -92,21 +101,54 @@ export function KafkaConsumerGroups({ groups }: { groups: ObjectItem[] }) {
                   <tr>
                     <td colSpan={5} className="p-0">
                       <div className="space-y-1.5 border-t border-border/60 bg-muted/10 px-4 py-3">
-                        {lags.map((lag) => (
-                          <div key={lag.partition} className="flex items-center gap-3 font-mono text-xs">
-                            <span className="w-14 shrink-0 text-muted-foreground">p{lag.partition}</span>
-                            <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted/40">
-                              <div
-                                className={cn('h-full rounded-full transition-all', lagTone(lag.lag))}
-                                style={{ width: `${Math.min(100, (lag.lag / maxLag) * 100)}%` }}
-                              />
+                        {lags.map((partitionLag) => {
+                          const committed = partitionLag.current_offset < 0 ? null : formatExactCount(partitionLag.current_offset)
+                          const end = formatExactCount(partitionLag.end_offset)
+                          // A partition's committed and end offsets share a long
+                          // leading run of digits, so the delta is invisible when
+                          // both are printed flat. Dimming the shared part keeps
+                          // full precision while putting the eye on what differs.
+                          const committedSplit = committed ? splitSharedPrefix(committed, end) : null
+                          const endSplit = committed ? splitSharedPrefix(end, committed) : { prefix: '', rest: end }
+
+                          return (
+                            <div key={partitionLag.partition} className="flex items-center gap-3 font-mono text-xs">
+                              <span className="w-10 shrink-0 text-muted-foreground">p{partitionLag.partition}</span>
+                              <div className="h-2 min-w-16 flex-1 overflow-hidden rounded-full bg-muted/40">
+                                <div
+                                  className={cn('h-full rounded-full transition-all', lagBarTone(group.row_count))}
+                                  style={{ width: `${Math.min(100, (partitionLag.lag / maxLag) * 100)}%` }}
+                                />
+                              </div>
+
+                              {/* Reference data: dimmed, one line, full precision. */}
+                              <span
+                                className="hidden shrink-0 whitespace-nowrap text-[11px] text-muted-foreground/40 tabular-nums md:inline"
+                                title={`Committed ${committed ?? 'none'} of ${end}`}
+                              >
+                                {committedSplit ? (
+                                  <>
+                                    {committedSplit.prefix}
+                                    <span className="text-muted-foreground/80">{committedSplit.rest}</span>
+                                  </>
+                                ) : (
+                                  <span className="text-muted-foreground/80">no commit</span>
+                                )}
+                                <span className="px-1.5 text-muted-foreground/30">/</span>
+                                {endSplit.prefix}
+                                <span className="text-muted-foreground/80">{endSplit.rest}</span>
+                              </span>
+
+                              {/* The number this panel exists to show. */}
+                              <span
+                                className="w-20 shrink-0 text-right tabular-nums"
+                                title={`${formatExactCount(partitionLag.lag)} messages behind`}
+                              >
+                                {formatCompactCount(partitionLag.lag)}
+                              </span>
                             </div>
-                            <span className="w-44 shrink-0 text-right text-muted-foreground">
-                              {lag.current_offset < 0 ? 'no commit' : lag.current_offset.toLocaleString()} / {lag.end_offset.toLocaleString()}
-                            </span>
-                            <span className="w-20 shrink-0 text-right">{lag.lag.toLocaleString()}</span>
-                          </div>
-                        ))}
+                          )
+                        })}
                       </div>
                     </td>
                   </tr>
