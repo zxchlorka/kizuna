@@ -461,6 +461,116 @@ func TestConsumeWindowsReturnsPartialWhenPartitionMissesBudget(t *testing.T) {
 	}
 }
 
+// Once the page target is met, a straggling partition must not hold the response
+// for the rest of the read budget: the poll loop waits completionGrace and then
+// returns a full page. Such a return is NOT a degraded read, so it must report
+// neither partial nor timedOut — otherwise callers would mark a complete answer
+// as a shortfall. A budget shorter than the grace still has to be classified as
+// a genuine timeout, which pins the order of the two checks in the poll loop.
+func TestConsumeWindowsReturnsEarlyOncePageIsSatisfied(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	// Partition 0 completes its window and alone satisfies a 2-row page.
+	// Partition 1 needs offset 49, never delivers it, and so stays outstanding.
+	newFake := func() *fakeConsumer {
+		return &fakeConsumer{rounds: []kgo.Fetches{
+			fetchRound(topic,
+				partitionFetch{partition: 0, highWatermark: 3, records: []*kgo.Record{
+					fetchRecord(topic, 0, 1, `{"n":1}`),
+					fetchRecord(topic, 0, 2, `{"n":2}`),
+				}},
+				partitionFetch{partition: 1, highWatermark: 50, records: []*kgo.Record{
+					fetchRecord(topic, 1, 40, `{"n":40}`),
+				}},
+			),
+		}}
+	}
+	windows := map[int32]partitionWindow{
+		0: {from: 1, upper: 3},
+		1: {from: 40, upper: 50},
+	}
+
+	tests := []struct {
+		name              string
+		target            int
+		budget            time.Duration
+		wantPageSatisfied bool
+		wantPartial       bool
+		wantMaxElapsed    time.Duration
+	}{
+		{
+			// The page is full, so the grace — not the budget — bounds the wait.
+			name:              "page satisfied returns on grace, not budget",
+			target:            2,
+			budget:            5 * time.Second,
+			wantPageSatisfied: true,
+			wantPartial:       false,
+			wantMaxElapsed:    2 * time.Second,
+		},
+		{
+			// The page is short, so the straggler is worth waiting the full budget
+			// for and the result is a genuine partial read.
+			name:              "page short still waits the budget and reports partial",
+			target:            100,
+			budget:            300 * time.Millisecond,
+			wantPageSatisfied: false,
+			wantPartial:       true,
+			wantMaxElapsed:    2 * time.Second,
+		},
+		{
+			// Budget below the grace: the read budget check must win, so this is a
+			// timeout rather than a satisfied page.
+			name:              "budget shorter than grace is a timeout",
+			target:            2,
+			budget:            completionGrace / 4,
+			wantPageSatisfied: false,
+			wantPartial:       true,
+			wantMaxElapsed:    2 * time.Second,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			conn := &KafkaConnector{consume: newFake()}
+
+			start := time.Now()
+			res, err := conn.consumeWindows(context.Background(), topic, windows, tc.target, tc.budget)
+			elapsed := time.Since(start)
+			if err != nil {
+				t.Fatalf("consumeWindows: %v", err)
+			}
+
+			if res.pageSatisfied != tc.wantPageSatisfied {
+				t.Errorf("pageSatisfied = %v, want %v", res.pageSatisfied, tc.wantPageSatisfied)
+			}
+			if res.partial != tc.wantPartial {
+				t.Errorf("partial = %v, want %v", res.partial, tc.wantPartial)
+			}
+			if res.timedOut == tc.wantPageSatisfied {
+				t.Errorf("timedOut = %v, must be the inverse of pageSatisfied (%v)", res.timedOut, tc.wantPageSatisfied)
+			}
+			if elapsed > tc.wantMaxElapsed {
+				t.Errorf("took %v, want under %v", elapsed, tc.wantMaxElapsed)
+			}
+
+			// Regardless of why the loop stopped, only the completed partition's rows
+			// may be returned and the outstanding partition must stay incomplete so
+			// computeFrontier leaves its cursor pinned.
+			if !res.completed[0] {
+				t.Errorf("partition 0 should have completed")
+			}
+			if res.completed[1] {
+				t.Errorf("partition 1 should have stayed incomplete")
+			}
+			if len(res.rows) != 2 {
+				t.Errorf("rows = %d, want the 2 rows from the completed partition", len(res.rows))
+			}
+		})
+	}
+}
+
 // A genuine broker/auth error must surface as an error, never as a partial
 // success. Guards the invariant across Task 2.
 func TestConsumeWindowsPropagatesBrokerErrors(t *testing.T) {

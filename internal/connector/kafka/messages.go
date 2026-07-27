@@ -30,13 +30,23 @@ const (
 	// This is a safety net for a genuinely slow cluster, not the mechanism that
 	// keeps a browse fast — that is fetchMaxPartitionBytes in kafka.go. While the
 	// reader still used franz-go's 1 MiB default a wide topic pulled ~100 MB per
-	// page and a 3s budget cut it off with less than half the partitions
-	// finished, which the UI then reported as a handful of messages. With the
-	// fetch sized to the window a full round moves a few MB, so the budget stops
-	// being the binding constraint and can afford to be generous: an incomplete
-	// partition contributes nothing to the page, so expiring early is far more
-	// costly to the user than waiting.
-	readBudget = 6 * time.Second
+	// page and this budget cut it off with less than half the partitions finished,
+	// which the UI then reported as a handful of messages. With the fetch sized to
+	// the window a full round moves a couple of MB, so the budget is a ceiling
+	// again rather than the normal case. It is deliberately NOT generous:
+	// completionGrace, not this value, decides how long a full page waits on a
+	// straggler.
+	readBudget = 3 * time.Second
+
+	// completionGrace bounds how long the poll loop keeps waiting for outstanding
+	// partitions AFTER the page target is already met. Without it a single slow
+	// partition out of dozens held the whole request until readBudget expired even
+	// though the answer was complete — measured on a 54-partition topic, a page
+	// that needed ~180 records took the entire budget because 2 partitions lagged.
+	// Sized to comfortably cover one more fetch round trip on a healthy cluster,
+	// so full coverage is still the normal outcome and only genuine stragglers get
+	// dropped from the page's partition set.
+	completionGrace = 400 * time.Millisecond
 	// maxAdaptiveRounds caps how many times snapshotRead widens partition windows
 	// to backfill a short page, guaranteeing the refill terminates.
 	maxAdaptiveRounds = 5
@@ -131,6 +141,13 @@ type consumeResult struct {
 	// place completed[id] is set, so it is only ever set for genuinely
 	// completed partitions.
 	completedFrom map[int32]int64
+	// pageSatisfied reports that the poll loop returned early, on purpose, because
+	// the page target was already met and the remaining partitions did not land
+	// within completionGrace. It is deliberately distinct from timedOut/partial:
+	// the response is a full page, so it must not be reported as degraded. Only
+	// the coverage figure (partitions_completed) is lower than it would be had the
+	// loop waited out the whole budget.
+	pageSatisfied bool
 	// recordsRead marks, for each partition that completed in THIS call, whether
 	// its completed window actually contained at least one record inside
 	// [window.from, window.upper). It is the guard that separates the two cases
@@ -420,15 +437,34 @@ func (c *KafkaConnector) consumeWindows(
 	maxSeen := make(map[int32]int64, len(windows))
 	seenPartition := make(map[int32]bool, len(windows))
 	reachedEmptyEnd := make(map[int32]bool, len(windows))
+	// pollCtx bounds an individual PollFetches. It normally lives as long as
+	// consumeCtx; once the page target is met, graceTimer cancels it after
+	// completionGrace so a straggling partition cannot hold a finished page for
+	// the rest of the read budget. Cancelling via a timer rather than a second
+	// derived deadline keeps exactly one cancel func on one unconditional defer.
+	pollCtx, cancelPoll := context.WithCancel(consumeCtx)
+	defer cancelPoll()
+	var graceTimer *time.Timer
+	defer func() {
+		if graceTimer != nil {
+			graceTimer.Stop()
+		}
+	}()
+
 	for {
-		fetches := c.consume.PollFetches(consumeCtx)
+		fetches := c.consume.PollFetches(pollCtx)
 		if fetches.IsClientClosed() {
 			return nil, fmt.Errorf("%w: kafka consumer closed while reading messages", connector.ErrUnavailable)
 		}
 
 		var fetchErr error
 		for _, fetchError := range fetches.Errors() {
-			if consumeCtx.Err() != nil {
+			// Gated on pollCtx, not consumeCtx: once the grace deadline is armed,
+			// pollCtx can expire while the read budget still has time left, and the
+			// resulting context error is our own deadline rather than a broker
+			// failure. Attributing it to the broker would turn a deliberate early
+			// return into a spurious hard error.
+			if pollCtx.Err() != nil {
 				continue
 			}
 			fetchErr = fetchError.Err
@@ -503,11 +539,35 @@ func (c *KafkaConnector) consumeWindows(
 			result.timedOut = true
 			break
 		}
+		// The page target is met but some partitions are still outstanding. Arm a
+		// short grace deadline rather than holding the request until the full read
+		// budget expires: on a healthy cluster the stragglers land in the very next
+		// poll and nothing changes, while one slow partition out of dozens no longer
+		// costs the user every remaining second of the budget.
+		if graceTimer == nil && len(result.rows) >= target {
+			graceTimer = time.AfterFunc(completionGrace, cancelPoll)
+		}
+		// Checked after consumeCtx above, so a genuinely expired read budget is
+		// still classified as a timeout rather than as a satisfied page.
+		if pollCtx.Err() != nil {
+			// Grace expired with a full page in hand. Deliberately not timedOut: the
+			// response is complete, so it must not be reported as a degraded read.
+			result.pageSatisfied = true
+			break
+		}
 	}
 
 	completedCount := len(result.completed)
 	if completedCount == len(windows) {
 		// Every scoped partition finished its bounded range within budget.
+		return result, nil
+	}
+	if result.pageSatisfied {
+		// Stopped on purpose with the page target already met, so this is a
+		// complete answer built from fewer partitions — not a shortfall. The
+		// outstanding partitions simply keep their prior upper offset (see
+		// computeFrontier), so their records stay reachable on the next page or
+		// refresh and nothing is lost.
 		return result, nil
 	}
 
