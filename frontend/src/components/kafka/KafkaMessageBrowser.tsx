@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
-import { filterLoadedMessages, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
+import { filterLoadedMessages, type KafkaDirection, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -21,7 +21,7 @@ interface KafkaMessageBrowserProps {
   loading: boolean
   loadingOlder: boolean
   error: string | null
-  hasOlder: boolean
+  hasMore: boolean
   partitionCount: number
   partitionFilter: number | null
   // Filter loaded (client-side).
@@ -38,8 +38,12 @@ interface KafkaMessageBrowserProps {
   // Browse anchor — where reading starts. Composes with the search above rather
   // than replacing it: the seek narrows the range, the search narrows the rows.
   seek: KafkaSeek
+  // Which end of the log the tab reads from. Changes what "more" means, so it
+  // also changes the paging button's wording.
+  direction: KafkaDirection
   onPartitionChange: (partition: number | null) => void
   onSeekChange: (seek: KafkaSeek) => void
+  onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
   onFilterLoaded: (field: string, value: string) => void
@@ -67,7 +71,7 @@ export function KafkaMessageBrowser({
   loading,
   loadingOlder,
   error,
-  hasOlder,
+  hasMore,
   partitionCount,
   partitionFilter,
   filterActive,
@@ -80,8 +84,10 @@ export function KafkaMessageBrowser({
   scanned,
   scanPartial,
   seek,
+  direction,
   onPartitionChange,
   onSeekChange,
+  onDirectionChange,
   onRefresh,
   onLoadOlder,
   onFilterLoaded,
@@ -169,6 +175,28 @@ export function KafkaMessageBrowser({
             disabled={loading || scanning}
             onApply={onSeekChange}
           />
+
+          <span className="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+
+          {/* Which end of the log to read from. Two states, so a segmented pair
+              keeps the current one visible without opening anything. */}
+          <div className="flex items-center rounded-sm border border-border p-0.5" role="group" aria-label="Read order">
+            {(['newest', 'oldest'] as const).map((option) => (
+              <button
+                key={option}
+                type="button"
+                aria-pressed={direction === option}
+                disabled={loading || scanning}
+                onClick={() => onDirectionChange(option)}
+                className={cn(
+                  'rounded-[2px] px-2 py-0.5 font-mono text-[11px] transition-colors disabled:opacity-50',
+                  direction === option ? 'bg-orange-500/15 text-orange-500' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                {option === 'newest' ? 'Newest' : 'Oldest'}
+              </button>
+            ))}
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {loading && messages.length > 0 && (
@@ -258,7 +286,7 @@ export function KafkaMessageBrowser({
           <span>
             {scanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} · {messages.length.toLocaleString()} matches
             {!scanning && scanPartial && ' · stopped at scan budget'}
-            {!scanning && !hasOlder && ' · reached beginning'}
+            {!scanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
           {scanning ? (
             <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onCancelScan}>
@@ -346,7 +374,7 @@ export function KafkaMessageBrowser({
         </div>
       )}
 
-      {hasOlder &&
+      {hasMore &&
         (searchActive ? (
           <Button
             type="button"
@@ -369,7 +397,13 @@ export function KafkaMessageBrowser({
             onClick={onLoadOlder}
           >
             {loadingOlder ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-            {loadingOlder ? 'Loading older messages…' : 'Load older messages'}
+            {loadingOlder
+              ? direction === 'oldest'
+                ? 'Loading newer messages…'
+                : 'Loading older messages…'
+              : direction === 'oldest'
+                ? 'Load newer messages'
+                : 'Load older messages'}
           </Button>
         ))}
 

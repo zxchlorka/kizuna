@@ -45,6 +45,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const fetchOlderMessages = useKafkaStore((state) => state.fetchOlderMessages)
   const setPartitionFilter = useKafkaStore((state) => state.setPartitionFilter)
   const setSeek = useKafkaStore((state) => state.setSeek)
+  const setDirection = useKafkaStore((state) => state.setDirection)
   const setLoadedFilter = useKafkaStore((state) => state.setLoadedFilter)
   const clearLoadedFilter = useKafkaStore((state) => state.clearLoadedFilter)
   const searchTopic = useKafkaStore((state) => state.searchTopic)
@@ -212,7 +213,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             loading={tab?.messagesLoading ?? false}
             loadingOlder={tab?.loadingOlder ?? false}
             error={tab?.messagesError ?? null}
-            hasOlder={tab?.hasOlder ?? false}
+            hasMore={tab?.hasMore ?? false}
             partitionCount={partitions.length}
             partitionFilter={tab?.partitionFilter ?? null}
             filterActive={tab?.filterActive ?? false}
@@ -227,6 +228,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             seek={{ offset: tab?.seekOffset ?? '', timestamp: tab?.seekTimestamp ?? '' }}
             onPartitionChange={(partition) => void setPartitionFilter(connId, topic, tabId, partition)}
             onSeekChange={(next) => void setSeek(connId, topic, tabId, next)}
+            direction={tab?.direction ?? 'newest'}
+            onDirectionChange={(next) => void setDirection(connId, topic, tabId, next)}
             onRefresh={() => void refreshMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
             onFilterLoaded={(field, value) => setLoadedFilter(tabId, field, value)}
