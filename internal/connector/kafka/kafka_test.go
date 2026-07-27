@@ -350,14 +350,15 @@ func TestResolveSeekCeilingsOffsetIsInclusive(t *testing.T) {
 	t.Parallel()
 
 	conn := &KafkaConnector{}
-	ceilings, err := conn.resolveSeekCeilings(
+	ceilings, err := conn.resolveSeekBounds(
 		context.Background(),
 		"orders",
 		seekRequest{offset: 500, hasOffset: true},
+		directionNewest,
 		3,
 	)
 	if err != nil {
-		t.Fatalf("resolveSeekCeilings: %v", err)
+		t.Fatalf("resolveSeekBounds: %v", err)
 	}
 	if got := ceilings[3]; got != 501 {
 		t.Fatalf("ceiling for partition 3 = %d, want 501 (exclusive bound one past the seeked offset)", got)
@@ -370,7 +371,7 @@ func TestResolveSeekCeilingsOffsetIsInclusive(t *testing.T) {
 func TestParseBeforeOffsets(t *testing.T) {
 	t.Parallel()
 
-	offsets, err := parseBeforeOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `{"0":120,"2":48}`}})
+	offsets, err := parseCursorOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `{"0":120,"2":48}`}}, directionNewest)
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
@@ -378,10 +379,10 @@ func TestParseBeforeOffsets(t *testing.T) {
 		t.Fatalf("unexpected offsets: %#v", offsets)
 	}
 
-	if _, err := parseBeforeOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `{"x":1}`}}); !errors.Is(err, connector.ErrBadRequest) {
+	if _, err := parseCursorOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `{"x":1}`}}, directionNewest); !errors.Is(err, connector.ErrBadRequest) {
 		t.Fatalf("expected bad request for non-numeric partition, got %v", err)
 	}
-	if _, err := parseBeforeOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `not-json`}}); !errors.Is(err, connector.ErrBadRequest) {
+	if _, err := parseCursorOffsets([]connector.FilterExpr{{Column: "before_offsets", Op: "eq", Value: `not-json`}}, directionNewest); !errors.Is(err, connector.ErrBadRequest) {
 		t.Fatalf("expected bad request for invalid json, got %v", err)
 	}
 }
@@ -479,7 +480,7 @@ func TestSelectNewestPrefixesKeepsLosslessPartitionCursors(t *testing.T) {
 		row(1, 200, "2026-01-01T00:00:04Z"),
 	}
 
-	selected := selectNewestPrefixes(rows, 3)
+	selected := selectDirectionalPrefixes(rows, 3, directionNewest)
 	if len(selected) != 3 {
 		t.Fatalf("selected %d rows, want 3", len(selected))
 	}
@@ -505,7 +506,7 @@ func TestSortRowsNewestUsesTimestampChronology(t *testing.T) {
 		{"partition": int32(0), "offset": int64(10), "timestamp": "2026-07-20T13:59:17.81Z"},
 		{"partition": int32(0), "offset": int64(11), "timestamp": "2026-07-20T13:59:17.811Z"},
 	}
-	sortRowsNewest(rows)
+	sortRowsDirectional(rows, directionNewest)
 	if got := rows[0]["offset"]; got != int64(11) {
 		t.Fatalf("newest offset = %v, want 11", got)
 	}

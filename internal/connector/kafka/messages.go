@@ -88,6 +88,84 @@ type partitionWindow struct {
 	upper int64 // exclusive
 }
 
+// readDirection is which end of the log a browse starts from and which way it
+// pages. Both directions read each partition window forward off the broker —
+// consumeWindows is direction-agnostic — so the difference lives entirely in
+// where windows are anchored, which end of the merged candidates becomes the
+// page, and which way the pagination cursor advances.
+//
+//   - directionNewest anchors at the partition end and pages towards older
+//     records. Its cursor (next_before_offsets) is an EXCLUSIVE UPPER bound and
+//     only ever decreases.
+//   - directionOldest anchors at the partition start and pages towards newer
+//     records. Its cursor (next_after_offsets) is an INCLUSIVE LOWER bound — the
+//     first offset not yet returned — and only ever increases.
+type readDirection int
+
+const (
+	directionNewest readDirection = iota
+	directionOldest
+)
+
+func (d readDirection) oldestFirst() bool { return d == directionOldest }
+
+// cursorField is the meta key carrying this direction's pagination cursor, and
+// moreField the flag saying whether that direction has anything left. They are
+// distinct wire names on purpose: a client must never feed a cursor from one
+// direction into a read going the other way, and distinct names make that a
+// missing field rather than a silently wrong window.
+func (d readDirection) cursorField() string {
+	if d.oldestFirst() {
+		return "next_after_offsets"
+	}
+	return "next_before_offsets"
+}
+
+func (d readDirection) moreField() string {
+	if d.oldestFirst() {
+		return "has_newer"
+	}
+	return "has_older"
+}
+
+// exhausted reports whether a partition's frontier has reached the end of the
+// log in this direction, i.e. there is nothing further to page into.
+func (d readDirection) exhausted(frontier, start, end int64) bool {
+	if d.oldestFirst() {
+		return frontier >= end
+	}
+	return frontier <= start
+}
+
+// pinnedOffset is where a partition already drained in this direction parks in
+// the cursor, so it is skipped rather than re-read from scratch on later pages.
+func (d readDirection) pinnedOffset(start, end int64) int64 {
+	if d.oldestFirst() {
+		return end
+	}
+	return start
+}
+
+func parseDirection(filters []connector.FilterExpr) (readDirection, error) {
+	for _, filter := range filters {
+		if !strings.EqualFold(strings.TrimSpace(filter.Column), "order") {
+			continue
+		}
+		switch strings.ToLower(strings.TrimSpace(filter.Value)) {
+		case "", "newest":
+			return directionNewest, nil
+		case "oldest":
+			return directionOldest, nil
+		default:
+			return directionNewest, fmt.Errorf(
+				"%w: invalid order %q — expected \"newest\" or \"oldest\"",
+				connector.ErrBadRequest, filter.Value,
+			)
+		}
+	}
+	return directionNewest, nil
+}
+
 // partitionConsumer is the subset of *kgo.Client that consumeWindows drives.
 // Keeping it an interface lets unit tests inject a deterministic fake broker so
 // partial-result, budget-timeout and cancellation behavior can be verified
@@ -132,15 +210,20 @@ type consumeResult struct {
 	// edge cases (e.g. a record delivered just as its partition pauses) is
 	// harmless.
 	candidatesRead int
-	// completedFrom records, for each partition that completed in THIS call,
-	// the window's lower bound (offset) it was confirmed read down to — even
-	// when that window produced zero rows. lowestConsumedOffsets (used for the
-	// pagination cursor) only ever sees actual rows, so without this a
-	// partition that completes with zero rows in its window would never
-	// advance its cursor and would be rescanned forever. Populated at the same
-	// place completed[id] is set, so it is only ever set for genuinely
-	// completed partitions.
-	completedFrom map[int32]int64
+	// completedWindow records, for each partition that completed in THIS call,
+	// the exact offset range it was confirmed to have read — even when that
+	// range produced zero rows. The row-derived cursor only ever sees actual
+	// rows, so without this a partition that completes with zero rows in its
+	// window would never advance its cursor and would be rescanned forever.
+	//
+	// The whole window is kept rather than a single bound because which edge is
+	// the "confirmed frontier" depends on the read direction: the window's lower
+	// bound when paging towards older records, its upper bound when paging
+	// towards newer ones. Storing both keeps consumeWindows free of any notion of
+	// direction — computeFrontier picks the edge. Populated at the same place
+	// completed[id] is set, so it is only ever set for genuinely completed
+	// partitions.
+	completedWindow map[int32]partitionWindow
 	// pageSatisfied reports that the poll loop returned early, on purpose, because
 	// the page target was already met and the remaining partitions did not land
 	// within completionGrace. It is deliberately distinct from timedOut/partial:
@@ -151,19 +234,19 @@ type consumeResult struct {
 	// recordsRead marks, for each partition that completed in THIS call, whether
 	// its completed window actually contained at least one record inside
 	// [window.from, window.upper). It is the guard that separates the two cases
-	// completedFrom alone cannot tell apart:
+	// completedWindow alone cannot tell apart:
 	//
 	//   - completed window with ZERO records (empty / fully-compacted range):
-	//     advancing the cursor to completedFrom is safe and necessary (Task 3's
+	//     advancing the cursor to that window's far edge is safe and necessary (Task 3's
 	//     stuck-cursor fix — nothing is lost).
 	//   - completed window that DID contain records, none of which survived final
-	//     page selection: advancing to completedFrom would move the cursor past
+	//     page selection: advancing past it would move the cursor beyond
 	//     records that were read from the broker but never returned to the
 	//     caller, making them permanently unreachable (silent data loss).
 	//
-	// Set at the same place completed[id]/completedFrom[id] are, so it is keyed
+	// Set at the same place completed[id]/completedWindow[id] are, so it is keyed
 	// only by genuinely completed partitions and always describes the same window
-	// completedFrom describes. See computeFrontier for how it is consumed.
+	// completedWindow describes. See computeFrontier for how it is consumed.
 	recordsRead map[int32]bool
 }
 
@@ -186,7 +269,14 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if err != nil {
 		return nil, err
 	}
-	beforeOffsets, err := parseBeforeOffsets(opts.Filters)
+	direction, err := parseDirection(opts.Filters)
+	if err != nil {
+		return nil, err
+	}
+	// One cursor variable for both directions; parseCursorOffsets picks the wire
+	// field matching the read direction so a cursor can never be fed into a read
+	// going the other way.
+	cursorOffsets, err := parseCursorOffsets(opts.Filters, direction)
 	if err != nil {
 		return nil, err
 	}
@@ -243,8 +333,8 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 
 	// Resolved once per request, then folded into each partition's window bound
 	// alongside the pagination cursor: the seek fixes where paging starts, the
-	// cursor tracks how far down it has walked, and the tighter of the two wins.
-	seekCeilings, err := c.resolveSeekCeilings(ctx, topic, seek, partitionFilter)
+	// cursor tracks how far it has walked, and whichever is tighter wins.
+	seekBounds, err := c.resolveSeekBounds(ctx, topic, seek, direction, partitionFilter)
 	if err != nil {
 		return nil, err
 	}
@@ -264,22 +354,36 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			perPartition := dividedWindow(maxScanMessages, len(scoped))
 			windows := make(map[int32]partitionWindow, len(scoped))
 			for _, id := range scoped {
-				start, end := partitionOffsets(topic, id, starts, ends)
-				upper := end
-				if ceiling, ok := seekCeilings[id]; ok && ceiling < upper {
-					upper = ceiling
+				low, end := partitionOffsets(topic, id, starts, ends)
+				lower, upper := low, end
+				if direction.oldestFirst() {
+					if floorOffset, ok := seekBounds[id]; ok && floorOffset > lower {
+						lower = floorOffset
+					}
+					if after, ok := cursor[id]; ok && after > lower {
+						lower = after
+					}
+				} else {
+					if ceiling, ok := seekBounds[id]; ok && ceiling < upper {
+						upper = ceiling
+					}
+					if before, ok := cursor[id]; ok && before < upper {
+						upper = before
+					}
 				}
-				if before, ok := cursor[id]; ok && before < upper {
-					upper = before
-				}
-				if upper <= start {
+				if upper <= lower {
 					continue
 				}
-				from := upper - perPartition
-				if from < start {
-					from = start
+				// The scan window grows away from whichever edge this direction
+				// starts at, capped by the partition's own range.
+				if direction.oldestFirst() {
+					if upper > lower+perPartition {
+						upper = lower + perPartition
+					}
+				} else if lower < upper-perPartition {
+					lower = upper - perPartition
 				}
-				windows[id] = partitionWindow{from: from, upper: upper}
+				windows[id] = partitionWindow{from: lower, upper: upper}
 			}
 			result, scanErr := resolveScanConsume(c.consumeWindows(ctx, topic, windows, maxScanMessages, scanTimeBudget))
 			if scanErr != nil {
@@ -288,38 +392,40 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 			return result, windows, nil
 		}
 		// Normal browse: bounded-quota fast snapshot with adaptive refill.
-		return c.snapshotRead(ctx, topic, scoped, starts, ends, seekCeilings, cursor, limit)
+		return c.snapshotRead(ctx, topic, scoped, starts, ends, direction, seekBounds, cursor, limit)
 	}
 
-	consumed, frontierWindows, cursorReset, err := c.consumeWithIncarnationRetry(topic, beforeOffsets, readAttempt)
+	consumed, frontierWindows, cursorReset, err := c.consumeWithIncarnationRetry(topic, cursorOffsets, readAttempt)
 	if err != nil {
 		return nil, err
 	}
 	if cursorReset {
-		// The retry read the recreated topic from its newest end, so this page is a
-		// fresh start; the caller must replace rows rather than append to a page
-		// built from the previous incarnation.
-		beforeOffsets = nil
+		// The retry read the recreated topic from the direction's starting end, so
+		// this page is a fresh start; the caller must replace rows rather than
+		// append to a page built from the previous incarnation.
+		cursorOffsets = nil
 	}
 	consumeMs := time.Since(consumeStart).Milliseconds()
 
 	rows := consumed.rows
 	if !scanning {
-		rows = selectNewestPrefixes(rows, limit)
+		rows = selectDirectionalPrefixes(rows, limit, direction)
 	}
 
-	sortRowsNewest(rows)
+	sortRowsDirectional(rows, direction)
 
 	// Advance only partitions whose rows are actually returned to the caller (or
 	// whose window is confirmed to hold no record at all). Unread partitions, and
 	// partitions whose records were read but trimmed out of this page, keep their
-	// prior upper offset, so neither partial broker replies nor page selection
-	// can create pagination gaps.
-	frontier := computeFrontier(frontierWindows, rows, scanning, consumed.completed, consumed.completedFrom, consumed.recordsRead)
+	// prior bound, so neither partial broker replies nor page selection can
+	// create pagination gaps.
+	frontier := computeFrontier(
+		frontierWindows, rows, scanning, direction,
+		consumed.completed, consumed.completedWindow, consumed.recordsRead,
+	)
 
-	nextBefore, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, func(id int32) int64 {
-		start, _ := partitionOffsets(topic, id, starts, ends)
-		return start
+	nextCursor, hasMore := buildPaginationCursor(scoped, frontier, cursorOffsets, direction, func(id int32) (int64, int64) {
+		return partitionOffsets(topic, id, starts, ends)
 	})
 
 	// partitions_total counts only the SCOPED partitions matching the current
@@ -334,7 +440,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	meta := map[string]any{
 		"partitions_total":     len(scoped),
 		"partitions_completed": len(consumed.completed),
-		"has_older":            hasOlder,
+		direction.moreField():  hasMore,
 		"candidates_read":      consumed.candidatesRead,
 	}
 	if cursorReset {
@@ -364,11 +470,11 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	}
 	// Emit the cursor only when there is genuinely more to fetch. next_before_offsets
 	// now includes every scoped partition (drained ones pinned at their start), so
-	// its size is no longer a "has more" signal; gate on hasOlder instead. This keeps
+	// its size is no longer a "has more" signal; gate on hasMore instead. This keeps
 	// the prior wire invariant the frontend relies on: next_before_offsets is present
 	// exactly when has_older is true (kafka.ts's "Scan more"/"Load older" guards).
-	if hasOlder {
-		meta["next_before_offsets"] = nextBefore
+	if hasMore {
+		meta[direction.cursorField()] = nextCursor
 	}
 
 	elapsedMs := time.Since(callStart).Milliseconds()
@@ -403,7 +509,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		},
 		Rows:    rows,
 		Total:   total,
-		HasMore: hasOlder,
+		HasMore: hasMore,
 		Meta:    meta,
 	}, nil
 }
@@ -422,7 +528,7 @@ func (c *KafkaConnector) consumeWindows(
 	result := &consumeResult{
 		rows:          make([]map[string]any, 0, target),
 		completed:     make(map[int32]bool, len(windows)),
-		completedFrom: make(map[int32]int64, len(windows)),
+		completedWindow: make(map[int32]partitionWindow, len(windows)),
 		recordsRead:   make(map[int32]bool, len(windows)),
 	}
 	if len(windows) == 0 {
@@ -532,12 +638,12 @@ func (c *KafkaConnector) consumeWindows(
 				continue
 			}
 			result.completed[id] = true
-			result.completedFrom[id] = window.from
+			result.completedWindow[id] = window
 			if len(rowsByPartition[id]) > 0 {
 				// This completed window held real records inside [from, upper).
 				// Whether they survive final page selection is decided later, so
 				// the cursor must not blind-advance past this window on the
-				// strength of completedFrom alone (see computeFrontier).
+				// strength of completedWindow alone (see computeFrontier).
 				result.recordsRead[id] = true
 			}
 			result.rows = append(result.rows, rowsByPartition[id]...)
@@ -626,7 +732,7 @@ func resolveScanConsume(consumed *consumeResult, err error) (*consumeResult, err
 		return &consumeResult{
 			rows:          make([]map[string]any, 0),
 			completed:     make(map[int32]bool),
-			completedFrom: make(map[int32]int64),
+			completedWindow: make(map[int32]partitionWindow),
 			recordsRead:   make(map[int32]bool),
 			timedOut:      true,
 		}, nil
@@ -651,38 +757,58 @@ func (c *KafkaConnector) snapshotRead(
 	topic string,
 	scoped []int32,
 	starts, ends kadm.ListedOffsets,
-	seekCeilings map[int32]int64,
-	beforeOffsets map[int32]int64,
+	direction readDirection,
+	seekBounds map[int32]int64,
+	cursorOffsets map[int32]int64,
 	limit int,
 ) (*consumeResult, map[int32]partitionWindow, error) {
 	quota := initialPartitionQuota(limit, len(scoped))
 
-	// start is the partition's low offset; floor is the exclusive lower bound of
-	// the next round's window and moves down as we widen.
+	// start is where the partition's readable range begins in this direction and
+	// limitOf where it ends; floor is the edge the next round grows away from and
+	// moves outward as we widen.
 	start := make(map[int32]int64, len(scoped))
+	limitOf := make(map[int32]int64, len(scoped))
 	floor := make(map[int32]int64, len(scoped))
 	frontierWindows := make(map[int32]partitionWindow, len(scoped))
 	for _, id := range scoped {
 		low, end := partitionOffsets(topic, id, starts, ends)
-		upper := end
-		if ceiling, ok := seekCeilings[id]; ok && ceiling < upper {
-			upper = ceiling
+		lower, upper := low, end
+		if direction.oldestFirst() {
+			// Paging towards newer records: the seek and the cursor both raise the
+			// window's FLOOR, and the ceiling stays at the partition end.
+			if floorOffset, ok := seekBounds[id]; ok && floorOffset > lower {
+				lower = floorOffset
+			}
+			if after, ok := cursorOffsets[id]; ok && after > lower {
+				lower = after
+			}
+		} else {
+			if ceiling, ok := seekBounds[id]; ok && ceiling < upper {
+				upper = ceiling
+			}
+			if before, ok := cursorOffsets[id]; ok && before < upper {
+				upper = before
+			}
 		}
-		if before, ok := beforeOffsets[id]; ok && before < upper {
-			upper = before
-		}
-		if upper <= low {
+		if upper <= lower {
 			continue
 		}
-		start[id] = low
+		start[id] = lower
+		limitOf[id] = end
+		// The bound the first round grows away from: the ceiling when paging down,
+		// the floor when paging up.
 		floor[id] = upper
-		frontierWindows[id] = partitionWindow{from: low, upper: upper}
+		if direction.oldestFirst() {
+			floor[id] = lower
+		}
+		frontierWindows[id] = partitionWindow{from: lower, upper: upper}
 	}
 
 	aggregate := &consumeResult{
 		rows:          make([]map[string]any, 0, limit),
 		completed:     make(map[int32]bool, len(frontierWindows)),
-		completedFrom: make(map[int32]int64, len(frontierWindows)),
+		completedWindow: make(map[int32]partitionWindow, len(frontierWindows)),
 		recordsRead:   make(map[int32]bool, len(frontierWindows)),
 	}
 	if len(frontierWindows) == 0 {
@@ -702,6 +828,18 @@ func (c *KafkaConnector) snapshotRead(
 
 		windows := make(map[int32]partitionWindow, len(frontierWindows))
 		for id := range frontierWindows {
+			if direction.oldestFirst() {
+				if floor[id] >= limitOf[id] {
+					continue // nothing newer left to read in this partition
+				}
+				upper := floor[id] + widen
+				if upper > limitOf[id] {
+					upper = limitOf[id]
+				}
+				windows[id] = partitionWindow{from: floor[id], upper: upper}
+				scannedOffsets += upper - floor[id]
+				continue
+			}
 			if floor[id] <= start[id] {
 				continue // nothing older left to read in this partition
 			}
@@ -713,7 +851,7 @@ func (c *KafkaConnector) snapshotRead(
 			scannedOffsets += floor[id] - from
 		}
 		if len(windows) == 0 {
-			break // every partition has been read down to its start offset
+			break // every partition has been read to the end of the direction
 		}
 
 		consumed, err := c.consumeWindows(budgetCtx, topic, windows, limit, readBudget)
@@ -728,7 +866,7 @@ func (c *KafkaConnector) snapshotRead(
 				// partitions_completed reflects the coverage actually delivered
 				// rather than a stale "completed at least one round ever" union
 				// (which could otherwise equal partitions_total while partial is
-				// true). completedFrom is intentionally left untouched: an earlier
+				// true). completedWindow is intentionally left untouched: an earlier
 				// round's confirmed lower bound is still a valid cursor floor.
 				for id := range windows {
 					delete(aggregate.completed, id)
@@ -756,14 +894,14 @@ func (c *KafkaConnector) snapshotRead(
 				// A later round always reads a strictly lower (or equal) window than
 				// an earlier one for the same partition, so overwriting here always
 				// keeps the deepest confirmed bound for the cursor fallback.
-				aggregate.completedFrom[id] = consumed.completedFrom[id]
-				// recordsRead, unlike completed/completedFrom, is STICKY across
-				// rounds — it is OR-ed, never overwritten or deleted. completedFrom
+				aggregate.completedWindow[id] = consumed.completedWindow[id]
+				// recordsRead, unlike completed/completedWindow, is STICKY across
+				// rounds — it is OR-ed, never overwritten or deleted. completedWindow
 				// deepens with every widening round, so a later round that reads a
 				// genuinely empty deeper window would otherwise let the cursor
 				// leapfrog past records an EARLIER round of the same request read
 				// and withheld from the page. Because the rounds tile the range
-				// [completedFrom, upper) contiguously downward, the OR over all
+				// tile the scanned range contiguously, the OR over all
 				// completed rounds answers exactly "did this request read any record
 				// in the range the cursor would advance past".
 				if consumed.recordsRead[id] {
@@ -775,8 +913,17 @@ func (c *KafkaConnector) snapshotRead(
 		}
 		aggregate.rows = append(aggregate.rows, consumed.rows...)
 		aggregate.candidatesRead += consumed.candidatesRead
+		// Move each attempted partition's edge to the far side of the range this
+		// round just covered, so the next round tiles onto it instead of over it.
+		// Direction decides which side that is — using the wrong one makes every
+		// widening round re-read the range before it, which surfaces as duplicated
+		// rows in the page.
 		for id := range windows {
-			floor[id] = windows[id].from
+			if direction.oldestFirst() {
+				floor[id] = windows[id].upper
+			} else {
+				floor[id] = windows[id].from
+			}
 		}
 		if consumed.partial {
 			aggregate.partial = true
@@ -829,12 +976,15 @@ func initialPartitionQuota(pageSize, scopedPartitionCount int) int64 {
 	return int64(quota)
 }
 
-// selectNewestPrefixes performs a k-way merge of per-partition offset-desc
-// streams. Every selected partition contributes a contiguous newest prefix,
-// which makes its minimum selected offset a lossless pagination cursor.
-func selectNewestPrefixes(rows []map[string]any, limit int) []map[string]any {
+// selectDirectionalPrefixes performs a k-way merge of per-partition offset-
+// ordered streams, taking the page from the end of the log the read direction
+// starts at. Every selected partition contributes a CONTIGUOUS prefix in that
+// direction, which is what makes its extreme selected offset a lossless
+// pagination cursor — a non-contiguous selection would leave holes the cursor
+// could never point at.
+func selectDirectionalPrefixes(rows []map[string]any, limit int, direction readDirection) []map[string]any {
 	if len(rows) <= limit {
-		sortRowsNewest(rows)
+		sortRowsDirectional(rows, direction)
 		return rows
 	}
 
@@ -849,6 +999,9 @@ func selectNewestPrefixes(rows []map[string]any, limit int) []map[string]any {
 		sort.Slice(grouped[id], func(i, j int) bool {
 			left, _ := grouped[id][i]["offset"].(int64)
 			right, _ := grouped[id][j]["offset"].(int64)
+			if direction.oldestFirst() {
+				return left < right
+			}
 			return left > right
 		})
 	}
@@ -865,7 +1018,7 @@ func selectNewestPrefixes(rows []map[string]any, limit int) []map[string]any {
 				continue
 			}
 			candidate := partitionRows[position]
-			if !found || rowIsNewer(candidate, best) {
+			if !found || rowIsAhead(candidate, best, direction) {
 				bestID, best, found = id, candidate, true
 			}
 		}
@@ -878,8 +1031,17 @@ func selectNewestPrefixes(rows []map[string]any, limit int) []map[string]any {
 	return selected
 }
 
-func sortRowsNewest(rows []map[string]any) {
-	sort.SliceStable(rows, func(i, j int) bool { return rowIsNewer(rows[i], rows[j]) })
+func sortRowsDirectional(rows []map[string]any, direction readDirection) {
+	sort.SliceStable(rows, func(i, j int) bool { return rowIsAhead(rows[i], rows[j], direction) })
+}
+
+// rowIsAhead reports whether `left` comes before `right` in the read direction's
+// display order: newest first, or oldest first.
+func rowIsAhead(left, right map[string]any, direction readDirection) bool {
+	if direction.oldestFirst() {
+		return rowIsNewer(right, left)
+	}
+	return rowIsNewer(left, right)
 }
 
 func rowIsNewer(left, right map[string]any) bool {
@@ -1063,33 +1225,53 @@ func parseSeekTime(value string) (time.Time, error) {
 	)
 }
 
-// resolveSeekCeilings turns a seek into an exclusive upper offset per partition,
-// the same shape as the pagination cursor so both fold into the window bound the
-// same way. Returns nil when no seek is set.
-func (c *KafkaConnector) resolveSeekCeilings(
+// resolveSeekBounds turns a seek into one bound per partition, in the same shape
+// as the pagination cursor so both fold into the window the same way.
+//
+// The bound's meaning follows the read direction, and in both cases the seeked
+// point itself is INCLUDED:
+//
+//   - directionNewest: an exclusive UPPER bound. "Start at this point and read
+//     older", so the ceiling sits one past the named offset, and for a timestamp
+//     it is the first offset strictly newer than T.
+//   - directionOldest: an inclusive LOWER bound. "Start at this point and read
+//     newer", so the floor IS the named offset, and for a timestamp it is the
+//     first offset at or after T.
+//
+// Returns nil when no seek is set.
+func (c *KafkaConnector) resolveSeekBounds(
 	ctx context.Context,
 	topic string,
 	seek seekRequest,
+	direction readDirection,
 	partitionFilter int32,
 ) (map[int32]int64, error) {
 	if seek.empty() {
 		return nil, nil
 	}
-	ceilings := make(map[int32]int64, 1)
+	bounds := make(map[int32]int64, 1)
 
 	if seek.hasOffset {
-		// Inclusive of the named offset, and the bound is exclusive.
-		ceilings[partitionFilter] = seek.offset + 1
+		if direction.oldestFirst() {
+			bounds[partitionFilter] = seek.offset
+		} else {
+			bounds[partitionFilter] = seek.offset + 1
+		}
 	}
 
 	if seek.hasTime {
-		// "At or after T+1ms" is the first message strictly newer than T, so as an
-		// exclusive bound it keeps every message at or before T — matching the
-		// inclusive semantics the UI offers. kadm reports a partition with nothing
-		// newer as its end offset, which is the correct no-op ceiling.
+		// Paging newer wants the first record at or after T; paging older wants an
+		// exclusive ceiling, which is the first record strictly newer than T — i.e.
+		// at or after T+1ms. kadm reports a partition with nothing at or after the
+		// requested instant as its end offset, which is the correct no-op bound in
+		// both directions (nothing newer to page into / no ceiling to impose).
+		millis := seek.at.UnixMilli()
+		if !direction.oldestFirst() {
+			millis++
+		}
 		listCtx, cancel := context.WithTimeout(ctx, metadataTimeout)
 		defer cancel()
-		listed, err := c.admin.ListOffsetsAfterMilli(listCtx, seek.at.UnixMilli()+1, topic)
+		listed, err := c.admin.ListOffsetsAfterMilli(listCtx, millis, topic)
 		if err != nil {
 			return nil, normalizeKafkaError(err)
 		}
@@ -1100,19 +1282,40 @@ func (c *KafkaConnector) resolveSeekCeilings(
 			if partitionFilter >= 0 && id != partitionFilter {
 				continue
 			}
-			// The tighter of the two wins when both forms are given.
-			if existing, ok := ceilings[id]; !ok || offset.Offset < existing {
-				ceilings[id] = offset.Offset
+			// When both forms are given, keep whichever bound is more restrictive
+			// for this direction.
+			existing, ok := bounds[id]
+			switch {
+			case !ok:
+				bounds[id] = offset.Offset
+			case direction.oldestFirst() && offset.Offset > existing:
+				bounds[id] = offset.Offset
+			case !direction.oldestFirst() && offset.Offset < existing:
+				bounds[id] = offset.Offset
 			}
 		}
 	}
 
-	return ceilings, nil
+	return bounds, nil
 }
 
-func parseBeforeOffsets(filters []connector.FilterExpr) (map[int32]int64, error) {
+// parseCursorOffsets reads the pagination cursor for the given read direction.
+//
+// Each direction has its own wire field — before_offsets when paging towards
+// older records, after_offsets when paging towards newer ones — and this only
+// ever looks at the one matching `direction`. That is the point: the two cursors
+// mean opposite things (an exclusive upper bound versus an inclusive lower one),
+// so a client that switched direction and kept sending the old field gets a
+// fresh read from that direction's end rather than a window silently computed
+// from a bound pointing the wrong way.
+func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection) (map[int32]int64, error) {
+	column := "before_offsets"
+	if direction.oldestFirst() {
+		column = "after_offsets"
+	}
+
 	for _, filter := range filters {
-		if !strings.EqualFold(strings.TrimSpace(filter.Column), "before_offsets") {
+		if !strings.EqualFold(strings.TrimSpace(filter.Column), column) {
 			continue
 		}
 		value := strings.TrimSpace(filter.Value)
@@ -1122,14 +1325,14 @@ func parseBeforeOffsets(filters []connector.FilterExpr) (map[int32]int64, error)
 
 		raw := make(map[string]int64)
 		if err := json.Unmarshal([]byte(value), &raw); err != nil {
-			return nil, fmt.Errorf("%w: invalid before_offsets cursor", connector.ErrBadRequest)
+			return nil, fmt.Errorf("%w: invalid %s cursor", connector.ErrBadRequest, column)
 		}
 
 		offsets := make(map[int32]int64, len(raw))
 		for key, offset := range raw {
 			partition, err := strconv.ParseInt(key, 10, 32)
 			if err != nil || partition < 0 || offset < 0 {
-				return nil, fmt.Errorf("%w: invalid before_offsets cursor", connector.ErrBadRequest)
+				return nil, fmt.Errorf("%w: invalid %s cursor", connector.ErrBadRequest, column)
 			}
 			offsets[int32(partition)] = offset
 		}
@@ -1187,25 +1390,26 @@ func parseMatchFilter(filters []connector.FilterExpr) (field string, value strin
 func buildPaginationCursor(
 	scoped []int32,
 	frontier map[int32]int64,
-	beforeOffsets map[int32]int64,
-	startOffset func(int32) int64,
+	incoming map[int32]int64,
+	direction readDirection,
+	bounds func(int32) (int64, int64),
 ) (map[string]int64, bool) {
 	cursor := make(map[string]int64, len(scoped))
-	hasOlder := false
+	hasMore := false
 	for _, id := range scoped {
-		start := startOffset(id)
+		start, end := bounds(id)
 		if off, windowed := frontier[id]; windowed {
 			cursor[strconv.Itoa(int(id))] = off
-			if off > start {
-				hasOlder = true
+			if !direction.exhausted(off, start, end) {
+				hasMore = true
 			}
 			continue
 		}
-		if _, carried := beforeOffsets[id]; carried {
-			cursor[strconv.Itoa(int(id))] = start
+		if _, carried := incoming[id]; carried {
+			cursor[strconv.Itoa(int(id))] = direction.pinnedOffset(start, end)
 		}
 	}
-	return cursor, hasOlder
+	return cursor, hasMore
 }
 
 // consumeWithIncarnationRetry runs one read attempt and, if it fails because the
@@ -1251,64 +1455,106 @@ func (c *KafkaConnector) consumeWithIncarnationRetry(
 }
 
 // computeFrontier derives the per-partition pagination cursor for one GetData
-// call. It defaults every scoped partition to its original (pre-request)
-// upper bound, then advances it in two ways, in priority order:
-//  1. If the partition contributed rows that survived page selection, advance
-//     to the lowest such row's offset (the precise, lossless cursor).
+// call. It defaults every scoped partition to the bound it started this request
+// from, then advances it in two ways, in priority order:
+//  1. If the partition contributed rows that survived page selection, advance to
+//     the furthest such row in the read direction (the precise, lossless cursor).
 //  2. Otherwise, if the partition completed with zero records in its window
-//     (completedFrom and NOT recordsRead), advance to that confirmed lower
-//     bound — without this, an empty/compacted window would never move its
-//     cursor and would be rescanned forever by "Load older" / "Scan more".
+//     (completedWindow and NOT recordsRead), advance to that window's confirmed
+//     far edge — without this, an empty/compacted window would never move its
+//     cursor and would be rescanned forever by "Load older"/"Load newer".
 //
-// A partition that neither returned rows nor completed keeps its prior upper
-// offset untouched, per the cursor contract: never skip, never re-show a row.
+// A partition that neither returned rows nor completed keeps its prior offset
+// untouched, per the cursor contract: never skip, never re-show a row.
 //
-// The invariant this function enforces:
+// The invariant this function enforces, in EITHER direction:
 //
 //	A partition's cursor may only advance past an offset that was either
 //	(a) actually RETURNED to the caller in this response, or (b) confirmed to
 //	contain no record at all. It must never advance past a record that was read
 //	from the broker but withheld from the page.
 //
-// Case (a) is the row-based advance; case (b) is the completedFrom advance,
+// Case (a) is the row-based advance; case (b) is the completedWindow advance,
 // which is why it is gated on recordsRead. The gap between them — a window that
-// completed and yielded records, none of which survived selectNewestPrefixes'
-// trim to the page limit — is precisely the silent-skip bug: completedFrom would
-// move the cursor below records the caller never saw, making them permanently
-// unreachable. Such a partition keeps its prior upper offset so the very next
-// page re-reads that window and can return those records.
+// completed and yielded records, none of which survived the trim to the page
+// limit — is precisely the silent-skip bug: the window-based advance would move
+// the cursor past records the caller never saw, making them permanently
+// unreachable. Such a partition keeps its prior bound so the very next page
+// re-reads that window and can return those records.
+//
+// Direction only changes which edge counts as "further": the lowest offset and a
+// window's `from` when paging towards older records, the highest offset plus one
+// and a window's `upper` when paging towards newer ones. The reasoning above is
+// deliberately expressed once, for both.
 func computeFrontier(
 	frontierWindows map[int32]partitionWindow,
 	rows []map[string]any,
 	scanning bool,
+	direction readDirection,
 	completed map[int32]bool,
-	completedFrom map[int32]int64,
+	completedWindow map[int32]partitionWindow,
 	recordsRead map[int32]bool,
 ) map[int32]int64 {
 	frontier := make(map[int32]int64, len(frontierWindows))
 	for id, window := range frontierWindows {
-		frontier[id] = window.upper
+		// The edge this request started from, and therefore the safe no-advance
+		// fallback for a partition that produced nothing usable.
+		if direction.oldestFirst() {
+			frontier[id] = window.from
+		} else {
+			frontier[id] = window.upper
+		}
 	}
-	reached := lowestConsumedOffsets(rows)
+	reached := consumedFrontierOffsets(rows, direction)
 	for id, off := range reached {
 		if !scanning || completed[id] {
 			frontier[id] = off
 		}
 	}
-	for id, from := range completedFrom {
+	for id, window := range completedWindow {
 		if _, hasRows := reached[id]; hasRows {
 			continue // the row-based cursor above is authoritative when rows exist
 		}
 		if recordsRead[id] {
 			// The window completed and DID hold records, but none of them are in
-			// this response (they were trimmed out of the final page). Advancing to
-			// `from` here would skip them forever. Leave the cursor at the prior
-			// upper bound so the next page re-reads this window.
+			// this response (they were trimmed out of the final page). Advancing
+			// past them here would skip them forever. Leave the cursor at the prior
+			// bound so the next page re-reads this window.
 			continue
 		}
-		frontier[id] = from
+		if direction.oldestFirst() {
+			frontier[id] = window.upper
+		} else {
+			frontier[id] = window.from
+		}
 	}
 	return frontier
+}
+
+// consumedFrontierOffsets reports, per partition, the offset the cursor may
+// safely advance to given the rows actually returned: the smallest offset when
+// paging towards older records, and one past the largest when paging towards
+// newer ones (the cursor is an inclusive lower bound in that direction, so the
+// next page must start after the last row already shown).
+func consumedFrontierOffsets(rows []map[string]any, direction readDirection) map[int32]int64 {
+	if direction.oldestFirst() {
+		reached := make(map[int32]int64)
+		for _, row := range rows {
+			id, ok := row["partition"].(int32)
+			if !ok {
+				continue
+			}
+			offset, ok := row["offset"].(int64)
+			if !ok {
+				continue
+			}
+			if cur, seen := reached[id]; !seen || offset+1 > cur {
+				reached[id] = offset + 1
+			}
+		}
+		return reached
+	}
+	return lowestConsumedOffsets(rows)
 }
 
 // lowestConsumedOffsets reports the smallest offset consumed per partition.

@@ -23,8 +23,13 @@ interface KafkaTopicTabState {
   loadingOlder: boolean
   messagesError: string | null
   total: number
-  hasOlder: boolean
-  nextBeforeOffsets: Record<string, number> | null
+  // True when the CURRENT direction still has messages to page into, and the
+  // cursor to continue with. Both are direction-neutral on purpose: the wire
+  // fields differ (before/after), the meaning — "more that way" — does not.
+  hasMore: boolean
+  nextCursor: Record<string, number> | null
+  // Which end of the log this tab reads from and which way it pages.
+  direction: KafkaDirection
   partitionFilter: number | null
   // Browse anchor — see KafkaSeek. Persisted on the tab so Refresh and
   // "Load older" keep reading from the same starting point.
@@ -33,7 +38,7 @@ interface KafkaTopicTabState {
 
   // "Filter loaded" — a pure client-side predicate over the already-loaded raw
   // `messages`, run in the browser with zero network requests. It never touches
-  // `nextBeforeOffsets`/`hasOlder`; the visible rows are derived from `messages`
+  // `nextCursor`/`hasMore`; the visible rows are derived from `messages`
   // + this predicate (see filterLoadedMessages), so clearing it restores the
   // page and cursor instantly because they were never mutated.
   filterField: string
@@ -71,11 +76,29 @@ interface KafkaSearch {
   value: string
 }
 
+// Which end of the log a browse starts from. 'newest' anchors at the end and
+// pages towards older records; 'oldest' anchors at the log start and pages
+// towards newer ones.
+export type KafkaDirection = 'newest' | 'oldest'
+
+// readMore/readCursor pull the field matching the direction that was requested.
+// The two cursors mean opposite things, so they are never interchangeable.
+function readMore(meta: MessagesResponse['meta'], direction: KafkaDirection): boolean {
+  return Boolean(direction === 'oldest' ? meta?.has_newer : meta?.has_older)
+}
+
+function readCursor(
+  meta: MessagesResponse['meta'],
+  direction: KafkaDirection
+): Record<string, number> | null {
+  return (direction === 'oldest' ? meta?.next_after_offsets : meta?.next_before_offsets) ?? null
+}
+
 // Where a browse starts reading, the reader's equivalent of Kafka UI's "Seek
-// Type". Both forms name the newest message a page may show and the reader walks
-// backwards from there — the only direction it reads. A seek is orthogonal to
-// the field search: it narrows WHICH PART of the log is read, the search narrows
-// WHICH of those messages are shown, and the two combine.
+// Type". Both forms name the first message a page may show, and the reader
+// continues from there in the tab's direction. A seek is orthogonal to the field
+// search: it narrows WHICH PART of the log is read, the search narrows WHICH of
+// those messages are shown, and the two combine.
 export interface KafkaSeek {
   // Raw user input, '' when unset. Only meaningful with a single partition
   // selected; the backend rejects it otherwise, because offsets are not
@@ -93,6 +116,10 @@ function seekIsSet(seek: KafkaSeek | null | undefined): seek is KafkaSeek {
 // Tolerates a tab that predates these fields: ensureState only fills defaults
 // for a tab it has never seen, so a partially-populated existing tab (which is
 // how the store tests inject state) would otherwise read undefined here.
+function directionOf(tab: { direction?: KafkaDirection }): KafkaDirection {
+  return tab.direction ?? 'newest'
+}
+
 function seekOf(tab: { seekOffset?: string; seekTimestamp?: string }): KafkaSeek | null {
   const seek = { offset: tab.seekOffset ?? '', timestamp: tab.seekTimestamp ?? '' }
   return seekIsSet(seek) ? seek : null
@@ -122,6 +149,10 @@ interface KafkaStore {
   // an active "Search topic" session is re-run from there rather than dropped,
   // because a seek narrows the range a search covers rather than replacing it.
   setSeek: (connId: string, topic: string, tabId: string, seek: KafkaSeek) => Promise<void>
+  // Flip which end of the log the tab reads from. The accumulated page and its
+  // cursor belong to the old direction and are dropped — the two cursors are not
+  // interchangeable.
+  setDirection: (connId: string, topic: string, tabId: string, direction: KafkaDirection) => Promise<void>
   // Filter loaded (client-side, no network).
   setLoadedFilter: (tabId: string, field: string, value: string) => void
   clearLoadedFilter: (tabId: string) => void
@@ -143,8 +174,9 @@ function defaultTabState(): KafkaTopicTabState {
     loadingOlder: false,
     messagesError: null,
     total: 0,
-    hasOlder: false,
-    nextBeforeOffsets: null,
+    hasMore: false,
+    nextCursor: null,
+    direction: 'newest',
     partitionFilter: null,
     seekOffset: '',
     seekTimestamp: '',
@@ -193,8 +225,12 @@ interface MessagesResponse {
   total: number
   has_more: boolean
   meta?: {
+    // Each direction reports its own pair; only the one matching the request's
+    // order is ever populated.
     has_older?: boolean
     next_before_offsets?: Record<string, number>
+    has_newer?: boolean
+    next_after_offsets?: Record<string, number>
     // partitions_total/partitions_completed count only the SCOPED partitions
     // for the current filter (1 when a single partition is selected).
     // partitions_completed can be < partitions_total even when partial is
@@ -250,17 +286,27 @@ async function requestMessages(
   connId: string,
   topic: string,
   partition: number | null,
-  beforeOffsets: Record<string, number> | null,
+  cursorOffsets: Record<string, number> | null,
   search: KafkaSearch | null,
   seek: KafkaSeek | null,
+  direction: KafkaDirection,
   signal?: AbortSignal
 ): Promise<MessagesResponse> {
   const filters: Array<{ column: string; op: string; value: string }> = []
   if (partition !== null) {
     filters.push({ column: 'partition', op: 'eq', value: String(partition) })
   }
-  if (beforeOffsets && Object.keys(beforeOffsets).length > 0) {
-    filters.push({ column: 'before_offsets', op: 'eq', value: JSON.stringify(beforeOffsets) })
+  if (direction === 'oldest') {
+    filters.push({ column: 'order', op: 'eq', value: 'oldest' })
+  }
+  if (cursorOffsets && Object.keys(cursorOffsets).length > 0) {
+    // The cursor column has to match the order above: the backend reads only the
+    // field belonging to the direction it was asked for.
+    filters.push({
+      column: direction === 'oldest' ? 'after_offsets' : 'before_offsets',
+      op: 'eq',
+      value: JSON.stringify(cursorOffsets),
+    })
   }
   // Sent alongside before_offsets rather than instead of it: the seek fixes
   // where paging starts, the cursor tracks how far down it has walked, and the
@@ -305,10 +351,10 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
   const runScanStep = async (connId: string, topic: string, tabId: string, reset: boolean): Promise<void> => {
     const current = ensureState(get().tabs, tabId)
     if (current.scanning) return
-    if (!reset && (!current.hasOlder || !current.nextBeforeOffsets)) return
+    if (!reset && (!current.hasMore || !current.nextCursor)) return
 
     const search: KafkaSearch = { field: current.searchField, value: current.searchValue }
-    const beforeOffsets = reset ? null : current.nextBeforeOffsets
+    const cursorOffsets = reset ? null : current.nextCursor
 
     // Supersede any lingering controller and register this step's own so Cancel
     // aborts exactly this in-flight request.
@@ -326,7 +372,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: true,
             messagesError: null,
             ...(reset
-              ? { messages: [], scanned: 0, scanPartial: false, nextBeforeOffsets: null, hasOlder: false }
+              ? { messages: [], scanned: 0, scanPartial: false, nextCursor: null, hasMore: false }
               : {}),
           },
         },
@@ -334,7 +380,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     })
 
     try {
-      const data = await requestMessages(connId, topic, current.partitionFilter, beforeOffsets, search, seekOf(current), controller.signal)
+      const data = await requestMessages(connId, topic, current.partitionFilter, cursorOffsets, search, seekOf(current), directionOf(current), controller.signal)
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         const base = reset ? [] : tab.messages
@@ -348,8 +394,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
               messages: [...base, ...matches],
               scanned: (reset ? 0 : tab.scanned) + (data.meta?.scanned ?? 0),
               scanPartial: Boolean(data.meta?.partial_scan),
-              hasOlder: Boolean(data.meta?.has_older),
-              nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
+              hasMore: readMore(data.meta, directionOf(current)),
+              nextCursor: readCursor(data.meta, directionOf(current)),
               scanning: false,
             },
           },
@@ -472,7 +518,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         }))
         try {
-          const data = await requestMessages(connId, topic, current.partitionFilter, null, null, seekOf(current))
+          const data = await requestMessages(connId, topic, current.partitionFilter, null, null, seekOf(current), directionOf(current))
           set((state) => ({
             tabs: {
               ...state.tabs,
@@ -480,8 +526,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
                 ...ensureState(state.tabs, tabId),
                 messages: data.rows ?? [],
                 total: data.total,
-                hasOlder: Boolean(data.meta?.has_older),
-                nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
+                hasMore: readMore(data.meta, directionOf(current)),
+                nextCursor: readCursor(data.meta, directionOf(current)),
                 partial: Boolean(data.meta?.partial),
                 partialReason: data.meta?.partial_reason ?? null,
                 partitionsTotal: data.meta?.partitions_total ?? 0,
@@ -535,10 +581,10 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     // raw set, so loading older while filtering surfaces more matches.
     fetchOlderMessages: async (connId, topic, tabId) => {
       const current = ensureState(get().tabs, tabId)
-      if (!current.nextBeforeOffsets || current.loadingOlder) {
+      if (!current.nextCursor || current.loadingOlder) {
         return
       }
-      const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, current.nextBeforeOffsets)
+      const requestKey = kafkaMessageKey(connId, topic, tabId, current.partitionFilter, current.nextCursor)
       const pending = kafkaMessageRequests.get(requestKey)
       if (pending) {
         return pending
@@ -552,7 +598,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         }))
         try {
-          const data = await requestMessages(connId, topic, current.partitionFilter, current.nextBeforeOffsets, null, seekOf(current))
+          const data = await requestMessages(connId, topic, current.partitionFilter, current.nextCursor, null, seekOf(current), directionOf(current))
           set((state) => {
             const tab = ensureState(state.tabs, tabId)
             // On cursor_reset the rows on screen came from a topic incarnation that
@@ -568,8 +614,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
                 [tabId]: {
                   ...tab,
                   messages: recreated ? older : [...tab.messages, ...older],
-                  hasOlder: Boolean(data.meta?.has_older),
-                  nextBeforeOffsets: data.meta?.next_before_offsets ?? null,
+                  hasMore: readMore(data.meta, directionOf(current)),
+                  nextCursor: readCursor(data.meta, directionOf(current)),
                   partial: Boolean(data.meta?.partial),
                   partialReason: data.meta?.partial_reason ?? null,
                   partitionsTotal: data.meta?.partitions_total ?? 0,
@@ -617,8 +663,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             // timestamp seek resolves per partition and survives.
             ...(partition === null ? { seekOffset: '' } : {}),
             messages: [],
-            nextBeforeOffsets: null,
-            hasOlder: false,
+            nextCursor: null,
+            hasMore: false,
             filterField: '',
             filterValue: '',
             filterActive: false,
@@ -654,8 +700,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             seekOffset: seek.offset,
             seekTimestamp: seek.timestamp,
             messages: [],
-            nextBeforeOffsets: null,
-            hasOlder: false,
+            nextCursor: null,
+            hasMore: false,
             scanning: false,
             scanned: 0,
             scanPartial: false,
@@ -667,6 +713,39 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         },
       }))
+      if (previous.searchActive && previous.searchField) {
+        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue)
+        return
+      }
+      await get().fetchMessages(connId, topic, tabId)
+    },
+
+    setDirection: async (connId, topic, tabId, direction) => {
+      kafkaScanControllers.get(tabId)?.abort()
+      const previous = ensureState(get().tabs, tabId)
+      if (previous.direction === direction) return
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: {
+            ...ensureState(state.tabs, tabId),
+            direction,
+            messages: [],
+            nextCursor: null,
+            hasMore: false,
+            scanning: false,
+            scanned: 0,
+            scanPartial: false,
+            partial: false,
+            partialReason: null,
+            partitionsTotal: 0,
+            partitionsCompleted: 0,
+            messagesReturned: 0,
+          },
+        },
+      }))
+      // A search survives the flip for the same reason it survives a seek: the
+      // direction changes which part of the log is swept, not what is looked for.
       if (previous.searchActive && previous.searchField) {
         await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue)
         return
@@ -753,8 +832,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanned: 0,
             scanPartial: false,
             messages: [],
-            nextBeforeOffsets: null,
-            hasOlder: false,
+            nextCursor: null,
+            hasMore: false,
           },
         },
       }))

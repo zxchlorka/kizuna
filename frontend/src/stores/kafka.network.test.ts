@@ -48,9 +48,9 @@ describe('Filter loaded — client-side only', () => {
     expect(tab.filterField).toBe('')
 
     // The whole point of "Filter loaded": zero requests, and the cursor state
-    // (nextBeforeOffsets/hasOlder) is never mutated by filtering.
+    // (nextCursor/hasMore) is never mutated by filtering.
     expect(fetchMock).not.toHaveBeenCalled()
-    expect(tab.nextBeforeOffsets).toBeNull()
+    expect(tab.nextCursor).toBeNull()
   })
 })
 
@@ -75,7 +75,7 @@ describe('Search topic — backend scan', () => {
     expect(tab.searchActive).toBe(true)
     expect(tab.messages).toHaveLength(1)
     expect(tab.scanned).toBe(40)
-    expect(tab.hasOlder).toBe(true)
+    expect(tab.hasMore).toBe(true)
     expect(tab.scanning).toBe(false)
 
     const calledUrl = decodeURIComponent(String(fetchMock.mock.calls[0][0]))
@@ -112,7 +112,7 @@ describe('Search topic — backend scan', () => {
     const tab = useKafkaStore.getState().tabs['tab-more']
     expect(tab.messages).toHaveLength(2)
     expect(tab.scanned).toBe(70)
-    expect(tab.hasOlder).toBe(false)
+    expect(tab.hasMore).toBe(false)
 
     // The continuation carried the first step's cursor.
     const secondCall = String(fetchMock.mock.calls[1][0])
@@ -143,7 +143,7 @@ describe('Search topic — backend scan', () => {
     const tab = useKafkaStore.getState().tabs['tab-partial']
     expect(tab.scanPartial).toBe(true)
     expect(tab.messages).toHaveLength(1) // step matches preserved
-    expect(tab.hasOlder).toBe(true)
+    expect(tab.hasMore).toBe(true)
   })
 })
 
@@ -219,7 +219,7 @@ describe('loadInitialMessages — mount-path guard against search clobbering', (
     expect(afterSearch.searchActive).toBe(true)
     expect(afterSearch.messages).toHaveLength(1)
     expect(afterSearch.scanned).toBe(40)
-    expect(afterSearch.nextBeforeOffsets).toEqual({ '0': 5 })
+    expect(afterSearch.nextCursor).toEqual({ '0': 5 })
 
     // Now simulate KafkaTopicView remounting (tab-switch-away-and-back): the
     // mount effect fires loadInitialMessages for the same tab. It must issue NO
@@ -246,7 +246,7 @@ describe('loadInitialMessages — mount-path guard against search clobbering', (
     expect(tab.messages).toHaveLength(1)
     expect(tab.messages[0].offset).toBe(7)
     expect(tab.scanned).toBe(40)
-    expect(tab.nextBeforeOffsets).toEqual({ '0': 5 })
+    expect(tab.nextCursor).toEqual({ '0': 5 })
   })
 
   it('loads the browse page for a brand-new tab with no active search', async () => {
@@ -314,7 +314,7 @@ describe('Refresh is search-aware (settled-search clobber guard)', () => {
     expect(settled.scanning).toBe(false) // settled, not mid-scan
     expect(settled.messages).toHaveLength(1)
     expect(settled.scanned).toBe(40)
-    expect(settled.nextBeforeOffsets).toEqual({ '0': 5 })
+    expect(settled.nextCursor).toEqual({ '0': 5 })
 
     await useKafkaStore.getState().refreshMessages('c1', 'topic', 'tab-refresh-search')
 
@@ -333,7 +333,7 @@ describe('Refresh is search-aware (settled-search clobber guard)', () => {
     expect(tab.messages).toHaveLength(1)
     expect(tab.messages[0].offset).toBe(6)
     expect(tab.scanned).toBe(25)
-    expect(tab.nextBeforeOffsets).toEqual({ '0': 4 })
+    expect(tab.nextCursor).toEqual({ '0': 4 })
   })
 
   it('browse-refreshes (no match filter) when no search is active — unchanged', async () => {
@@ -420,8 +420,8 @@ describe('Load older — topic recreated mid-session', () => {
         'tab-recreate': {
           ...useKafkaStore.getState().tabs['tab-recreate'],
           messages: [oldRow],
-          hasOlder: true,
-          nextBeforeOffsets: { '0': 5 },
+          hasMore: true,
+          nextCursor: { '0': 5 },
           loadingOlder: false,
           messagesError: null,
         },
@@ -456,8 +456,8 @@ describe('Load older — topic recreated mid-session', () => {
         'tab-normal': {
           ...useKafkaStore.getState().tabs['tab-normal'],
           messages: [first],
-          hasOlder: true,
-          nextBeforeOffsets: { '0': 5 },
+          hasMore: true,
+          nextCursor: { '0': 5 },
           loadingOlder: false,
           messagesError: null,
         },
@@ -558,5 +558,105 @@ describe('Seek — browse anchor', () => {
     // pair, so the view must not keep sending it.
     expect(useKafkaStore.getState().tabs['tab-widen'].seekOffset).toBe('')
     expect(filtersOf(fetchMock).some((filter) => filter.column === 'from_offset')).toBe(false)
+  })
+})
+
+// The two directions carry opposite cursors, so the store must send the field
+// matching the order it asked for and read back the matching meta pair. Mixing
+// them would silently build a window from a bound that means the other thing.
+describe('Oldest-first direction', () => {
+  function filtersOf(fetchMock: ReturnType<typeof vi.fn>, call = 0): Array<{ column: string; value: string }> {
+    const url = String(fetchMock.mock.calls[call][0])
+    const raw = new URL(url, 'http://localhost').searchParams.get('filters')
+    return raw ? JSON.parse(raw) : []
+  }
+
+  it('requests order=oldest and stores has_newer / next_after_offsets', async () => {
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        columns: [],
+        rows: [scanRow(0, 1)],
+        total: 1,
+        has_more: true,
+        // The newest-first pair is deliberately present and WRONG here: reading
+        // it would report "nothing more" for a direction that has plenty.
+        meta: { has_newer: true, next_after_offsets: { '0': 2 }, has_older: false },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().setDirection('conn-1', 'orders', 'tab-oldest', 'oldest')
+
+    expect(filtersOf(fetchMock)).toEqual(
+      expect.arrayContaining([{ column: 'order', op: 'eq', value: 'oldest' }])
+    )
+
+    const tab = useKafkaStore.getState().tabs['tab-oldest']
+    expect(tab.direction).toBe('oldest')
+    expect(tab.hasMore).toBe(true)
+    expect(tab.nextCursor).toEqual({ '0': 2 })
+  })
+
+  it('pages with after_offsets, never before_offsets', async () => {
+    useKafkaStore.setState({
+      tabs: {
+        'tab-page': {
+          ...useKafkaStore.getState().tabs['tab-page'],
+          direction: 'oldest',
+          messages: [scanRow(0, 1)],
+          hasMore: true,
+          nextCursor: { '0': 2 },
+          loadingOlder: false,
+          messagesError: null,
+        },
+      },
+    } as never)
+
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        columns: [],
+        rows: [scanRow(0, 2)],
+        total: 2,
+        has_more: false,
+        meta: { has_newer: false },
+      })
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().fetchOlderMessages('conn-1', 'orders', 'tab-page')
+
+    const filters = filtersOf(fetchMock)
+    expect(filters).toEqual(
+      expect.arrayContaining([{ column: 'after_offsets', op: 'eq', value: '{"0":2}' }])
+    )
+    expect(filters.some((filter) => filter.column === 'before_offsets')).toBe(false)
+
+    // Paging appends in the direction of travel, exactly as newest-first does.
+    expect(useKafkaStore.getState().tabs['tab-page'].messages).toEqual([scanRow(0, 1), scanRow(0, 2)])
+  })
+
+  it('drops the page and cursor when the direction flips', async () => {
+    useKafkaStore.setState({
+      tabs: {
+        'tab-flip': {
+          ...useKafkaStore.getState().tabs['tab-flip'],
+          direction: 'newest',
+          messages: [scanRow(0, 9)],
+          hasMore: true,
+          nextCursor: { '0': 9 },
+        },
+      },
+    } as never)
+
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({ columns: [], rows: [], total: 0, has_more: false, meta: { has_newer: false } })
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().setDirection('conn-1', 'orders', 'tab-flip', 'oldest')
+
+    // The old cursor belongs to the old direction and must not be carried over.
+    expect(filtersOf(fetchMock).some((filter) => filter.column.endsWith('_offsets'))).toBe(false)
+    expect(useKafkaStore.getState().tabs['tab-flip'].messages).toEqual([])
   })
 })

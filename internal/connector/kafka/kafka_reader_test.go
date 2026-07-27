@@ -209,7 +209,7 @@ func TestConsumeWindowsDefersDeserializationUntilFinalPage(t *testing.T) {
 	}
 
 	// Only the selected page is deserialized for display.
-	page := finalizeRows(selectNewestPrefixes(res.rows, pageSize))
+	page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest))
 	if len(page) != pageSize {
 		t.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 	}
@@ -884,7 +884,7 @@ func TestConsumeWindowsCountsCandidatesReadIncludingIncompletePartitions(t *test
 	}
 }
 
-// completedFrom must record the completed window's lower bound only for
+// completedWindow must record the completed window's lower bound only for
 // partitions that actually completed in this call, keyed exactly like
 // completed. This is the bookkeeping computeFrontier relies on to advance the
 // cursor for a completed-but-empty partition.
@@ -919,15 +919,15 @@ func TestConsumeWindowsRecordsCompletedFromForCompletedPartitionsOnly(t *testing
 	if res.completed[1] {
 		t.Fatalf("expected partition 1 to remain incomplete")
 	}
-	if from, ok := res.completedFrom[0]; !ok || from != 5 {
-		t.Fatalf("expected completedFrom[0] = 5, got %v (present=%v)", from, ok)
+	if window, ok := res.completedWindow[0]; !ok || window.from != 5 {
+		t.Fatalf("expected completedWindow[0].from = 5, got %v (present=%v)", window, ok)
 	}
-	if _, ok := res.completedFrom[1]; ok {
-		t.Fatalf("completedFrom must not carry an entry for an incomplete partition, got %v", res.completedFrom[1])
+	if _, ok := res.completedWindow[1]; ok {
+		t.Fatalf("completedWindow must not carry an entry for an incomplete partition, got %v", res.completedWindow[1])
 	}
-	// recordsRead is completedFrom's companion: it must stay UNSET for a window
+	// recordsRead is completedWindow's companion: it must stay UNSET for a window
 	// that completed with zero records, which is exactly what makes the
-	// completedFrom advance safe for that partition.
+	// completedWindow advance safe for that partition.
 	if res.recordsRead[0] {
 		t.Fatalf("partition 0 completed with zero records — recordsRead[0] must stay false")
 	}
@@ -937,7 +937,7 @@ func TestConsumeWindowsRecordsCompletedFromForCompletedPartitionsOnly(t *testing
 }
 
 // The companion of the test above: when a completed window DID contain records,
-// recordsRead must be set, so computeFrontier can refuse the completedFrom
+// recordsRead must be set, so computeFrontier can refuse the completedWindow
 // advance and avoid skipping records that may not survive page selection.
 func TestConsumeWindowsMarksRecordsReadForNonEmptyCompletedWindow(t *testing.T) {
 	t.Parallel()
@@ -970,13 +970,13 @@ func TestConsumeWindowsMarksRecordsReadForNonEmptyCompletedWindow(t *testing.T) 
 	if res.recordsRead[1] {
 		t.Fatalf("partition 1's completed window held no record — recordsRead[1] must be false")
 	}
-	// Both still record completedFrom; recordsRead is the discriminator, not
-	// completedFrom's presence.
-	if from, ok := res.completedFrom[0]; !ok || from != 5 {
-		t.Fatalf("expected completedFrom[0] = 5, got %v (present=%v)", from, ok)
+	// Both still record completedWindow; recordsRead is the discriminator, not
+	// completedWindow's presence.
+	if window, ok := res.completedWindow[0]; !ok || window.from != 5 {
+		t.Fatalf("expected completedWindow[0].from = 5, got %v (present=%v)", window, ok)
 	}
-	if from, ok := res.completedFrom[1]; !ok || from != 45 {
-		t.Fatalf("expected completedFrom[1] = 45, got %v (present=%v)", from, ok)
+	if window, ok := res.completedWindow[1]; !ok || window.from != 45 {
+		t.Fatalf("expected completedWindow[1].from = 45, got %v (present=%v)", window, ok)
 	}
 }
 
@@ -985,7 +985,7 @@ func TestConsumeWindowsMarksRecordsReadForNonEmptyCompletedWindow(t *testing.T) 
 //
 //   - Task 3's stuck-cursor fix: a completed partition that contained zero
 //     records (an empty/compacted window) must still advance its cursor via
-//     completedFrom, otherwise the exact same empty window would be rescanned
+//     completedWindow, otherwise the exact same empty window would be rescanned
 //     forever by "Load older" / "Scan more" (partition 1 below).
 //   - The silent-skip fix: a completed partition that DID contain records, none
 //     of which survived the final page trim, must NOT advance — advancing there
@@ -999,8 +999,8 @@ func TestComputeFrontierAdvancesCompletedEmptyPartitions(t *testing.T) {
 
 	frontierWindows := map[int32]partitionWindow{
 		0: {from: 0, upper: 100}, // has rows: row-based cursor wins
-		1: {from: 0, upper: 50},  // completed with zero records: completedFrom wins
-		2: {from: 0, upper: 30},  // neither rows nor completedFrom: stays at upper
+		1: {from: 0, upper: 50},  // completed with zero records: completedWindow wins
+		2: {from: 0, upper: 30},  // neither rows nor completedWindow: stays at upper
 		3: {from: 0, upper: 40},  // completed WITH records, all trimmed: stays at upper
 	}
 	rows := []map[string]any{
@@ -1008,16 +1008,16 @@ func TestComputeFrontierAdvancesCompletedEmptyPartitions(t *testing.T) {
 		{"partition": int32(0), "offset": int64(95)},
 	}
 	completed := map[int32]bool{0: true, 1: true, 3: true}
-	completedFrom := map[int32]int64{0: 80, 1: 20, 3: 15} // 0's completedFrom must lose to its rows
+	completedWindow := map[int32]partitionWindow{0: {from: 80, upper: 100}, 1: {from: 20, upper: 50}, 3: {from: 15, upper: 40}} // 0's window must lose to its rows
 	recordsRead := map[int32]bool{0: true, 3: true}
 
-	frontier := computeFrontier(frontierWindows, rows, false, completed, completedFrom, recordsRead)
+	frontier := computeFrontier(frontierWindows, rows, false, directionNewest, completed, completedWindow, recordsRead)
 
 	if frontier[0] != 90 {
-		t.Fatalf("partition 0: row-based cursor must win over completedFrom, got %d, want 90", frontier[0])
+		t.Fatalf("partition 0: row-based cursor must win over completedWindow, got %d, want 90", frontier[0])
 	}
 	if frontier[1] != 20 {
-		t.Fatalf("partition 1: completed-but-empty partition must advance via completedFrom, got %d, want 20", frontier[1])
+		t.Fatalf("partition 1: completed-but-empty partition must advance via completedWindow, got %d, want 20", frontier[1])
 	}
 	if frontier[2] != 30 {
 		t.Fatalf("partition 2: untouched partition must keep its prior upper offset, got %d, want 30", frontier[2])
@@ -1042,13 +1042,13 @@ func TestComputeFrontierScanningRequiresCompletionForRowBasedAdvance(t *testing.
 	}
 
 	// Partition 0 not completed: row-based advance must NOT apply.
-	frontier := computeFrontier(frontierWindows, rows, true, map[int32]bool{}, map[int32]int64{}, map[int32]bool{})
+	frontier := computeFrontier(frontierWindows, rows, true, directionNewest, map[int32]bool{}, map[int32]partitionWindow{}, map[int32]bool{})
 	if frontier[0] != 100 {
 		t.Fatalf("scanning: an incomplete partition's rows must not advance the cursor, got %d, want 100", frontier[0])
 	}
 
 	// Partition 0 completed: row-based advance applies.
-	frontier = computeFrontier(frontierWindows, rows, true, map[int32]bool{0: true}, map[int32]int64{}, map[int32]bool{0: true})
+	frontier = computeFrontier(frontierWindows, rows, true, directionNewest, map[int32]bool{0: true}, map[int32]partitionWindow{}, map[int32]bool{0: true})
 	if frontier[0] != 90 {
 		t.Fatalf("scanning: a completed partition's rows must advance the cursor, got %d, want 90", frontier[0])
 	}
@@ -1070,9 +1070,10 @@ func TestBuildPaginationCursorRetainsDrainedPartitionsAndDerivesHasOlder(t *test
 	// present in frontier.
 	scoped := []int32{0, 52}
 	frontier := map[int32]int64{0: 10, 52: 0}
-	startOf := func(int32) int64 { return 0 }
+	// Every partition here spans [0, 100): start 0, end 100.
+	boundsOf := func(int32) (int64, int64) { return 0, 100 }
 
-	cursor, hasOlder := buildPaginationCursor(scoped, frontier, nil, startOf)
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, nil, directionNewest, boundsOf)
 
 	if got, ok := cursor["52"]; !ok || got != 0 {
 		t.Fatalf("drained partition 52 must be retained at its start offset 0 (present=%v, value=%d); "+
@@ -1103,9 +1104,10 @@ func TestBuildPaginationCursorCarriesForwardAlreadyDrainedPartition(t *testing.T
 	scoped := []int32{0, 52}
 	frontier := map[int32]int64{0: 10} // only partition 0 had a window this request
 	beforeOffsets := map[int32]int64{0: 20, 52: 0}
-	startOf := func(int32) int64 { return 0 }
+	// Every partition here spans [0, 100): start 0, end 100.
+	boundsOf := func(int32) (int64, int64) { return 0, 100 }
 
-	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, startOf)
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, directionNewest, boundsOf)
 
 	if got, ok := cursor["52"]; !ok || got != 0 {
 		t.Fatalf("already-drained partition 52 must be carried forward at its start offset 0 (present=%v, "+
@@ -1132,9 +1134,10 @@ func TestBuildPaginationCursorOmitsEmptyAndDerivesHasOlderFalseWhenAllDrained(t 
 	scoped := []int32{0, 27, 52}
 	frontier := map[int32]int64{0: 0, 52: 0} // both drained to their start; 27 never had a window
 	beforeOffsets := map[int32]int64{0: 2, 52: 2}
-	startOf := func(int32) int64 { return 0 }
+	// Every partition here spans [0, 100): start 0, end 100.
+	boundsOf := func(int32) (int64, int64) { return 0, 100 }
 
-	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, startOf)
+	cursor, hasOlder := buildPaginationCursor(scoped, frontier, beforeOffsets, directionNewest, boundsOf)
 
 	if hasOlder {
 		t.Fatalf("has_older must be false once every scoped partition with data has drained to its start")
@@ -1172,7 +1175,7 @@ func TestSnapshotReadSkipsPartitionWhoseCursorIsAtStart(t *testing.T) {
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	res, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, beforeOffsets, 100)
+	res, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, directionNewest, nil, beforeOffsets, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1205,9 +1208,9 @@ func TestSnapshotReadSkipsPartitionWhoseCursorIsAtStart(t *testing.T) {
 // limit, sort newest-first, derive the cursor) so a test can assert the cursor a
 // real request would emit without a live broker or the metadata round-trips.
 func pageFrontier(consumed *consumeResult, frontierWindows map[int32]partitionWindow, limit int) ([]map[string]any, map[int32]int64) {
-	rows := selectNewestPrefixes(consumed.rows, limit)
-	sortRowsNewest(rows)
-	return rows, computeFrontier(frontierWindows, rows, false, consumed.completed, consumed.completedFrom, consumed.recordsRead)
+	rows := selectDirectionalPrefixes(consumed.rows, limit, directionNewest)
+	sortRowsDirectional(rows, directionNewest)
+	return rows, computeFrontier(frontierWindows, rows, false, directionNewest, consumed.completed, consumed.completedWindow, consumed.recordsRead)
 }
 
 // rowsContain reports whether the page holds a specific (partition, offset).
@@ -1225,7 +1228,7 @@ func rowsContain(rows []map[string]any, partition int32, offset int64) bool {
 // THE SILENT-SKIP REGRESSION. A partition can complete its window and yield
 // records that are then ALL trimmed out of the final page by selectNewestPrefixes
 // (its records are older than other partitions'). Before the fix, computeFrontier
-// saw no rows for it in the trimmed page and fell through to the completedFrom
+// saw no rows for it in the trimmed page and fell through to the completedWindow
 // advance, moving the cursor BELOW records that were read from the broker but
 // never returned — permanently unreachable data loss. Live evidence: the QA sweep
 // saw 749 of 785 seeded messages (3 partitions x 12 records skipped).
@@ -1264,15 +1267,15 @@ func TestSnapshotReadDoesNotAdvanceCursorPastRecordsWithheldFromPage(t *testing.
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1, 2}, starts, ends, nil, nil, limit)
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1, 2}, starts, ends, directionNewest, nil, nil, limit)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
 	if !consumed.completed[2] {
 		t.Fatalf("precondition: partition 2 must complete its window, got %#v", consumed.completed)
 	}
-	if from, ok := consumed.completedFrom[2]; !ok || from != 10 {
-		t.Fatalf("precondition: partition 2 must record completedFrom=10, got %v (present=%v)", from, ok)
+	if window, ok := consumed.completedWindow[2]; !ok || window.from != 10 {
+		t.Fatalf("precondition: partition 2 must record completedWindow.from=10, got %v (present=%v)", window, ok)
 	}
 	if len(consumed.rows) != 6 {
 		t.Fatalf("precondition: expected 6 candidates read across 3 partitions, got %d", len(consumed.rows))
@@ -1300,11 +1303,11 @@ func TestSnapshotReadDoesNotAdvanceCursorPastRecordsWithheldFromPage(t *testing.
 	}
 }
 
-// The adaptive-rounds aggregation caveat. completedFrom deepens with every
+// The adaptive-rounds aggregation caveat. completedWindow deepens with every
 // widening round, so a LATER round that reads a genuinely empty deeper window
 // must not let the cursor leapfrog past records an EARLIER round of the SAME
 // request read and withheld from the page. recordsRead is therefore sticky
-// (OR-ed across rounds), never overwritten the way completed/completedFrom are.
+// (OR-ed across rounds), never overwritten the way completed/completedWindow are.
 func TestSnapshotReadLaterEmptyRoundCannotLeapfrogEarlierWithheldRecords(t *testing.T) {
 	t.Parallel()
 
@@ -1328,7 +1331,7 @@ func TestSnapshotReadLaterEmptyRoundCannotLeapfrogEarlierWithheldRecords(t *test
 		),
 		// Round 2 widens to 4: partition 0 reads [94,98) and fills the page; partition
 		// 1's deeper window [14,18) is genuinely EMPTY (high watermark already past its
-		// upper bound), so it completes with zero records and records completedFrom=14.
+		// upper bound), so it completes with zero records and records completedWindow=14.
 		// Taken alone that is a legitimate advance — but partition 1's offset-19 record
 		// from round 1 sits ABOVE it and is about to be trimmed off the page.
 		fetchRound(topic,
@@ -1343,13 +1346,13 @@ func TestSnapshotReadLaterEmptyRoundCannotLeapfrogEarlierWithheldRecords(t *test
 	}}
 	conn := &KafkaConnector{consume: fake}
 
-	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, nil, nil, limit)
+	consumed, frontierWindows, err := conn.snapshotRead(context.Background(), topic, []int32{0, 1}, starts, ends, directionNewest, nil, nil, limit)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
-	// Precondition: the later empty round did deepen completedFrom for partition 1.
-	if from, ok := consumed.completedFrom[1]; !ok || from != 14 {
-		t.Fatalf("precondition: round 2 must deepen completedFrom[1] to 14, got %v (present=%v)", from, ok)
+	// Precondition: the later empty round did deepen completedWindow for partition 1.
+	if window, ok := consumed.completedWindow[1]; !ok || window.from != 14 {
+		t.Fatalf("precondition: round 2 must deepen completedWindow[1].from to 14, got %v (present=%v)", window, ok)
 	}
 	if !consumed.recordsRead[1] {
 		t.Fatalf("recordsRead must be sticky across rounds: round 1 read a record for partition 1")
@@ -1425,7 +1428,7 @@ func TestSnapshotReadPartialNeverReportsAllPartitionsCompleted(t *testing.T) {
 	defer cancel()
 
 	scoped := []int32{0, 1, 2}
-	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, nil, 100)
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, directionNewest, nil, nil, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead: %v", err)
 	}
@@ -1489,7 +1492,7 @@ func TestSnapshotReadPartialAfterErroredRoundExcludesAttemptedPartitions(t *test
 	defer cancel()
 
 	scoped := []int32{0, 1, 2}
-	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, nil, nil, 100)
+	res, _, err := conn.snapshotRead(ctx, topic, scoped, starts, ends, directionNewest, nil, nil, 100)
 	if err != nil {
 		t.Fatalf("snapshotRead must return the earlier round's work as a partial page, not an error: %v", err)
 	}
@@ -1613,11 +1616,11 @@ func TestConsumeWindowsHandlesOneSlowPartitionAmongManyWithinBudget(t *testing.T
 // candidate set built once outside the loop, so the only variable is when
 // deserialization happens:
 //
-//   - deferred: the shipped reader path, finalizeRows(selectNewestPrefixes(rows,
+//   - deferred: the shipped reader path, finalizeRows(selectDirectionalPrefixes(rows,
 //     page)). Only the ~page rows that survive selection are ever deserialized;
 //     allocation scales with messages_returned × payload.
 //   - eager_prerework: a faithful stand-in for the pre-rework reader, which
-//     deserialized EVERY candidate before the merge — selectNewestPrefixes(
+//     deserialized EVERY candidate before the merge — selectDirectionalPrefixes(
 //     finalizeRows(rows), page). Allocation scales with candidates_read × payload.
 //
 // consumeWindows (the raw-byte copy) is identical in both, so the bytes/op and
@@ -1668,7 +1671,7 @@ func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			res := read(b)
-			page := finalizeRows(selectNewestPrefixes(res.rows, pageSize))
+			page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest))
 			if len(page) != pageSize {
 				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 			}
@@ -1679,7 +1682,7 @@ func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			res := read(b)
-			page := selectNewestPrefixes(finalizeRows(res.rows), pageSize)
+			page := selectDirectionalPrefixes(finalizeRows(res.rows), pageSize, directionNewest)
 			if len(page) != pageSize {
 				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 			}
@@ -1875,5 +1878,319 @@ func TestConsumeWindowsStillFailsOnNonRetryableFetchError(t *testing.T) {
 	_, err := conn.consumeWindows(context.Background(), topic, map[int32]partitionWindow{0: {from: 0, upper: 10}}, 10, time.Second)
 	if !errors.Is(err, connector.ErrForbidden) {
 		t.Fatalf("error = %v, want connector.ErrForbidden", err)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Oldest-first direction.
+//
+// The cursor contract is the part worth guarding: paging towards newer records
+// mirrors every bound, and a mistake here reproduces the silent-skip bug the
+// newest-first path already carries scar tissue for. These cases are the mirror
+// images of the newest-first ones above.
+// ---------------------------------------------------------------------------
+
+// Paging towards newer records, an unproductive partition must fall back to the
+// window's LOWER bound (where this request started), and a partition that
+// returned rows must advance to one past its highest row — the cursor is an
+// inclusive lower bound, so the next page has to start after the last row shown
+// or that row appears twice.
+func TestComputeFrontierOldestAdvancesPastTheHighestReturnedRow(t *testing.T) {
+	t.Parallel()
+
+	frontierWindows := map[int32]partitionWindow{
+		0: {from: 10, upper: 100}, // returns rows
+		1: {from: 20, upper: 50},  // completed, held no record at all
+		2: {from: 30, upper: 60},  // never completed
+	}
+	rows := []map[string]any{
+		{"partition": int32(0), "offset": int64(12)},
+		{"partition": int32(0), "offset": int64(17)},
+	}
+	completed := map[int32]bool{0: true, 1: true}
+	completedWindow := map[int32]partitionWindow{
+		0: {from: 10, upper: 40},
+		1: {from: 20, upper: 50},
+	}
+	recordsRead := map[int32]bool{0: true}
+
+	frontier := computeFrontier(frontierWindows, rows, false, directionOldest, completed, completedWindow, recordsRead)
+
+	if frontier[0] != 18 {
+		t.Errorf("partition 0 must advance to one past its highest returned row (17+1), got %d", frontier[0])
+	}
+	if frontier[1] != 50 {
+		t.Errorf("partition 1 completed with no records — it must advance to its window's upper bound 50, got %d", frontier[1])
+	}
+	if frontier[2] != 30 {
+		t.Errorf("partition 2 never completed — it must stay at the lower bound it started from (30), got %d", frontier[2])
+	}
+}
+
+// The silent-skip guard, mirrored. A window that completed and DID hold records,
+// none of which survived the page trim, must not let the cursor jump past them:
+// paging newer, that would move the lower bound ABOVE records the caller never
+// saw, making them unreachable for good.
+func TestComputeFrontierOldestRefusesToSkipReadButUnreturnedRecords(t *testing.T) {
+	t.Parallel()
+
+	frontierWindows := map[int32]partitionWindow{0: {from: 10, upper: 100}}
+	completedWindow := map[int32]partitionWindow{0: {from: 10, upper: 40}}
+
+	frontier := computeFrontier(
+		frontierWindows,
+		nil, // nothing from this partition survived page selection
+		false,
+		directionOldest,
+		map[int32]bool{0: true},
+		completedWindow,
+		map[int32]bool{0: true}, // but records WERE read
+	)
+
+	if frontier[0] != 10 {
+		t.Fatalf("the cursor must stay at 10 so the next page re-reads the withheld records, got %d "+
+			"(advancing to 40 would skip every record in [10,40) the caller never saw)", frontier[0])
+	}
+}
+
+// has_newer is the mirror of has_older: a partition is exhausted when its
+// frontier reaches the partition END, and a partition drained in this direction
+// pins at the end rather than the start.
+func TestBuildPaginationCursorOldestDerivesHasNewerAndPinsAtEnd(t *testing.T) {
+	t.Parallel()
+
+	bounds := func(int32) (int64, int64) { return 0, 100 }
+
+	t.Run("more to read while a partition is below the end", func(t *testing.T) {
+		t.Parallel()
+		cursor, hasMore := buildPaginationCursor([]int32{0, 1}, map[int32]int64{0: 40, 1: 100}, nil, directionOldest, bounds)
+		if !hasMore {
+			t.Errorf("has_newer must be true while partition 0's frontier (40) is below the end (100)")
+		}
+		if cursor["1"] != 100 {
+			t.Errorf("a partition read up to the end must be retained at 100, got %d", cursor["1"])
+		}
+	})
+
+	t.Run("exhausted once every partition reaches the end", func(t *testing.T) {
+		t.Parallel()
+		_, hasMore := buildPaginationCursor([]int32{0, 1}, map[int32]int64{0: 100, 1: 100}, nil, directionOldest, bounds)
+		if hasMore {
+			t.Errorf("has_newer must be false once every partition has been read to its end offset")
+		}
+	})
+
+	t.Run("already drained partition is carried forward pinned at the end", func(t *testing.T) {
+		t.Parallel()
+		// Partition 1 drained on an earlier page: absent from frontier, present in
+		// the incoming cursor. Pinned at END here, the mirror of start.
+		cursor, _ := buildPaginationCursor(
+			[]int32{0, 1}, map[int32]int64{0: 40}, map[int32]int64{0: 30, 1: 100}, directionOldest, bounds,
+		)
+		if got, ok := cursor["1"]; !ok || got != 100 {
+			t.Fatalf("drained partition 1 must be carried forward pinned at the end offset 100, got %d (present=%v)", got, ok)
+		}
+	})
+}
+
+// The page must be taken from the OLDEST end, and each partition must still
+// contribute a contiguous prefix — that contiguity is what makes the extreme
+// selected offset a lossless cursor.
+func TestSelectDirectionalPrefixesOldestTakesTheOldestRows(t *testing.T) {
+	t.Parallel()
+
+	row := func(partition int32, offset int64, ts string) map[string]any {
+		return map[string]any{"partition": partition, "offset": offset, "timestamp": ts}
+	}
+	rows := []map[string]any{
+		row(0, 5, "2026-07-27T10:00:05Z"),
+		row(0, 6, "2026-07-27T10:00:06Z"),
+		row(1, 90, "2026-07-27T10:00:01Z"),
+		row(1, 91, "2026-07-27T10:00:02Z"),
+	}
+
+	selected := selectDirectionalPrefixes(rows, 2, directionOldest)
+
+	if len(selected) != 2 {
+		t.Fatalf("expected a 2-row page, got %d", len(selected))
+	}
+	// The two oldest by timestamp are partition 1's, and they must arrive in
+	// ascending order.
+	for i, want := range []int64{90, 91} {
+		if got := rowOffset(t, selected[i]); got != want {
+			t.Errorf("row %d: got offset %d, want %d (oldest first)", i, got, want)
+		}
+	}
+}
+
+// Each direction reads only its own cursor field. A client that switches
+// direction while still sending the other field must get a fresh read from the
+// new direction's end, never a window built from a bound that means the
+// opposite thing.
+func TestParseCursorOffsetsIsScopedToItsDirection(t *testing.T) {
+	t.Parallel()
+
+	before := connector.FilterExpr{Column: "before_offsets", Op: "eq", Value: `{"0":120}`}
+	after := connector.FilterExpr{Column: "after_offsets", Op: "eq", Value: `{"0":7}`}
+
+	tests := []struct {
+		name      string
+		filters   []connector.FilterExpr
+		direction readDirection
+		want      map[int32]int64
+	}{
+		{name: "newest reads before_offsets", filters: []connector.FilterExpr{before}, direction: directionNewest, want: map[int32]int64{0: 120}},
+		{name: "oldest reads after_offsets", filters: []connector.FilterExpr{after}, direction: directionOldest, want: map[int32]int64{0: 7}},
+		{name: "newest ignores an after cursor", filters: []connector.FilterExpr{after}, direction: directionNewest, want: nil},
+		{name: "oldest ignores a before cursor", filters: []connector.FilterExpr{before}, direction: directionOldest, want: nil},
+		{name: "both present, each takes its own", filters: []connector.FilterExpr{before, after}, direction: directionOldest, want: map[int32]int64{0: 7}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseCursorOffsets(tc.filters, tc.direction)
+			if err != nil {
+				t.Fatalf("parseCursorOffsets: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("got %v, want %v", got, tc.want)
+			}
+			for id, want := range tc.want {
+				if got[id] != want {
+					t.Errorf("partition %d: got %d, want %d", id, got[id], want)
+				}
+			}
+		})
+	}
+}
+
+// An offset seek names the first message to SHOW in both directions, but the
+// bound it becomes is opposite: an exclusive ceiling one past it when paging
+// older, the inclusive floor itself when paging newer.
+func TestResolveSeekBoundsOffsetIsInclusiveInBothDirections(t *testing.T) {
+	t.Parallel()
+
+	conn := &KafkaConnector{}
+	seek := seekRequest{offset: 500, hasOffset: true}
+
+	newest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionNewest, 3)
+	if err != nil {
+		t.Fatalf("newest: %v", err)
+	}
+	if newest[3] != 501 {
+		t.Errorf("paging older, the bound is an exclusive ceiling one past the seeked offset: got %d, want 501", newest[3])
+	}
+
+	oldest, err := conn.resolveSeekBounds(context.Background(), "orders", seek, directionOldest, 3)
+	if err != nil {
+		t.Fatalf("oldest: %v", err)
+	}
+	if oldest[3] != 500 {
+		t.Errorf("paging newer, the bound is the inclusive floor itself: got %d, want 500", oldest[3])
+	}
+}
+
+// snapshotRead must anchor at the partition START when paging towards newer
+// records, and its adaptive widening must grow upward.
+func TestSnapshotReadOldestAnchorsAtPartitionStart(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		fetchRound(topic, partitionFetch{partition: 0, highWatermark: 100, records: []*kgo.Record{
+			fetchRecord(topic, 0, 10, `{"n":10}`),
+			fetchRecord(topic, 0, 11, `{"n":11}`),
+		}}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	starts := kadm.ListedOffsets{topic: {0: {Topic: topic, Partition: 0, Offset: 10}}}
+	ends := kadm.ListedOffsets{topic: {0: {Topic: topic, Partition: 0, Offset: 100}}}
+
+	_, frontierWindows, err := conn.snapshotRead(
+		context.Background(), topic, []int32{0}, starts, ends, directionOldest, nil, nil, 2,
+	)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+
+	window, ok := frontierWindows[0]
+	if !ok {
+		t.Fatal("partition 0 must have a window")
+	}
+	if window.from != 10 {
+		t.Errorf("paging newer must anchor at the partition start 10, got %d", window.from)
+	}
+	if window.upper != 100 {
+		t.Errorf("the frontier window's ceiling is the partition end 100, got %d", window.upper)
+	}
+
+	// The first round must read UP from the start, not down from the end.
+	added := fake.added[0][topic]
+	if got := added[0].EpochOffset().Offset; got != 10 {
+		t.Errorf("the first round must consume from the start offset 10, got %d", got)
+	}
+}
+
+// Regression: paging towards newer records, each adaptive widening round must
+// TILE onto the range the previous round covered, not restart from the same
+// edge. Moving the wrong edge makes round 2 re-read round 1's range, and the
+// duplicated candidates survive into the page — a live 30-message topic returned
+// n = [1,1,2,2,3] instead of [1,2,3,4,5].
+//
+// Two scoped partitions keep the per-partition quota (3) below the page limit
+// (5), which is what forces a second widening round; with a single partition the
+// quota IS the page and one round always suffices.
+func TestSnapshotReadOldestWidensWithoutRereadingEarlierRounds(t *testing.T) {
+	t.Parallel()
+
+	const topic = "orders"
+	record := func(offset int64) *kgo.Record {
+		return fetchRecord(topic, 0, offset, `{"n":1}`)
+	}
+	fake := &fakeConsumer{rounds: []kgo.Fetches{
+		// Round 1 covers [0,3).
+		fetchRound(topic, partitionFetch{partition: 0, highWatermark: 30, records: []*kgo.Record{
+			record(0), record(1), record(2),
+		}}),
+		// Round 2 must continue at 3, never back at 0.
+		fetchRound(topic, partitionFetch{partition: 0, highWatermark: 30, records: []*kgo.Record{
+			record(3), record(4), record(5),
+		}}),
+	}}
+	conn := &KafkaConnector{consume: fake}
+
+	starts := kadm.ListedOffsets{topic: {
+		0: {Topic: topic, Partition: 0, Offset: 0},
+		1: {Topic: topic, Partition: 1, Offset: 0},
+	}}
+	ends := kadm.ListedOffsets{topic: {
+		0: {Topic: topic, Partition: 0, Offset: 30},
+		1: {Topic: topic, Partition: 1, Offset: 0}, // empty: never gets a window
+	}}
+
+	res, _, err := conn.snapshotRead(
+		context.Background(), topic, []int32{0, 1}, starts, ends, directionOldest, nil, nil, 5,
+	)
+	if err != nil {
+		t.Fatalf("snapshotRead: %v", err)
+	}
+
+	seen := make(map[int64]int, len(res.rows))
+	for _, row := range res.rows {
+		seen[rowOffset(t, row)]++
+	}
+	for offset, count := range seen {
+		if count > 1 {
+			t.Errorf("offset %d appears %d times — a widening round re-read an earlier round's range", offset, count)
+		}
+	}
+
+	if len(fake.added) < 2 {
+		t.Fatalf("expected two widening rounds, got %d", len(fake.added))
+	}
+	if got := fake.added[1][topic][0].EpochOffset().Offset; got != 3 {
+		t.Errorf("round 2 must resume at offset 3 (one past round 1's window), got %d", got)
 	}
 }
