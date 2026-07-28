@@ -14,7 +14,7 @@ Browse data, work with messages, and follow related records without switching to
 <p align="center">
   <picture>
     <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Jumping from a Kafka message to a Redis profile, then to filtered PostgreSQL orders">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Creating a link from a Kafka message, then following it into a Redis profile and PostgreSQL orders">
   </picture>
 </p>
 
@@ -116,11 +116,15 @@ The producer can send one message, a batch of comma-separated JSON objects in **
 
 ## Cross-source links
 
-Links are Kizuna's core idea. Describe once how a value from PostgreSQL, Redis, or Kafka points to another system, then open related data from its context menu.
+The same value lives in three places at once: `user_id` in a Kafka event, the `profile:1008` key in Redis, a column in `public.orders`. Normally that means copying it from window to window. Kizuna lets you describe the jump once.
 
-The chain at the top of this page goes: Kafka message `user_id` → Redis key `profile:1003` → `public.orders` rows in PostgreSQL filtered by that same `user_id`. The filter, breadcrumb, and reverse jumps are created automatically.
+**Setup takes half a minute.** Right-click a message → **Create link…** → point at the `user_id` field and say it addresses the `profile:*` key in Redis. Done.
 
-The links menu works both ways: an open record shows where you can go next and where you came from.
+**After that it just works.** Right-click any message in that topic and the menu already offers `Redis: profile:1008`. From there the same gesture opens `public.orders` filtered by that same `user_id`. Kizuna builds the filter, the breadcrumb, and the reverse jumps itself — nothing gets copied by hand.
+
+The clip at the top of this page shows exactly that: the menu is empty, then the jump appears in it.
+
+Links work both ways: an open record shows where to go next and where you came from.
 
 <p align="center">
   <img src=".github/assets/links-menu.png" width="960" alt="The links menu on a Redis key: a forward jump into PostgreSQL and reverse jumps back to Kafka and to the orders">
