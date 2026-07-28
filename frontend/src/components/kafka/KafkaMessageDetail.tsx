@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Copy, Maximize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
+import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { useToastStore } from '@/stores/toast'
 import type { KafkaMessageRow } from '@/stores/kafka'
 
@@ -29,11 +30,11 @@ export function KafkaMessageDetail({ message, onExpand, tall }: KafkaMessageDeta
   const pushToast = useToastStore((state) => state.push)
 
   const copyToClipboard = async (payload: string, what: string) => {
-    try {
-      await navigator.clipboard.writeText(payload)
+    const result = await writeClipboardText(payload)
+    if (result.ok) {
       pushToast({ tone: 'success', title: `${what} copied`, message: `${message.partition}:${message.offset}` })
-    } catch {
-      pushToast({ tone: 'error', title: 'Copy failed', message: 'Clipboard is unavailable.' })
+    } else {
+      pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
     }
   }
 
