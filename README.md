@@ -11,13 +11,6 @@
 
 Русский · [English](README.en.md)
 
-<p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Переход из Kafka-сообщения в Redis-профиль, затем в отфильтрованные заказы PostgreSQL">
-  </picture>
-</p>
-
 </div>
 
 ## Зачем Kizuna
@@ -116,11 +109,18 @@ go run ./cmd/kizuna
 
 ## Связи между источниками
 
-Связи — центральная идея Kizuna. Опишите один раз, как значение из PostgreSQL, Redis или Kafka указывает на другую систему, и дальше открывайте связанные данные из контекстного меню.
+Одно и то же значение живёт в трёх местах сразу: `user_id` в событии Kafka, ключ `profile:1008` в Redis, колонка в `public.orders`. Обычно это означает копирование значения из окна в окно. Kizuna позволяет описать переход один раз.
 
-Цепочка в начале страницы выглядит так: Kafka-сообщение `user_id` → Redis-ключ `profile:1003` → строки `public.orders` в PostgreSQL, отфильтрованные по этому же `user_id`. Фильтр, breadcrumb и обратные переходы формируются автоматически.
+**Настройка — полминуты.** Правый клик по сообщению → **Create link…** → указываете поле `user_id` и говорите, что оно адресует ключ `profile:*` в Redis. Всё.
 
-Меню связей работает в обе стороны: из открытой записи видно и куда перейти дальше, и откуда вы пришли.
+**Дальше это работает само.** Правый клик по любому сообщению этого топика — и в меню уже висит `Redis: profile:1008`. Оттуда тем же движением в `public.orders`, отфильтрованные по тому же `user_id`. Фильтр, breadcrumb и обратные переходы Kizuna строит сама — ни одного скопированного значения.
+
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Создание связи из Kafka-сообщения и переход по ней в Redis-профиль и заказы PostgreSQL">
+  </picture>
+</p>
 
 <p align="center">
   <img src=".github/assets/links-menu.png" width="960" alt="Меню связей у Redis-ключа: прямой переход в PostgreSQL и обратные переходы к Kafka и к заказам">
