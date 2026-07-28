@@ -44,6 +44,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   const runStatements = useSqlConsoleStore((state) => state.runStatements)
   const runExplain = useSqlConsoleStore((state) => state.runExplain)
   const runAnalyze = useSqlConsoleStore((state) => state.runAnalyze)
+  const cancelRun = useSqlConsoleStore((state) => state.cancelRun)
 
   const catalogTables = useMemo<SqlCatalogTable[]>(() => {
     const tables: SqlCatalogTable[] = []
@@ -197,6 +198,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         tabId={tabId}
         connectionLabel={connectionLabel}
         onRun={() => void handleRun()}
+        onCancel={() => cancelRun(tabId)}
         onExplain={() => void handleExplain()}
         onAnalyze={handleAnalyze}
         onFormat={() => editorRef.current?.formatDocument()}

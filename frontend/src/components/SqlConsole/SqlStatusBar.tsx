@@ -26,7 +26,9 @@ export function SqlStatusBar({ activeResult, totalResults }: SqlStatusBarProps) 
   }
 
   const { result } = activeResult
-  const left = result.error
+  const left = result.canceled
+    ? 'Canceled'
+    : result.error
     ? 'Execution failed'
     : result.truncated
       ? `Showing first ${result.applied_limit ?? result.rows_returned} rows`
