@@ -1,5 +1,24 @@
 const DEFAULT_TIMEOUT_MS = 8000
 
+// The backend requires this header on every write. It is not a secret and grants
+// nothing on its own: the point is that a page on another origin cannot set a
+// custom header without a preflight, and the API answers no preflight. So a site
+// the user did not open cannot post to their local Kizuna. Every API call must go
+// through `apiFetch` or `fetchWithTimeout` for that guarantee to hold.
+export const CLIENT_HEADER = 'X-Kizuna-Client'
+
+function withClientHeader(init?: RequestInit): RequestInit {
+  const headers = new Headers(init?.headers)
+  headers.set(CLIENT_HEADER, '1')
+  return { ...init, headers }
+}
+
+// Plain fetch for API calls that manage their own lifetime (long-running SQL,
+// requests already wrapped in their own abort handling).
+export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, withClientHeader(init))
+}
+
 // Raised when a request is aborted through the caller-supplied `signal` (e.g. a
 // user pressing "Cancel"), as opposed to the internal timeout firing. Callers
 // can check for it to treat a deliberate cancel as a non-error instead of
@@ -37,7 +56,7 @@ export async function fetchWithTimeout(
 
   try {
     return await fetch(input, {
-      ...init,
+      ...withClientHeader(init),
       signal: controller.signal,
     })
   } catch (error) {
