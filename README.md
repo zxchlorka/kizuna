@@ -11,13 +11,6 @@
 
 Русский · [English](README.en.md)
 
-<p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Создание связи из Kafka-сообщения и переход по ней в Redis-профиль и заказы PostgreSQL">
-  </picture>
-</p>
-
 </div>
 
 ## Зачем Kizuna
@@ -122,9 +115,16 @@ go run ./cmd/kizuna
 
 **Дальше это работает само.** Правый клик по любому сообщению этого топика — и в меню уже висит `Redis: profile:1008`. Оттуда тем же движением в `public.orders`, отфильтрованные по тому же `user_id`. Фильтр, breadcrumb и обратные переходы Kizuna строит сама — ни одного скопированного значения.
 
-Ролик в начале страницы показывает ровно это: сначала в меню пусто, потом там появляется переход.
+Ролик ниже показывает ровно это: сначала в меню пусто, потом там появляется переход.
 
 Связи работают в обе стороны: из открытой записи видно и куда идти дальше, и откуда вы пришли.
+
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Создание связи из Kafka-сообщения и переход по ней в Redis-профиль и заказы PostgreSQL">
+  </picture>
+</p>
 
 <p align="center">
   <img src=".github/assets/links-menu.png" width="960" alt="Меню связей у Redis-ключа: прямой переход в PostgreSQL и обратные переходы к Kafka и к заказам">

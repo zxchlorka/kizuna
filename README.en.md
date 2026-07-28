@@ -11,13 +11,6 @@ Browse data, work with messages, and follow related records without switching to
 
 [Русский](README.md) · English
 
-<p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
-    <img src=".github/assets/cross-source-links.png" width="960" alt="Creating a link from a Kafka message, then following it into a Redis profile and PostgreSQL orders">
-  </picture>
-</p>
-
 </div>
 
 ## Why Kizuna
@@ -122,9 +115,16 @@ The same value lives in three places at once: `user_id` in a Kafka event, the `p
 
 **After that it just works.** Right-click any message in that topic and the menu already offers `Redis: profile:1008`. From there the same gesture opens `public.orders` filtered by that same `user_id`. Kizuna builds the filter, the breadcrumb, and the reverse jumps itself — nothing gets copied by hand.
 
-The clip at the top of this page shows exactly that: the menu is empty, then the jump appears in it.
+The clip below shows exactly that: the menu is empty, then the jump appears in it.
 
 Links work both ways: an open record shows where to go next and where you came from.
+
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
+    <img src=".github/assets/cross-source-links.png" width="960" alt="Creating a link from a Kafka message, then following it into a Redis profile and PostgreSQL orders">
+  </picture>
+</p>
 
 <p align="center">
   <img src=".github/assets/links-menu.png" width="960" alt="The links menu on a Redis key: a forward jump into PostgreSQL and reverse jumps back to Kafka and to the orders">
