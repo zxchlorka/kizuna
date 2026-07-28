@@ -53,14 +53,24 @@ export default function ConnectionListPage() {
     void fetchConnections()
   }, [connections.length, error, fetchConnections, loadedOnce, loading])
 
+  // Pruning is gated on the fetch having actually succeeded, not merely having
+  // finished: the store sets loadedOnce on its error path too (see
+  // stores/connections.ts), leaving connections at []. Without this, one
+  // unreachable backend would drop the whole health cache — and since prune
+  // persists, drop it from localStorage as well. The store refuses an empty list
+  // on its own, so this is the second half of the same guard, placed here
+  // because only the caller knows whether the list is trustworthy.
   useEffect(() => {
+    if (!loadedOnce || error) {
+      return
+    }
     const connectionIds = connections.map((connection) => connection.id)
-    pruneHealth(connectionIds)
     if (connectionIds.length === 0) {
       return
     }
+    pruneHealth(connectionIds)
     void refreshStaleHealth(connectionIds)
-  }, [connections, pruneHealth, refreshStaleHealth])
+  }, [connections, error, loadedOnce, pruneHealth, refreshStaleHealth])
 
   const openCreate = () => {
     setEditingConnection(undefined)

@@ -112,6 +112,18 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
   },
 
   prune: (ids: string[]) => {
+    // An empty list is refused, never obeyed. `prune` deletes and immediately
+    // persists, so a wrong call is not a glitch that the next render repairs --
+    // it destroys the cache on disk. And the list is empty far more often
+    // because the caller does not have it yet (first render, a failed fetch)
+    // than because every connection was genuinely deleted. That real case is
+    // already handled: deleting the last connection prunes the ids that remain,
+    // and a stale entry for a connection that no longer exists costs nothing but
+    // a few bytes until the next non-empty prune sweeps it.
+    if (ids.length === 0) {
+      return
+    }
+
     const allowed = new Set(ids)
     set((state) => {
       const nextEntries: Record<string, ConnectionHealthEntry> = {}
