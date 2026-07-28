@@ -140,6 +140,10 @@ Links work both ways: an open record shows where to go next and where you came f
 - One Go binary with the embedded React frontend: one container, one port.
 - Lazy source connections and encrypted passwords in local configuration.
 
+## Changelog
+
+Release history lives in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [Apache 2.0](LICENSE)
