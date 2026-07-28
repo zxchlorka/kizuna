@@ -23,6 +23,16 @@ import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
 import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
 import { canReverse, extractPgColumn, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
+import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
+import {
+  buildCSV,
+  buildJSON,
+  buildTSV,
+  copySingleCellText,
+  downloadTextFile,
+  timestampForFilename,
+  type ExportColumn,
+} from '@/lib/tableExport'
 import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
   buildRowIdentity,
@@ -105,7 +115,9 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const openLinkTarget = useOpenLinkTarget()
 
   const [sorting, setSorting] = useState<SortingState>([])
-  const [linkMenu, setLinkMenu] = useState<{ x: number; y: number; row: TableRow } | null>(null)
+  const [linkMenu, setLinkMenu] = useState<
+    { x: number; y: number; row: TableRow; column?: string; value?: unknown } | null
+  >(null)
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
   const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
   const [editMode, setEditMode] = useState(false)
@@ -671,6 +683,72 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     [connId, ddl, handleDDLSuccess, pushToast, schemaName, tableName]
   )
 
+  const exportColumns = useMemo<ExportColumn[]>(
+    () => columns.map((column) => ({ name: column.name, type: column.data_type })),
+    [columns]
+  )
+  const toExportRow = useCallback((row: TableRow) => columns.map((column) => row[column.name]), [columns])
+  const selectedRowObjects = useMemo(
+    () => rowIdentityEntries.filter((entry) => selectedRows.has(entry.rowKey)).map((entry) => entry.row),
+    [rowIdentityEntries, selectedRows]
+  )
+
+  const copyText = useCallback(
+    async (text: string, successMessage: string) => {
+      const result = await writeClipboardText(text)
+      if (result.ok) {
+        pushToast({ tone: 'success', title: 'Copied', message: successMessage })
+      } else {
+        pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
+      }
+    },
+    [pushToast]
+  )
+
+  const handleCopyCell = useCallback(
+    (value: unknown) => {
+      void copyText(copySingleCellText(value), 'Cell copied to clipboard.')
+    },
+    [copyText]
+  )
+
+  const handleCopyRow = useCallback(
+    (row: TableRow, format: 'tsv' | 'json') => {
+      const exportRows = [toExportRow(row)]
+      void copyText(
+        format === 'tsv' ? buildTSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows),
+        'Row copied to clipboard.'
+      )
+    },
+    [copyText, exportColumns, toExportRow]
+  )
+
+  const handleCopy = useCallback(
+    (format: 'tsv' | 'json', scope: 'all' | 'selected') => {
+      const sourceRows = scope === 'all' ? rows : selectedRowObjects
+      const exportRows = sourceRows.map(toExportRow)
+      const text = format === 'tsv' ? buildTSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
+      void copyText(text, `${exportRows.length} row${exportRows.length === 1 ? '' : 's'} copied to clipboard.`)
+    },
+    [copyText, exportColumns, rows, selectedRowObjects, toExportRow]
+  )
+
+  const handleExport = useCallback(
+    (format: 'csv' | 'json') => {
+      const exportRows = rows.map(toExportRow)
+      const stamp = timestampForFilename()
+      const content = format === 'csv' ? buildCSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
+      const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'
+      downloadTextFile(`${tableName}-${stamp}.${format}`, mime, content)
+      pushToast({
+        tone: 'success',
+        title: 'Exported',
+        message: `${exportRows.length} row${exportRows.length === 1 ? '' : 's'} exported as ${format.toUpperCase()}.`,
+      })
+    },
+    [exportColumns, pushToast, rows, tableName, toExportRow]
+  )
+
   const isInitialLoad = isLoading && rows.length === 0 && !error
   const classifiedLoadError = error ? classifyDataLoadError(error) : null
 
@@ -716,6 +794,9 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onDDLAction={handleDDLAction}
         canOpenReferencedBy={canOpenReferencedBy}
         onOpenReferencedBy={() => setShowReferencedByDialog(true)}
+        loadedRowCount={rows.length}
+        onCopy={handleCopy}
+        onExport={handleExport}
       />
 
       {localError && <div className="mx-2 mt-2"><ErrorBanner message={localError} onDismiss={() => setLocalError(null)} /></div>}
@@ -781,9 +862,9 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             getDraftValue={getDraftValue}
             isDirtyCell={isDirtyCell}
             onNavigateToFk={handleNavigateToFk}
-            onRowContextMenu={(row, event) => {
+            onCellContextMenu={(row, columnName, value, event) => {
               event.preventDefault()
-              setLinkMenu({ x: event.clientX, y: event.clientY, row })
+              setLinkMenu({ x: event.clientX, y: event.clientY, row, column: columnName, value })
             }}
           />
         )}
@@ -900,6 +981,34 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
       {linkMenu && (
         <FloatingMenu x={linkMenu.x} y={linkMenu.y} onClose={() => setLinkMenu(null)}>
+          <FloatingMenuLabel>Copy</FloatingMenuLabel>
+          {linkMenu.column && (
+            <FloatingMenuItem
+              onClick={() => {
+                handleCopyCell(linkMenu.value)
+                setLinkMenu(null)
+              }}
+            >
+              Copy cell
+            </FloatingMenuItem>
+          )}
+          <FloatingMenuItem
+            onClick={() => {
+              handleCopyRow(linkMenu.row, 'tsv')
+              setLinkMenu(null)
+            }}
+          >
+            Copy row (TSV)
+          </FloatingMenuItem>
+          <FloatingMenuItem
+            onClick={() => {
+              handleCopyRow(linkMenu.row, 'json')
+              setLinkMenu(null)
+            }}
+          >
+            Copy row (JSON)
+          </FloatingMenuItem>
+          <FloatingMenuSeparator />
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
           {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
           {tableLinks.map((link: LinkRecord) => {

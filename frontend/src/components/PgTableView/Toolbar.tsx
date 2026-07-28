@@ -1,5 +1,6 @@
 import { Check, Link2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { DDLDropdown, type TableDDLAction } from '@/components/DDL/DDLDropdown'
+import { TableExportMenu } from '@/components/TableExportMenu'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
@@ -21,6 +22,9 @@ interface ToolbarProps {
   onDDLAction: (action: TableDDLAction) => void
   canOpenReferencedBy: boolean
   onOpenReferencedBy: () => void
+  loadedRowCount: number
+  onCopy: (format: 'tsv' | 'json', scope: 'all' | 'selected') => void
+  onExport: (format: 'csv' | 'json') => void
 }
 
 export function Toolbar({
@@ -40,6 +44,9 @@ export function Toolbar({
   onDDLAction,
   canOpenReferencedBy,
   onOpenReferencedBy,
+  loadedRowCount,
+  onCopy,
+  onExport,
 }: ToolbarProps) {
   return (
     <div className="flex items-center justify-between gap-3 border-b border-border bg-background px-3 py-2">
@@ -122,6 +129,13 @@ export function Toolbar({
             Pending changes: {pendingCount}
           </span>
         )}
+
+        <TableExportMenu
+          totalRowCount={loadedRowCount}
+          selectedRowCount={selectedCount}
+          onCopy={onCopy}
+          onExport={onExport}
+        />
 
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">Rows per page:</span>
