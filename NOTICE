@@ -2,3 +2,14 @@ Kizuna
 Copyright 2026 zxchlorka
 
 Licensed under the Apache License, Version 2.0.
+
+--------------------------------------------------------------------------------
+
+This product bundles the following fonts in frontend/public/fonts/, each licensed
+under the SIL Open Font License, Version 1.1 (https://openfontlicense.org):
+
+  IBM Plex Sans — Copyright 2017 IBM Corp.
+  https://github.com/IBM/plex
+
+  JetBrains Mono — Copyright 2020 The JetBrains Mono Project Authors
+  https://github.com/JetBrains/JetBrainsMono

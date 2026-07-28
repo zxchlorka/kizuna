@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { SqlCatalog } from '@/types/api'
+import { apiFetch } from '@/lib/http'
 
 interface SqlCatalogStore {
   catalogs: Record<string, SqlCatalog>
@@ -22,7 +23,7 @@ export const useSqlCatalogStore = create<SqlCatalogStore>((set, get) => ({
 
     const request = (async () => {
       try {
-        const res = await fetch(`/api/connections/${connId}/sql-catalog`)
+        const res = await apiFetch(`/api/connections/${connId}/sql-catalog`)
         if (!res.ok) {
           return
         }

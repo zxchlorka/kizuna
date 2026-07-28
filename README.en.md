@@ -138,7 +138,23 @@ Links work both ways: an open record shows where to go next and where you came f
 
 - Dark, light, and system themes.
 - One Go binary with the embedded React frontend: one container, one port.
+- Works with no internet: the frontend and its fonts ship inside the binary, and the app makes no outbound requests of its own.
 - Lazy source connections and encrypted passwords in local configuration.
+
+## Access and security
+
+Kizuna is built for one user on one machine. It has no authentication — closed defaults stand in for it:
+
+- The port listens on `127.0.0.1` only, both in Docker and when run from source. Otherwise anyone on a shared network (cafe, coworking space, office) would see your connections and run queries: the API decrypts stored passwords itself.
+- Writes through the API require an `X-Kizuna-Client` header, which blocks requests another site makes from your browser. Your own scripts need to send it themselves.
+
+If you do need network access, open the port deliberately and only behind an authenticating proxy:
+
+```bash
+KIZUNA_BIND=0.0.0.0 docker compose up -d   # publish beyond loopback
+KIZUNA_LISTEN=0.0.0.0:9090 go run ./cmd/kizuna   # same, running from source
+KIZUNA_ALLOWED_HOSTS=kizuna.internal       # if the proxy has its own hostname
+```
 
 ## Changelog
 
