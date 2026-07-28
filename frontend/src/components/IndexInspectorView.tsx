@@ -5,6 +5,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
+import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
@@ -57,15 +58,15 @@ export function IndexInspectorView({ connId, object, tabId }: IndexInspectorView
 
   const handleCopyDefinition = async () => {
     if (!info?.definition) return
-    try {
-      await navigator.clipboard.writeText(info.definition)
+    const result = await writeClipboardText(info.definition)
+    if (result.ok) {
       pushToast({
         tone: 'success',
         title: 'Definition copied',
         message: `${formatObjectLabel(object)} SQL definition copied to clipboard.`,
       })
-    } catch (copyError) {
-      setLocalError((copyError as Error).message)
+    } else {
+      setLocalError(clipboardFailureMessage())
     }
   }
 
