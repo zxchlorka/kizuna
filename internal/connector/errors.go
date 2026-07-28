@@ -25,3 +25,10 @@ var ErrUnavailable = errors.New("unavailable")
 
 // ErrRelationNotFound is returned when a requested relation or index does not exist.
 var ErrRelationNotFound = errors.New("relation not found")
+
+// ErrCanceled is returned when a request is stopped by an explicit cancel (the
+// SQL console's Cancel/Stop action aborting the HTTP request, or an operator
+// canceling the backend query directly) rather than by a server-side error or
+// timeout. Kizuna never sets a query/statement timeout by design, so this is
+// always a deliberate cancellation, never a deadline.
+var ErrCanceled = errors.New("canceled")

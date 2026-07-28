@@ -13,6 +13,14 @@ import (
 	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
+// statusClientClosedRequest mirrors nginx's non-standard 499 "Client Closed
+// Request": the client (SQL console Cancel/Stop) aborted the request, so this
+// is neither a server error nor a real timeout. In practice the browser's
+// fetch is already aborted by the time this would be written, so no client
+// ever reads it -- it exists for callers that inspect the response directly
+// (tests, logs) so a cancel doesn't get misread as a 500 or a 408.
+const statusClientClosedRequest = 499
+
 func writeJSON(w http.ResponseWriter, code int, data any) {
 	// Marshal up front so an encoding failure surfaces as a 500 instead of a
 	// silent empty 200 (headers already flushed).
@@ -53,6 +61,8 @@ func mapConnectorError(err error) (int, string) {
 		return http.StatusNotFound, err.Error()
 	case errors.Is(err, connector.ErrConflict):
 		return http.StatusConflict, err.Error()
+	case errors.Is(err, connector.ErrCanceled), errors.Is(err, context.Canceled):
+		return statusClientClosedRequest, err.Error()
 	case errors.Is(err, connector.ErrTimeout), errors.Is(err, context.DeadlineExceeded):
 		return http.StatusRequestTimeout, err.Error()
 	case errors.Is(err, connector.ErrUnavailable):
@@ -69,7 +79,12 @@ func mapConnectorError(err error) (int, string) {
 		case "42P01", "42704":
 			return http.StatusNotFound, pgErr.Message
 		case "57014":
-			return http.StatusRequestTimeout, pgErr.Message
+			// Same split as normalizePostgresError: a server-side statement_timeout
+			// raises query_canceled too, and it is a timeout, not a cancel.
+			if strings.Contains(strings.ToLower(pgErr.Message), "statement timeout") {
+				return http.StatusRequestTimeout, pgErr.Message
+			}
+			return statusClientClosedRequest, pgErr.Message
 		}
 	}
 

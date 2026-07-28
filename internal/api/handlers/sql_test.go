@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -205,6 +206,96 @@ func TestSQLHandlerExecuteMultiStopsAfterFailure(t *testing.T) {
 	}
 	if conn.executeCalls != 0 {
 		t.Fatalf("expected Execute to not be used, got %d calls", conn.executeCalls)
+	}
+}
+
+// A canceled Execute must not be reported as a 500/generic failure, and the
+// history entry it leaves behind must be flagged Canceled so the SQL console
+// history panel doesn't render it as a red "failed" run.
+func TestSQLHandlerExecuteCanceledMapsStatusAndHistory(t *testing.T) {
+	t.Parallel()
+
+	conn := &testSQLConnector{
+		executeErrors: []error{fmt.Errorf("%w: canceling statement due to user request", connector.ErrCanceled)},
+	}
+	handler := newTestSQLHandler(t, conn)
+
+	req := withSQLRouteParams(httptest.NewRequest(http.MethodPost, "/api/connections/conn-1/execute", strings.NewReader(`{"statement":"select pg_sleep(30)"}`)), map[string]string{"id": "conn-1"})
+	rec := httptest.NewRecorder()
+
+	handler.Execute(rec, req)
+
+	if rec.Code != statusClientClosedRequest {
+		t.Fatalf("unexpected status: got %d want %d", rec.Code, statusClientClosedRequest)
+	}
+
+	histReq := withSQLRouteParams(httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/history", nil), map[string]string{"id": "conn-1"})
+	histRec := httptest.NewRecorder()
+	handler.History(histRec, histReq)
+
+	var entries []connector.HistoryEntry
+	if err := json.NewDecoder(histRec.Body).Decode(&entries); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected one history entry, got %d", len(entries))
+	}
+	if !entries[0].Canceled {
+		t.Fatalf("expected history entry to be flagged Canceled, got %+v", entries[0])
+	}
+}
+
+// A batch canceled mid-flight must flag the in-flight statement Canceled in
+// its history entry (not a generic error), matching what ExecuteBatch reports
+// via ExecResult.Canceled for the statement that was actually running.
+func TestSQLHandlerExecuteMultiCanceledStatementFlagsHistory(t *testing.T) {
+	t.Parallel()
+
+	conn := &testSQLConnector{
+		batchResults: []connector.ExecResult{
+			{Statement: "SELECT 1", DurationMs: 1, RowsReturned: 1},
+			{Statement: "SELECT pg_sleep(30)", Error: "canceled: canceling statement due to user request", Canceled: true, DurationMs: 2},
+			{Statement: "SELECT 3", Skipped: true},
+		},
+	}
+	handler := newTestSQLHandler(t, conn)
+
+	req := withSQLRouteParams(
+		httptest.NewRequest(http.MethodPost, "/api/connections/conn-1/execute-multi", strings.NewReader(`{"statements":["SELECT 1","SELECT pg_sleep(30)","SELECT 3"]}`)),
+		map[string]string{"id": "conn-1"},
+	)
+	rec := httptest.NewRecorder()
+
+	handler.ExecuteMulti(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("unexpected status: got %d", rec.Code)
+	}
+
+	histReq := withSQLRouteParams(httptest.NewRequest(http.MethodGet, "/api/connections/conn-1/history", nil), map[string]string{"id": "conn-1"})
+	histRec := httptest.NewRecorder()
+	handler.History(histRec, histReq)
+
+	var entries []connector.HistoryEntry
+	if err := json.NewDecoder(histRec.Body).Decode(&entries); err != nil {
+		t.Fatalf("decode history: %v", err)
+	}
+	// The third statement was Skipped (never ran) so it never reaches history;
+	// only the completed first statement and the canceled second one do.
+	if len(entries) != 2 {
+		t.Fatalf("expected two history entries, got %d: %+v", len(entries), entries)
+	}
+	var canceledCount int
+	for _, entry := range entries {
+		if entry.Canceled {
+			canceledCount++
+			if entry.Command != "SELECT pg_sleep(30)" {
+				t.Fatalf("unexpected canceled command: %q", entry.Command)
+			}
+		}
+	}
+	if canceledCount != 1 {
+		t.Fatalf("expected exactly one canceled history entry, got %d", canceledCount)
 	}
 }
 

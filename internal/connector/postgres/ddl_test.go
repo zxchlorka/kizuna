@@ -1,7 +1,9 @@
 package postgres
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 
@@ -88,6 +90,27 @@ func TestNormalizePostgresError(t *testing.T) {
 			name: "connection refused -> unavailable",
 			err:  &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("connection refused")},
 			want: connector.ErrUnavailable,
+		},
+		{
+			name: "context canceled -> canceled",
+			err:  fmt.Errorf("query: %w", context.Canceled),
+			want: connector.ErrCanceled,
+		},
+		{
+			// query_canceled from an explicit CancelRequest: the console's Stop
+			// button, or an operator's pg_cancel_backend.
+			name: "pg query_canceled -> canceled, not timeout",
+			err:  &pgconn.PgError{Code: "57014", Message: "canceling statement due to user request"},
+			want: connector.ErrCanceled,
+		},
+		{
+			// Same PG code, opposite meaning: the server carries its own
+			// statement_timeout (postgresql.conf or ALTER ROLE/DATABASE), common on
+			// production clusters. Calling this "canceled" would send the user
+			// hunting for a cancel nobody made.
+			name: "pg statement_timeout -> timeout, not canceled",
+			err:  &pgconn.PgError{Code: "57014", Message: "canceling statement due to statement timeout"},
+			want: connector.ErrTimeout,
 		},
 	}
 
