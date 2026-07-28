@@ -16,6 +16,14 @@ func normalizePostgresError(err error) error {
 		return nil
 	}
 
+	// A canceled context is checked before DeadlineExceeded/pattern-matching: pgx
+	// surfaces a client-initiated cancel (SQL console Cancel/Stop, via ctx) as
+	// either a bare context.Canceled or a wrapped one, depending on whether the
+	// local ctx check or the query's own failure wins the race.
+	if errors.Is(err, context.Canceled) {
+		return fmt.Errorf("%w: %s", connector.ErrCanceled, err.Error())
+	}
+
 	if errors.Is(err, context.DeadlineExceeded) {
 		return fmt.Errorf("%w: %s", connector.ErrTimeout, err.Error())
 	}
@@ -32,7 +40,17 @@ func normalizePostgresError(err error) error {
 		case "42P01", "42703", "42704":
 			return fmt.Errorf("%w: %s", connector.ErrRelationNotFound, pgErr.Message)
 		case "57014":
-			return fmt.Errorf("%w: %s", connector.ErrTimeout, pgErr.Message)
+			// query_canceled covers both an explicit CancelRequest and a
+			// server-side statement_timeout. Kizuna never sets statement_timeout
+			// itself, but the server can carry one from postgresql.conf or from
+			// `ALTER ROLE/DATABASE ... SET statement_timeout`, which is common on
+			// production clusters — and telling a user their query was "canceled"
+			// when the server killed it sends them looking for a cancel they
+			// never made. The message is the only thing that separates the two.
+			if strings.Contains(strings.ToLower(pgErr.Message), "statement timeout") {
+				return fmt.Errorf("%w: %s", connector.ErrTimeout, pgErr.Message)
+			}
+			return fmt.Errorf("%w: %s", connector.ErrCanceled, pgErr.Message)
 		}
 	}
 

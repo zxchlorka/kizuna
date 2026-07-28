@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -63,10 +64,17 @@ func (p *PostgresConnector) ExecuteBatch(ctx context.Context, commands []string)
 		startedAt := time.Now()
 		result, execErr := p.executeWithExecutor(ctx, session, command)
 		if execErr != nil {
+			// ExecuteBatch runs each statement autocommitted on one session (no
+			// BEGIN/COMMIT wraps the batch), so a cancel mid-batch does not roll
+			// back statements that already committed before it -- only the
+			// in-flight one is stopped, and the rest never run. Flag it distinctly
+			// from a genuine failure so callers (SQL console history) don't read
+			// a deliberate Cancel as an error.
 			results = append(results, connector.ExecResult{
 				Statement:  command,
 				Error:      execErr.Error(),
 				DurationMs: time.Since(startedAt).Milliseconds(),
+				Canceled:   errors.Is(execErr, connector.ErrCanceled),
 			})
 			for _, skipped := range commands[idx+1:] {
 				results = append(results, connector.ExecResult{Statement: skipped, Skipped: true})

@@ -207,6 +207,7 @@ type ExecResult struct {
 	AppliedLimit  int             `json:"applied_limit,omitempty"`
 	ColumnSources []*ColumnSource `json:"column_sources,omitempty"` // aligned to Columns; nil for expressions
 	Skipped       bool            `json:"skipped,omitempty"`
+	Canceled      bool            `json:"canceled,omitempty"` // stopped by an explicit Cancel, not a failure
 }
 
 type MutateResult struct {
@@ -272,4 +273,5 @@ type HistoryEntry struct {
 	RowsAffected int64  `json:"rows_affected"`
 	Error        string `json:"error,omitempty"`
 	ExecutedAt   string `json:"executed_at"`
+	Canceled     bool   `json:"canceled,omitempty"` // stopped by an explicit Cancel, not a failure
 }

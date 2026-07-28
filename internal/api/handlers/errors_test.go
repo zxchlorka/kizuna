@@ -21,6 +21,7 @@ func TestMapConnectorErrorStatuses(t *testing.T) {
 		{name: "read only", err: connector.ErrReadOnly, status: http.StatusForbidden},
 		{name: "relation not found", err: connector.ErrRelationNotFound, status: http.StatusNotFound},
 		{name: "conflict", err: connector.ErrConflict, status: http.StatusConflict},
+		{name: "canceled", err: connector.ErrCanceled, status: statusClientClosedRequest},
 		{name: "timeout", err: connector.ErrTimeout, status: http.StatusRequestTimeout},
 		{name: "unavailable", err: connector.ErrUnavailable, status: http.StatusServiceUnavailable},
 		{name: "plain not found", err: errors.New("connection not found"), status: http.StatusNotFound},
