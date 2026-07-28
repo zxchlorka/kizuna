@@ -5,6 +5,7 @@ import type {
   ExplainResult,
   HistoryEntry,
 } from '@/types/api'
+import { apiFetch } from '@/lib/http'
 
 export interface SqlExecutionResult {
   id: string
@@ -298,7 +299,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
     }
 
     try {
-      const res = await fetch(`/api/connections/${connId}/history?${params.toString()}`)
+      const res = await apiFetch(`/api/connections/${connId}/history?${params.toString()}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(body.error || res.statusText)
@@ -337,7 +338,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
   },
 
   clearHistory: async (connId, tabId) => {
-    const res = await fetch(`/api/connections/${connId}/history`, { method: 'DELETE' })
+    const res = await apiFetch(`/api/connections/${connId}/history`, { method: 'DELETE' })
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       throw new Error(body.error || res.statusText)
@@ -388,7 +389,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           ? JSON.stringify({ statement: trimmedStatements[0] })
           : JSON.stringify({ statements: trimmedStatements })
 
-      const res = await fetch(`/api/connections/${connId}/${endpoint}`, {
+      const res = await apiFetch(`/api/connections/${connId}/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -493,7 +494,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
     })
 
     try {
-      const res = await fetch(`/api/connections/${connId}/explain`, {
+      const res = await apiFetch(`/api/connections/${connId}/explain`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: trimmed }),
@@ -588,7 +589,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
     })
 
     try {
-      const res = await fetch(`/api/connections/${connId}/analyze`, {
+      const res = await apiFetch(`/api/connections/${connId}/analyze`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ query: trimmed }),

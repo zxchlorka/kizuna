@@ -1,8 +1,13 @@
 services:
   kizuna:
     build: .
+    # Kizuna decrypts stored database passwords itself, so anyone who reaches the
+    # port owns every saved connection. Bind to loopback: on a shared network
+    # (cafe, coworking, office Wi-Fi) a published port is reachable by everyone.
+    # Set KIZUNA_BIND=0.0.0.0 only if you deliberately want network access and
+    # have put an authenticating proxy in front.
     ports:
-      - "9090:9090"
+      - "${KIZUNA_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - kizuna-data:/data
     environment:
@@ -14,9 +19,11 @@ services:
       target: debug
     profiles:
       - debug
+    # 2345 is a headless Delve with no authentication — whoever connects can read
+    # process memory and run arbitrary code. Never publish it beyond loopback.
     ports:
-      - "9091:9090"
-      - "2345:2345"
+      - "127.0.0.1:9091:9090"
+      - "127.0.0.1:2345:2345"
     volumes:
       - kizuna-data:/data
     environment:

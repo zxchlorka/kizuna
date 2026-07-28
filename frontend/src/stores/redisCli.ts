@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import type { ExecResult, ExecuteMultiResponse, HistoryEntry } from '@/types/api'
+import { apiFetch } from '@/lib/http'
 
 export interface RedisCliEntry {
   id: string
@@ -149,7 +150,7 @@ export const useRedisCliStore = create<RedisCliStore>((set, get) => ({
   },
 
   fetchHistory: async (connId, tabId) => {
-    const res = await fetch(`/api/connections/${connId}/history?limit=50`)
+    const res = await apiFetch(`/api/connections/${connId}/history?limit=50`)
     if (!res.ok) {
       const body = await res.json().catch(() => ({ error: res.statusText }))
       throw new Error(body.error || res.statusText)
@@ -262,7 +263,7 @@ export const useRedisCliStore = create<RedisCliStore>((set, get) => ({
         ? JSON.stringify({ statements })
         : JSON.stringify({ statement: statements[0] })
 
-      const res = await fetch(`/api/connections/${connId}/${endpoint}`, {
+      const res = await apiFetch(`/api/connections/${connId}/${endpoint}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,

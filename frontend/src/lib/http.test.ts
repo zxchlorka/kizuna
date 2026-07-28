@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { fetchWithTimeout, RequestAbortedError } from '@/lib/http'
+import { apiFetch, CLIENT_HEADER, fetchWithTimeout, RequestAbortedError } from '@/lib/http'
 
 // fetchWithTimeout references window.setTimeout/clearTimeout; the test runs in
 // the default node environment, so point `window` at globalThis (which provides
@@ -72,5 +72,39 @@ describe('fetchWithTimeout abort composition', () => {
     const [, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
     expect(init.method).toBe('POST')
     expect(init.signal).toBeInstanceOf(AbortSignal)
+  })
+})
+
+// The backend rejects writes that arrive without this header, and that rejection
+// is the whole cross-site defence. If either helper stops sending it, every write
+// in the app fails — so assert it here rather than discovering it in the browser.
+describe('client header', () => {
+  it('is attached by fetchWithTimeout', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok'))) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchMock)
+    await fetchWithTimeout('/api/x', { method: 'POST' }, 10_000)
+    const [, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(new Headers(init.headers).get(CLIENT_HEADER)).toBe('1')
+  })
+
+  it('is attached by apiFetch', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok'))) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchMock)
+    await apiFetch('/api/x', { method: 'DELETE' })
+    const [, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    expect(new Headers(init.headers).get(CLIENT_HEADER)).toBe('1')
+  })
+
+  it('preserves headers the caller already set', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(new Response('ok'))) as unknown as typeof fetch
+    vi.stubGlobal('fetch', fetchMock)
+    await apiFetch('/api/x', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    })
+    const [, init] = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0]
+    const headers = new Headers(init.headers)
+    expect(headers.get('Content-Type')).toBe('application/json')
+    expect(headers.get(CLIENT_HEADER)).toBe('1')
   })
 })

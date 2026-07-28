@@ -15,6 +15,10 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	r.Use(chimiddleware.RequestID)
 	r.Use(apimiddleware.Recovery)
 	r.Use(apimiddleware.Logging)
+	// Runs before Audit so a rejected cross-site write is never recorded as a
+	// real operation, and before every handler because the API is unauthenticated
+	// by design — see OriginGuard for what it does and does not cover.
+	r.Use(apimiddleware.OriginGuard(apimiddleware.AllowedHostsFromEnv()))
 	r.Use(apimiddleware.Audit)
 
 	connHandler := handlers.NewConnectionsHandler(cfg, manager)

@@ -25,6 +25,9 @@ RUN CGO_ENABLED=0 go build -gcflags="all=-N -l" -o kizuna ./cmd/kizuna/
 EXPOSE 9090 2345
 VOLUME /data
 ENV CONFIG_PATH=/data/config.json
+# Inside the container this is safe: the host only publishes the port on
+# loopback. Outside a container the binary defaults to 127.0.0.1 instead.
+ENV KIZUNA_LISTEN=0.0.0.0:9090
 ENTRYPOINT ["dlv", "--listen=:2345", "--headless=true", "--api-version=2", "--accept-multiclient", "exec", "/app/kizuna"]
 
 FROM alpine:3.19 AS certs
@@ -36,4 +39,7 @@ COPY --from=backend /app/kizuna /usr/local/bin/kizuna
 EXPOSE 9090
 VOLUME /data
 ENV CONFIG_PATH=/data/config.json
+# See the debug stage: binding all interfaces is contained by the loopback-bound
+# publish rule in docker-compose.yml.
+ENV KIZUNA_LISTEN=0.0.0.0:9090
 ENTRYPOINT ["kizuna"]
