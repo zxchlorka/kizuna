@@ -1,8 +1,10 @@
 services:
   kizuna:
     build: .
+    # Loopback by default — see docker-compose.yml for why. Override with
+    # KIZUNA_BIND only behind an authenticating proxy.
     ports:
-      - "9090:9090"
+      - "${KIZUNA_BIND:-127.0.0.1}:9090:9090"
     volumes:
       - ./data:/data
     environment:
@@ -16,8 +18,10 @@ services:
       POSTGRES_USER: dev
       POSTGRES_PASSWORD: dev
       POSTGRES_DB: devdb
+    # dev/dev credentials — loopback only, or the sample stack hands a shell on
+    # the database to anyone on the same network.
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
 

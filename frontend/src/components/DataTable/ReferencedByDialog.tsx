@@ -3,6 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowRight, Link2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { apiFetch } from '@/lib/http'
 import type { FKRef, TableRow } from '@/types/api'
 
 interface ReferencedByDialogProps {
@@ -66,7 +67,7 @@ export function ReferencedByDialog({
         })
 
         try {
-          const response = await fetch(
+          const response = await apiFetch(
             `/api/connections/${connId}/objects/${encodeURIComponent(reference.table)}/data?${params.toString()}`
           )
           if (!response.ok) {

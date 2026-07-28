@@ -66,10 +66,11 @@ func main() {
 		os.Exit(1)
 	}
 
-	srv := server.New(router, frontendRoot, ":9090")
+	addr := listenAddr()
+	srv := server.New(router, frontendRoot, addr)
 
 	go func() {
-		slog.Info("starting server", "addr", ":9090")
+		slog.Info("starting server", "addr", addr)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			slog.Error("server error", "error", err)
 			os.Exit(1)
@@ -86,4 +87,16 @@ func main() {
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Error("server shutdown error", "error", err)
 	}
+}
+
+// listenAddr resolves where the HTTP server binds. The default is loopback: the
+// API is unauthenticated and decrypts stored database passwords on demand, so a
+// stray bind on a shared network hands every saved connection to whoever is on
+// it. The Docker image sets KIZUNA_LISTEN=0.0.0.0:9090 because there the port is
+// only reachable through Docker's own loopback-bound publish rule.
+func listenAddr() string {
+	if addr := os.Getenv("KIZUNA_LISTEN"); addr != "" {
+		return addr
+	}
+	return "127.0.0.1:9090"
 }

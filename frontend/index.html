@@ -8,12 +8,10 @@
     <title>kizuna</title>
     <!-- IBM Plex Sans: clean, technical sans-serif for UI chrome -->
     <!-- JetBrains Mono: purpose-built monospace for data display -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap"
-      rel="stylesheet"
-    />
+    <!-- Served from the binary, not a CDN: Kizuna is a local tool that has to
+         look the same offline, and a database browser should not announce every
+         launch to a third party. See public/fonts/fonts.css. -->
+    <link rel="stylesheet" href="/fonts/fonts.css" />
   </head>
   <body>
     <div id="root"></div>
