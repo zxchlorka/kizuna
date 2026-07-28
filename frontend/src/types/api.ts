@@ -206,6 +206,7 @@ export interface ExecResult {
   applied_limit?: number
   column_sources?: (ColumnSource | null)[]
   skipped?: boolean
+  canceled?: boolean
 }
 
 export interface SqlCatalogColumn {
@@ -266,6 +267,7 @@ export interface HistoryEntry {
   rows_affected: number
   error?: string
   executed_at: string
+  canceled?: boolean
 }
 
 export interface DataOpts {

@@ -33,7 +33,13 @@ export class RequestAbortedError extends Error {
 export async function fetchWithTimeout(
   input: RequestInfo | URL,
   init?: RequestInit,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
+  // Pass Infinity for requests that must never time out on their own (e.g. the
+  // SQL console: legitimate queries can run 30-40s+, and a hard deadline there
+  // is a deliberate non-feature, not an oversight). The external `signal` is
+  // still fully composed in that case — it's the only thing that can abort the
+  // request — so callers keep the RequestAbortedError classification below
+  // instead of reimplementing it.
+  timeoutMs: number = DEFAULT_TIMEOUT_MS,
   // Optional external signal (e.g. a user "Cancel"). It is composed with the
   // internal timeout: whichever fires first aborts the underlying fetch. Done
   // by forwarding the external abort to the internal controller rather than via
@@ -42,7 +48,7 @@ export async function fetchWithTimeout(
   signal?: AbortSignal
 ): Promise<Response> {
   const controller = new AbortController()
-  const timeout = window.setTimeout(() => controller.abort(), timeoutMs)
+  const timeout = Number.isFinite(timeoutMs) ? window.setTimeout(() => controller.abort(), timeoutMs) : undefined
 
   let onExternalAbort: (() => void) | undefined
   if (signal) {
@@ -71,7 +77,7 @@ export async function fetchWithTimeout(
     }
     throw error
   } finally {
-    window.clearTimeout(timeout)
+    if (timeout !== undefined) window.clearTimeout(timeout)
     if (onExternalAbort) signal?.removeEventListener('abort', onExternalAbort)
   }
 }

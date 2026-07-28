@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
-import { AlertTriangle, Rows3, SkipForward } from 'lucide-react'
+import { AlertTriangle, Ban, Rows3, SkipForward } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ExplainView } from '@/components/SqlConsole/ExplainView'
 import { SqlResultCell } from '@/components/SqlConsole/SqlResultCell'
@@ -113,6 +113,17 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
             </div>
             <p className="mt-2 whitespace-pre-wrap font-mono text-xs text-red-700/90 dark:text-red-200">
               {activeResult.result.error}
+            </p>
+          </div>
+        ) : activeResult.result.canceled ? (
+          <div className="m-3 rounded-sm border border-border bg-muted/20 p-4">
+            <div className="flex items-center gap-2 font-mono text-sm text-muted-foreground">
+              <Ban className="h-4 w-4" />
+              Statement {activeResult.statementIndex + 1} canceled
+            </div>
+            <p className="mt-2 text-xs text-muted-foreground">
+              Stopped before it returned a result. If it had already committed on the server at the moment of
+              cancel, that write persists — check History to confirm what ran.
             </p>
           </div>
         ) : activeResult.result.skipped ? (
