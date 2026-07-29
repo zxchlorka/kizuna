@@ -47,7 +47,9 @@ export function FloatingMenuItem({ disabled, onClick, children }: FloatingMenuIt
       onClick={onClick}
       className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono text-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50"
     >
-      {children}
+      {/* Ширина меню не должна зависеть от длины значения: метка обрезается
+          многоточием, полный текст доступен в LinkPickerDialog. */}
+      <span className="block min-w-0 max-w-[32rem] truncate">{children}</span>
     </button>
   )
 }
