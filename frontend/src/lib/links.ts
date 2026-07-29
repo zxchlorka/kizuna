@@ -132,6 +132,49 @@ export function linkSourceLabel(link: LinkRecord, value: string | null): string 
   return `↩ ${link.source_scope.replace('*', shown)}`
 }
 
+// Per-element линк берёт значение из того, на что пользователь указал в UI
+// (элемент коллекции или фрагмент значения), а не из ключа целиком. У него нет
+// значения на уровне ключа, поэтому в шапке он показывается справочно.
+export function isPerElementExtract(extract?: string): boolean {
+  return extract === 'member' || extract === 'selection'
+}
+
+function isRedisSource(link: LinkRecord, connId: string, key: string): boolean {
+  return (
+    link.source_conn_id === connId &&
+    link.source_kind === 'redis' &&
+    redisKeyMatchesPattern(link.source_scope, key)
+  )
+}
+
+// keyLevelRedisLinks — линки, у которых значение вычисляется из самого ключа
+// (key_capture / string_value / value_field). Только они кликабельны в шапке.
+export function keyLevelRedisLinks(links: LinkRecord[], connId: string, key: string): LinkRecord[] {
+  return links.filter((link) => isRedisSource(link, connId, key) && !isPerElementExtract(link.source_extract))
+}
+
+export function memberRedisLinks(links: LinkRecord[], connId: string, key: string): LinkRecord[] {
+  return links.filter((link) => isRedisSource(link, connId, key) && link.source_extract === 'member')
+}
+
+// selectionRedisLinks — линки, применимые к точке, по которой кликнули. Линк с
+// заданным source_field сужен до одного хэш-поля (cookie_ids → c:*), линк без
+// поля работает в любом месте ключа. Поле undefined означает «кликнули не по
+// хэш-строке» (элемент set/zset/list), тогда подходят только линки без поля.
+export function selectionRedisLinks(
+  links: LinkRecord[],
+  connId: string,
+  key: string,
+  field?: string
+): LinkRecord[] {
+  return links.filter(
+    (link) =>
+      isRedisSource(link, connId, key) &&
+      link.source_extract === 'selection' &&
+      (!link.source_field || link.source_field === field)
+  )
+}
+
 // linkSummary renders a readable one-line description of a link for the Settings list.
 export function linkSummary(link: LinkRecord): string {
   const srcDetail = link.source_extract
