@@ -344,7 +344,7 @@ export interface DDLResult {
 
 export type LinkKind = 'kafka' | 'redis' | 'postgres'
 export type LinkTargetKind = LinkKind
-export type RedisExtract = 'value_field' | 'key_capture' | 'string_value' | 'member'
+export type RedisExtract = 'value_field' | 'key_capture' | 'string_value' | 'member' | 'selection'
 
 export interface LinkRecord {
   id: string
