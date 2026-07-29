@@ -23,7 +23,9 @@ export function FloatingMenu({ x, y, onClose, children }: FloatingMenuProps) {
   return (
     <div className="fixed inset-0 z-50" onClick={onClose} onContextMenu={(event) => event.preventDefault()}>
       <div
-        className="absolute min-w-56 overflow-hidden rounded-sm border border-border bg-popover py-1 text-popover-foreground shadow-md"
+        // max-w держит меню в узде независимо от данных: значение линка может
+        // быть в килобайты длиной, и без этого меню растягивается на весь экран.
+        className="absolute min-w-56 max-w-[36rem] overflow-hidden rounded-sm border border-border bg-popover py-1 text-popover-foreground shadow-md"
         style={{ left: x, top: y }}
         onClick={(event) => event.stopPropagation()}
       >
@@ -55,7 +57,9 @@ export function FloatingMenuItem({ disabled, onClick, children }: FloatingMenuIt
 }
 
 export function FloatingMenuLabel({ children }: { children: ReactNode }) {
-  return <div className="px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{children}</div>
+  return (
+    <div className="truncate px-3 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{children}</div>
+  )
 }
 
 export function FloatingMenuSeparator() {
