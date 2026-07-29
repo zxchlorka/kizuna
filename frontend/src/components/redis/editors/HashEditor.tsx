@@ -11,7 +11,7 @@ interface HashEditorProps {
   onUpdate: (field: string, value: string) => Promise<void> | void
   onDelete: (field: string) => Promise<void> | void
   onInsert: (field: string, value: string) => Promise<void> | void
-  onElementContextMenu?: (value: string, event: MouseEvent) => void
+  onElementContextMenu?: (value: string, event: MouseEvent, field?: string) => void
 }
 
 export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete, onInsert, onElementContextMenu }: HashEditorProps) {
@@ -63,7 +63,7 @@ export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete,
               const value = String(row.value ?? '')
               const editing = editingField === field
               return (
-                <tr key={field} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event) : undefined}>
+                <tr key={field} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event, field) : undefined}>
                   <td className="px-4 py-3 font-mono text-xs text-foreground">{field}</td>
                   <td
                     className="px-4 py-3 font-mono text-xs text-foreground"

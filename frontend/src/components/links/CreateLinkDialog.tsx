@@ -17,6 +17,10 @@ interface CreateLinkDialogProps {
   sourceScope?: string
   sourceFieldOptions?: string[]
   sourceFieldValue?: Record<string, unknown>
+  // opened from a concrete element: pre-select the extract mode and the field
+  // the user right-clicked
+  initialExtract?: RedisExtract
+  initialSourceField?: string
   // edit mode: pre-fill from an existing link and PUT on save
   editLink?: LinkRecord
 }
@@ -33,6 +37,8 @@ export function CreateLinkDialog({
   sourceScope,
   sourceFieldOptions = [],
   sourceFieldValue,
+  initialExtract,
+  initialSourceField,
   editLink,
 }: CreateLinkDialogProps) {
   const connections = useConnectionStore((state) => state.connections)
@@ -70,8 +76,8 @@ export function CreateLinkDialog({
       setTable(editLink.table ?? '')
       setColumn(editLink.column ?? '')
     } else {
-      setSourceField('')
-      setRedisExtract('value_field')
+      setSourceField(initialSourceField ?? '')
+      setRedisExtract(initialExtract ?? 'value_field')
       setScopeInput(sourceScope ?? '')
       setTargetConnId('')
       setTargetTopic('')
@@ -96,6 +102,10 @@ export function CreateLinkDialog({
   const needsSourceField =
     srcKind === 'kafka' || srcKind === 'postgres' || (srcKind === 'redis' && redisExtract === 'value_field')
 
+  // Для selection поле не обязательно: пустое = линк работает в любом месте
+  // ключа, заданное = линк сужен до одного хэш-поля.
+  const optionalSourceField = srcKind === 'redis' && redisExtract === 'selection'
+
   const effectiveScope = scopeInput.trim()
 
   const invalid =
@@ -117,7 +127,7 @@ export function CreateLinkDialog({
       source_conn_id: srcConnId,
       source_kind: srcKind,
       source_scope: effectiveScope,
-      source_field: needsSourceField ? sourceField : undefined,
+      source_field: needsSourceField || optionalSourceField ? sourceField || undefined : undefined,
       source_extract: srcKind === 'redis' ? redisExtract : undefined,
       target_conn_id: targetConnId,
       target_kind: targetKind,
@@ -188,13 +198,20 @@ export function CreateLinkDialog({
                   <SelectItem value="key_capture" className="font-mono text-xs">key capture (the * in the pattern)</SelectItem>
                   <SelectItem value="string_value" className="font-mono text-xs">whole string value</SelectItem>
                   <SelectItem value="member" className="font-mono text-xs">collection element (set/zset/list member, hash value)</SelectItem>
+                  <SelectItem value="selection" className="font-mono text-xs">selected text (right-click a value)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
           )}
-          {needsSourceField && (
+          {(needsSourceField || optionalSourceField) && (
             <div className="space-y-1">
-              <label className={labelClass}>{srcKind === 'postgres' ? 'Source column' : 'Source field'}</label>
+              <label className={labelClass}>
+                {srcKind === 'postgres'
+                  ? 'Source column'
+                  : optionalSourceField
+                  ? 'Source field (optional)'
+                  : 'Source field'}
+              </label>
               {srcKind === 'kafka' && !isEdit && sourceFieldValue ? (
                 <KafkaFieldPathPicker open={open} rootValue={sourceFieldValue} value={sourceField} onChange={setSourceField} />
               ) : (
