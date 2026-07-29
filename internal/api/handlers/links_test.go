@@ -185,3 +185,47 @@ func TestLinksHandlerAcceptsMemberExtract(t *testing.T) {
 		t.Fatalf("member extract: expected 201, got %d (%s)", rec.Code, rec.Body.String())
 	}
 }
+
+func TestLinksHandlerAcceptsSelectionExtract(t *testing.T) {
+	cases := []struct {
+		name  string
+		field string
+	}{
+		{name: "with field", field: "cookie_ids"},
+		{name: "without field", field: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := newLinksTestConfig(t)
+			h := NewLinksHandler(cfg)
+
+			body, _ := json.Marshal(map[string]any{
+				"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "profile:*",
+				"source_extract": "selection", "source_field": tc.field,
+				"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "c:*",
+			})
+			rec := httptest.NewRecorder()
+			h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(body)))
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("selection extract: expected 201, got %d (%s)", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestLinksHandlerRejectsUnknownExtract(t *testing.T) {
+	cfg := newLinksTestConfig(t)
+	h := NewLinksHandler(cfg)
+
+	body, _ := json.Marshal(map[string]any{
+		"source_conn_id": "redis-1", "source_kind": "redis", "source_scope": "profile:*",
+		"source_extract": "highlight",
+		"target_conn_id": "redis-1", "target_kind": "redis", "key_pattern": "c:*",
+	})
+	rec := httptest.NewRecorder()
+	h.Create(rec, httptest.NewRequest(http.MethodPost, "/api/links", bytes.NewReader(body)))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown extract: expected 400, got %d", rec.Code)
+	}
+}

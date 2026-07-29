@@ -169,8 +169,12 @@ func (h *LinksHandler) validate(req linkRequest) error {
 			}
 		case "string_value":
 		case "member":
+		// selection: значение выбирает пользователь в UI (выделение или токен под
+		// курсором), поэтому source_field необязателен — если он задан, линк
+		// сужается до одного хэш-поля.
+		case "selection":
 		default:
-			return errBadLink("source_extract must be value_field, key_capture, string_value or member")
+			return errBadLink("source_extract must be value_field, key_capture, string_value, member or selection")
 		}
 	default:
 		return errBadLink("source_kind must be kafka, redis or postgres")
