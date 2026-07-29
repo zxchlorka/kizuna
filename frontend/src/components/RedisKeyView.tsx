@@ -529,7 +529,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       Links
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
+                  {/* max-w — та же защита, что и у FloatingMenu: длина значения
+                      линка не должна определять ширину меню. */}
+                  <DropdownMenuContent align="end" className="max-w-[36rem]">
                     {keyLinks.slice(0, LINK_MENU_CAP).map((link) => {
                       const value = extractRedisValue(link, object, stringValue, rows)
                       return (
