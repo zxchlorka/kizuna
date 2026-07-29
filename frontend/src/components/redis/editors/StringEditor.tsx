@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type MouseEvent } from 'react'
 import { Braces, PencilLine, RotateCcw, Save } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
@@ -10,9 +10,17 @@ interface StringEditorProps {
   saving: boolean
   readOnly?: boolean
   onSave: (value: string) => Promise<void> | void
+  onSelectionContextMenu?: (selected: string, event: MouseEvent<HTMLTextAreaElement>) => void
 }
 
-export function StringEditor({ value, isJson, saving, readOnly = false, onSave }: StringEditorProps) {
+export function StringEditor({
+  value,
+  isJson,
+  saving,
+  readOnly = false,
+  onSave,
+  onSelectionContextMenu,
+}: StringEditorProps) {
   const [draft, setDraft] = useState(value)
   const [editing, setEditing] = useState(false)
   const [pretty, setPretty] = useState(isJson)
@@ -80,6 +88,17 @@ export function StringEditor({ value, isJson, saving, readOnly = false, onSave }
           }}
           readOnly={!editing}
           className="min-h-[360px] resize-y font-mono text-xs"
+          onContextMenu={
+            onSelectionContextMenu
+              ? (event) => {
+                  // В textarea нет текстовых узлов, по которым работает
+                  // caret-хиттест, поэтому здесь поддерживается только
+                  // выделение — токен под курсором недоступен.
+                  const el = event.currentTarget
+                  onSelectionContextMenu(el.value.slice(el.selectionStart, el.selectionEnd), event)
+                }
+              : undefined
+          }
         />
       </div>
     </div>
