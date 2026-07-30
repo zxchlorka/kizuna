@@ -39,21 +39,56 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-// Deliberately shallow: this only needs to catch a version bump, truncated
-// JSON, or someone else's unrelated value under the same key well enough to
-// fall back to defaults. It does not need to validate every tab field --
-// `tabs` flows straight into workspace state either way, and a malformed tab
-// in there would already have to survive JSON.stringify/parse round-tripping
-// our own WorkspaceTab type to get this far.
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string')
+}
+
+function isStringRecord(value: unknown): value is Record<string, string> {
+  return isPlainObject(value) && Object.values(value).every((item) => typeof item === 'string')
+}
+
+// Structural check of one tab against the WorkspaceTab union. Only the fields
+// that get dereferenced during hydration are checked -- an unknown objectType
+// string renders as an unsupported view, it does not crash.
+function isWorkspaceTab(value: unknown): value is WorkspaceTab {
+  if (!isPlainObject(value)) return false
+  if (typeof value.id !== 'string' || typeof value.connId !== 'string' || typeof value.label !== 'string') {
+    return false
+  }
+  if (value.anchorConnId !== undefined && typeof value.anchorConnId !== 'string') {
+    return false
+  }
+  switch (value.kind) {
+    case 'sql':
+    case 'redis-cli':
+      return true
+    case 'object':
+      return typeof value.object === 'string' && typeof value.objectType === 'string'
+    default:
+      return false
+  }
+}
+
+// The snapshot comes back from localStorage, which nothing guarantees we wrote:
+// a half-finished write, a hand edit, or another build under the same key all
+// land here. Validating only `Array.isArray(tabs)` let `tabs: [null]` through,
+// and the first tabPageId(tab) then threw on tab.anchorConnId. That crash is
+// self-perpetuating -- the bad snapshot stays in storage, so every reload
+// crashes again until the user clears site data by hand.
+//
+// A malformed snapshot is rejected whole rather than filtered: dropping just the
+// bad tabs would leave activeTabId and activeTabByConnection pointing at tabs
+// that no longer exist, trading one inconsistent state for another.
 function isPersistedWorkspace(value: unknown): value is PersistedWorkspaceV1 {
   if (!isPlainObject(value)) return false
   return (
     value.version === SCHEMA_VERSION &&
     Array.isArray(value.tabs) &&
+    value.tabs.every(isWorkspaceTab) &&
     (value.activeTabId === null || typeof value.activeTabId === 'string') &&
-    isPlainObject(value.activeTabByConnection) &&
-    Array.isArray(value.openConnectionIds) &&
-    isPlainObject(value.sqlDrafts)
+    isStringRecord(value.activeTabByConnection) &&
+    isStringArray(value.openConnectionIds) &&
+    isStringRecord(value.sqlDrafts)
   )
 }
 

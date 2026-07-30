@@ -176,6 +176,62 @@ describe('restoreWorkspace — loading', () => {
     expect(() => restoreWorkspace()).not.toThrow()
     expect(useWorkspaceStore.getState().tabs).toEqual([])
   })
+
+  // A snapshot that only satisfies Array.isArray(tabs) used to be hydrated into
+  // the store as-is, and the first tabPageId(tab) then threw on tab.anchorConnId.
+  // That crash is persistent: the bad snapshot stays in localStorage, so every
+  // reload crashes again until the user clears site data by hand.
+  it.each([
+    ['a null tab', { tabs: [null] }],
+    ['a tab that is not an object', { tabs: ['nope'] }],
+    ['a tab with an unknown kind', { tabs: [{ kind: 'mystery', id: 't', connId: 'c', label: 'L' }] }],
+    ['a tab missing connId', { tabs: [{ kind: 'sql', id: 't', label: 'L' }] }],
+    ['a tab with a non-string id', { tabs: [{ kind: 'sql', id: 7, connId: 'c', label: 'L' }] }],
+    ['an object tab missing objectType', { tabs: [{ kind: 'object', id: 't', connId: 'c', label: 'L', object: 'o' }] }],
+    ['a tab with a non-string anchorConnId', { tabs: [{ kind: 'sql', id: 't', connId: 'c', label: 'L', anchorConnId: 3 }] }],
+    ['openConnectionIds holding a non-string', { openConnectionIds: [1] }],
+    ['activeTabByConnection holding a non-string', { activeTabByConnection: { c: 5 } }],
+    ['sqlDrafts holding a non-string', { sqlDrafts: { t: {} } }],
+  ])('falls back to defaults on %s', (_name, override) => {
+    localStorageMock.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        tabs: [],
+        activeTabId: null,
+        activeTabByConnection: {},
+        openConnectionIds: [],
+        sqlDrafts: {},
+        ...override,
+      })
+    )
+
+    expect(() => restoreWorkspace()).not.toThrow()
+    expect(useWorkspaceStore.getState().tabs).toEqual([])
+  })
+
+  it('still restores a snapshot whose tabs are all well formed', () => {
+    localStorageMock.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        tabs: [
+          { kind: 'sql', id: 'sql-1', connId: 'c1', label: 'Query' },
+          { kind: 'object', id: 'obj-1', connId: 'c1', label: 'users', object: 'public.users', objectType: 'table' },
+          { kind: 'redis-cli', id: 'cli-1', connId: 'c2', label: 'CLI', anchorConnId: 'c1' },
+        ],
+        activeTabId: 'sql-1',
+        activeTabByConnection: { c1: 'sql-1' },
+        openConnectionIds: ['c1', 'c2'],
+        sqlDrafts: { 'sql-1': 'select 1' },
+      })
+    )
+
+    restoreWorkspace()
+
+    expect(useWorkspaceStore.getState().tabs).toHaveLength(3)
+    expect(useWorkspaceStore.getState().activeTabId).toBe('sql-1')
+  })
 })
 
 describe('pruneDeadConnections', () => {
