@@ -2,10 +2,30 @@ services:
   kizuna:
     build: .
     # Kizuna decrypts stored database passwords itself, so anyone who reaches the
-    # port owns every saved connection. Bind to loopback: on a shared network
-    # (cafe, coworking, office Wi-Fi) a published port is reachable by everyone.
-    # Set KIZUNA_BIND=0.0.0.0 only if you deliberately want network access and
-    # have put an authenticating proxy in front.
+    # port owns every saved connection. The API has no authentication of its own:
+    # OriginGuard only stops *browsers* on other pages from driving it, and any
+    # non-browser client can send `X-Kizuna-Client` itself.
+    #
+    # That is why "put an authenticating proxy in front" is NOT a reason to widen
+    # this binding. Publishing 9090 on 0.0.0.0 exposes the backend directly, so a
+    # client can skip the proxy entirely and talk to the API — the proxy protects
+    # nothing it does not sit in front of.
+    #
+    # To serve Kizuna beyond this machine, leave the binding on loopback (or drop
+    # this `ports` block altogether) and publish only the proxy, reaching Kizuna
+    # over the compose network:
+    #
+    #   proxy:
+    #     image: <your proxy>          # terminates TLS, authenticates the user
+    #     ports:
+    #       - "443:443"                # the ONLY port published to the network
+    #     # talks to http://kizuna:9090 over the compose network; Kizuna itself
+    #     # publishes nothing
+    #
+    # KIZUNA_BIND stays overridable for isolated setups (a private VM, a host with
+    # its own firewall). Setting it to 0.0.0.0 publishes an unauthenticated API to
+    # everyone who can route to this host — do it only when you are certain that
+    # set is empty.
     ports:
       - "${KIZUNA_BIND:-127.0.0.1}:9090:9090"
     volumes:
