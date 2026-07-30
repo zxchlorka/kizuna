@@ -12,9 +12,20 @@ interface HashEditorProps {
   onDelete: (field: string) => Promise<void> | void
   onInsert: (field: string, value: string) => Promise<void> | void
   onElementContextMenu?: (value: string, event: MouseEvent, field?: string) => void
+  // Почему редактирование выключено. Пусто = read-only подключение.
+  readOnlyNote?: string
 }
 
-export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete, onInsert, onElementContextMenu }: HashEditorProps) {
+export function HashEditor({
+  rows,
+  saving,
+  readOnly = false,
+  onUpdate,
+  onDelete,
+  onInsert,
+  onElementContextMenu,
+  readOnlyNote,
+}: HashEditorProps) {
   const [editingField, setEditingField] = useState<string | null>(null)
   const [draftValue, setDraftValue] = useState('')
   const [newField, setNewField] = useState('')
@@ -26,7 +37,7 @@ export function HashEditor({ rows, saving, readOnly = false, onUpdate, onDelete,
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Hash fields</div>
           <div className="mt-1 text-sm text-muted-foreground">
-            {readOnly ? 'Read-only connection.' : 'Double-click a value to edit it inline.'}
+            {readOnly ? (readOnlyNote ?? 'Read-only connection.') : 'Double-click a value to edit it inline.'}
           </div>
         </div>
 

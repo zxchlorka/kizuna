@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
-import { KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -283,7 +283,13 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const currentTTL = typeof meta.ttl === 'number' ? meta.ttl : (ttlSeconds ?? null)
   const ttlLabel = formatRedisTTL(currentTTL)
   const isJson = Boolean(meta.is_json)
+  const hasBinary = Boolean(meta.has_binary)
   const readOnly = connection?.read_only ?? false
+  // Значение не UTF-8: бэкенд отдал его в escape-форме \xNN. Записать этот текст
+  // обратно как обычную строку значило бы уничтожить исходные байты, поэтому
+  // правки значений запрещаются. Удаление ключа и смена TTL при этом безопасны и
+  // остаются доступными — отсюда отдельный флаг, а не общий readOnly.
+  const valueEditingDisabled = readOnly || hasBinary
 
   const refresh = async () => {
     await fetchData(connId, object, tabId)
@@ -332,7 +338,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           value={stringValue}
           isJson={isJson}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onSave={(value) => runMutation({ type: 'update', data: { value } })}
           onSelectionContextMenu={handleStringContextMenu}
         />
@@ -344,11 +350,16 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <HashEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onUpdate={(field, value) => runMutation({ type: 'update', where: { field }, data: { value } })}
           onDelete={(field) => runMutation({ type: 'delete', where: { field } })}
           onInsert={(field, value) => runMutation({ type: 'insert', data: { field, value } })}
           onElementContextMenu={handleElementContextMenu}
+          readOnlyNote={
+            hasBinary && !readOnly
+              ? 'Value is not valid UTF-8. Shown as \\xNN escapes; editing is disabled so the original bytes survive.'
+              : undefined
+          }
         />
       )
     }
@@ -358,7 +369,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <ListEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           offset={listOffset}
           limit={listLimit}
           total={total}
@@ -385,7 +396,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SetEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onInsert={(member) => runMutation({ type: 'insert', data: { member } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
           onElementContextMenu={handleElementContextMenu}
@@ -398,7 +409,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SortedSetEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onUpdateScore={(member, score) => runMutation({ type: 'update', where: { member }, data: { score } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
           onInsert={(member, score) => runMutation({ type: 'insert', data: { member, score } })}
@@ -516,6 +527,15 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         <TimerReset className="mr-1 h-3 w-3" />
                         {ttlLabel}
                       </button>
+                    )}
+                    {hasBinary && (
+                      <span
+                        className="inline-flex items-center rounded-sm border border-sky-500/30 bg-sky-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-sky-600 dark:text-sky-400"
+                        title="Value is not valid UTF-8. Shown as \xNN escapes; editing is disabled so the original bytes are not destroyed."
+                      >
+                        <Binary className="mr-1 h-3 w-3" />
+                        Binary
+                      </span>
                     )}
                   </div>
                 </div>
