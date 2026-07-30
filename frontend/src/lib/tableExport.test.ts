@@ -208,3 +208,51 @@ describe('performance — 500 rows must not be slow enough to matter', () => {
     expect(elapsed).toBeLessThan(200)
   })
 })
+
+describe('duplicate column names', () => {
+  // SELECT a.id, b.id даёт две колонки с одним именем. В объекте JSON второй
+  // ключ молча затирал первый, то есть экспорт терял данные без предупреждения.
+  const DUPES = [
+    { name: 'id', type: 'int4' },
+    { name: 'name', type: 'text' },
+    { name: 'id', type: 'int4' },
+  ]
+
+  it('keeps every column in JSON by suffixing repeats', () => {
+    expect(JSON.parse(buildJSON(DUPES, [[1, 'Alice', 2]]))).toEqual([{ id: 1, name: 'Alice', id_2: 2 }])
+  })
+
+  it('numbers a third repeat separately', () => {
+    const cols = [{ name: 'v' }, { name: 'v' }, { name: 'v' }]
+    expect(JSON.parse(buildJSON(cols, [[1, 2, 3]]))).toEqual([{ v: 1, v_2: 2, v_3: 3 }])
+  })
+
+  it('does not collide with a column already named like the suffix', () => {
+    const cols = [{ name: 'v' }, { name: 'v_2' }, { name: 'v' }]
+    expect(JSON.parse(buildJSON(cols, [[1, 2, 3]]))).toEqual([{ v: 1, v_2: 2, v_3: 3 }])
+  })
+
+  it('leaves unique names untouched', () => {
+    expect(JSON.parse(buildJSON(COLS, [[1, 'Alice']]))).toEqual([{ id: 1, name: 'Alice' }])
+  })
+})
+
+describe('TSV header escaping', () => {
+  // Заголовки шли в вывод сырыми, в отличие от CSV: алиас с табом ломал сетку,
+  // а имя вида =HYPERLINK(...) вставлялось в таблицу как формула.
+  it('flattens a tab inside a column alias', () => {
+    expect(buildTSV([{ name: 'a\tb' }, { name: 'c' }], [])).toBe('a b\tc')
+  })
+
+  it('flattens a newline inside a column alias', () => {
+    expect(buildTSV([{ name: 'a\nb' }], [])).toBe('a b')
+  })
+
+  it('neutralizes a formula-looking column name', () => {
+    expect(buildTSV([{ name: '=HYPERLINK("http://x")' }], [])).toBe(`'=HYPERLINK("http://x")`)
+  })
+
+  it('leaves an ordinary header untouched', () => {
+    expect(buildTSV(COLS, [])).toBe('id\tname')
+  })
+})
