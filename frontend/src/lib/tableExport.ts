@@ -120,8 +120,36 @@ function csvFieldText(value: unknown, columnType: string | undefined): string {
   return text
 }
 
+// A result set can carry the same column name twice (SELECT a.id, b.id). The
+// positional formats below don't care, but a JSON object key does: the second
+// column would silently overwrite the first and the export would lose data.
+// Repeats get a numeric suffix, skipping any name a real column already uses so
+// the rename can't collide with it either.
+function dedupeColumnNames(columns: ExportColumn[]): string[] {
+  const taken = new Set(columns.map((c) => c.name))
+  const used = new Set<string>()
+  return columns.map((column) => {
+    if (!used.has(column.name)) {
+      used.add(column.name)
+      return column.name
+    }
+    let n = 2
+    let candidate = `${column.name}_${n}`
+    while (used.has(candidate) || taken.has(candidate)) {
+      n += 1
+      candidate = `${column.name}_${n}`
+    }
+    used.add(candidate)
+    return candidate
+  })
+}
+
 export function buildTSV(columns: ExportColumn[], rows: unknown[][]): string {
-  const header = columns.map((c) => c.name).join('\t')
+  // Headers go through the same escaping as values: an alias containing a tab or
+  // newline would misalign the grid, and one starting with `=` would be pasted
+  // into a spreadsheet as a formula. `undefined` type = treat as non-numeric,
+  // matching how buildCSV already handles its header.
+  const header = columns.map((c) => tsvFieldText(c.name, undefined)).join('\t')
   const body = rows.map((row) => columns.map((col, i) => tsvFieldText(row[i], col.type)).join('\t'))
   return [header, ...body].join('\n')
 }
@@ -134,12 +162,13 @@ export function buildCSV(columns: ExportColumn[], rows: unknown[][]): string {
 }
 
 export function buildJSON(columns: ExportColumn[], rows: unknown[][]): string {
+  const names = dedupeColumnNames(columns)
   const objects = rows.map((row) => {
     const obj: Record<string, unknown> = {}
-    columns.forEach((col, i) => {
+    names.forEach((name, i) => {
       // Native JSON has a real null and a real empty string — no marker text
       // needed here, unlike TSV/CSV.
-      obj[col.name] = row[i] === undefined ? null : row[i]
+      obj[name] = row[i] === undefined ? null : row[i]
     })
     return obj
   })
