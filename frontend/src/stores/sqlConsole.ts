@@ -102,6 +102,16 @@ function explainLabel(result: ExplainResult, fallback: 'EXPLAIN' | 'ANALYZE'): s
 // non-serializable handle, not view state Cancel can act on it directly.
 const sqlRunControllers = new Map<string, AbortController>()
 
+// A run owns its tab's state only while its AbortController is the one stored
+// for that tab. Stop flips `running` off immediately so the toolbar reacts
+// without waiting on the network, which lets the user start a new run before the
+// aborted request's own catch handler fires. Without this check that stale
+// handler overwrites the new run's state — clearing its Stop button and showing
+// "canceled" while the second query is still executing.
+function isCurrentRun(tabId: string, controller: AbortController): boolean {
+  return sqlRunControllers.get(tabId) === controller
+}
+
 // Console requests carry no timeout — a legitimate query can run 30-40s+, so
 // every run below passes Infinity as fetchWithTimeout's timeoutMs and the
 // AbortController above is the only thing that can end the request.
@@ -460,6 +470,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         result,
       }))
 
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return {
@@ -480,6 +497,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         await get().fetchHistory(connId, tabId)
       }
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       if (error instanceof RequestAbortedError) {
         // Deliberate Cancel/Stop, not a failure: leave `error` unset so the
         // console doesn't render a "failed" state, and mark the synthetic
@@ -597,6 +621,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         result,
       }
 
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return {
@@ -612,6 +643,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         }
       })
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       if (error instanceof RequestAbortedError) {
         const result = canceledResult(trimmed, 'EXPLAIN', startedAt)
         set((state) => {
@@ -726,6 +764,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         result,
       }
 
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return {
@@ -741,6 +786,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         }
       })
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
       if (error instanceof RequestAbortedError) {
         const result = canceledResult(trimmed, 'ANALYZE', startedAt)
         set((state) => {
