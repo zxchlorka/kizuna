@@ -405,7 +405,14 @@ func jsonSafeValue(value any) any {
 		}
 		return out
 	case []byte:
-		return string(typed)
+		safe, _ := redisSafeString(string(typed))
+		return safe
+	case string:
+		// Ответ Redis binary-safe, а encoding/json молча заменяет каждый
+		// невалидный UTF-8 байт на U+FFFD. Без этого GET бинарного ключа
+		// доезжал до CLI как «????» с уже потерянными байтами.
+		safe, _ := redisSafeString(typed)
+		return safe
 	default:
 		return value
 	}
