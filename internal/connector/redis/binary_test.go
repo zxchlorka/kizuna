@@ -1,6 +1,8 @@
 package redis
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/zxchlorka/kizuna/internal/connector"
@@ -86,6 +88,69 @@ func TestRedisDataResultEscapesBinaryRows(t *testing.T) {
 	}
 	if result.Meta["has_binary"] != true {
 		t.Fatalf("meta[has_binary] = %v, want true", result.Meta["has_binary"])
+	}
+}
+
+func TestJSONSafeValueEscapesBinary(t *testing.T) {
+	binary := string([]byte{0x12, 0xcb})
+	const escaped = `\x12\xcb`
+
+	tests := []struct {
+		name string
+		in   any
+		want any
+	}{
+		{name: "binary string", in: binary, want: escaped},
+		{name: "binary bytes", in: []byte(binary), want: escaped},
+		{name: "text is untouched", in: "GET ok", want: "GET ok"},
+		{name: "number is untouched", in: int64(7), want: int64(7)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := jsonSafeValue(tt.in); got != tt.want {
+				t.Fatalf("jsonSafeValue(%v) = %v, want %v", tt.in, got, tt.want)
+			}
+		})
+	}
+
+	// RESP3 отдаёт вложенные массивы и мапы — escape должен доставать и туда.
+	nested := jsonSafeValue([]any{binary, "ok"})
+	list, ok := nested.([]any)
+	if !ok || list[0] != escaped || list[1] != "ok" {
+		t.Fatalf("nested slice = %#v, want [%q ok]", nested, escaped)
+	}
+
+	inMap := jsonSafeValue(map[any]any{"field": binary})
+	asMap, ok := inMap.(map[string]any)
+	if !ok || asMap["field"] != escaped {
+		t.Fatalf("nested map = %#v, want field=%q", inMap, escaped)
+	}
+}
+
+// Полный путь Redis CLI: GET бинарного ключа не должен доезжать до JSON как
+// U+FFFD. Именно так теряются байты — encoding/json заменяет каждый невалидный
+// UTF-8 байт молча, без ошибки.
+func TestFormatExecResultEscapesBinaryReply(t *testing.T) {
+	c := &RedisConnector{}
+	reply := string([]byte{0x12, 0xcb, 0x05, 0x0c, '(', '5', 'd', 0xd6})
+
+	result, err := c.formatExecResult("GET binblob", []string{"GET", "binblob"}, reply, nil, 0)
+	if err != nil {
+		t.Fatalf("formatExecResult: %v", err)
+	}
+
+	got, _ := result.Rows[0][0].(string)
+	if got != `\x12\xcb\x05\x0c(5d\xd6` {
+		t.Fatalf("row value = %q, want %q", got, `\x12\xcb\x05\x0c(5d\xd6`)
+	}
+
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	if strings.Contains(string(encoded), "�") {
+		t.Fatalf("serialized reply still contains U+FFFD: %s", encoded)
 	}
 }
 
