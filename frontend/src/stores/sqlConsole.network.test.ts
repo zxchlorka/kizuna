@@ -195,3 +195,61 @@ describe('runExplain / runAnalyze — cancel', () => {
     expect(asExecute(tab.results[0]).result.canceled).toBe(true)
   })
 })
+
+describe('runStatements — Stop followed immediately by Run', () => {
+  // cancelRun flips `running` off right away so the toolbar reacts without
+  // waiting on the network. That lets a second Run start before the aborted
+  // request's own catch handler fires. That stale handler used to overwrite the
+  // new run's state: Stop disappeared and the result read "canceled" while the
+  // second query was still executing.
+  it('the aborted run does not overwrite the state of the run that replaced it', async () => {
+    const signals: AbortSignal[] = []
+    let resolveSecond: ((res: Response) => void) | undefined
+
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      const signal = init?.signal
+      if (signal) signals.push(signal)
+      if (signals.length === 1) {
+        return new Promise<Response>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        })
+      }
+      return new Promise<Response>((resolve) => {
+        resolveSecond = resolve
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const first = useSqlConsoleStore.getState().runStatements('c1', 'tab-1', ['select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-1')
+
+    // Second Run starts before the first one's rejection has been handled.
+    const second = useSqlConsoleStore.getState().runStatements('c1', 'tab-1', ['select 2'])
+    await Promise.resolve()
+    await Promise.resolve()
+    await first
+
+    // The second query is still in flight, so the tab must still read as running
+    // and must NOT be showing the first run's canceled result.
+    const midway = useSqlConsoleStore.getState().tabs['tab-1']
+    expect(midway.running).toBe(true)
+    expect(midway.results.some((item) => item.kind === 'execute' && asExecute(item).result.canceled)).toBe(false)
+
+    resolveSecond!(
+      new Response(JSON.stringify({ columns: ['?column?'], rows: [[2]], rows_affected: 0, duration_ms: 1, rows_returned: 1 }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    )
+    await second
+
+    const tab = useSqlConsoleStore.getState().tabs['tab-1']
+    expect(tab.running).toBe(false)
+    expect(tab.error).toBeNull()
+    expect(asExecute(tab.results[0]).result.canceled).toBeUndefined()
+    expect(asExecute(tab.results[0]).result.rows).toEqual([[2]])
+  })
+})
