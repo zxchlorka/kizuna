@@ -60,6 +60,10 @@ interface KafkaMessageBrowserProps {
   onClearFilter: () => void
   onSearchTopic: (field: string, value: string, op: KafkaMatchOp) => void
   onScanMore: () => void
+  onScanAll: () => void
+  onCancelScanAll: () => void
+  deepScanning: boolean
+  deepScanCanceled: boolean
   onCancelScan: () => void
   onClearSearch: () => void
   links: LinkRecord[]
@@ -108,6 +112,10 @@ export function KafkaMessageBrowser({
   onClearFilter,
   onSearchTopic,
   onScanMore,
+  onScanAll,
+  onCancelScanAll,
+  deepScanning,
+  deepScanCanceled,
   onCancelScan,
   onClearSearch,
   links,
@@ -316,12 +324,23 @@ export function KafkaMessageBrowser({
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
           {scanning && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
           <span>
-            {scanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} · {messages.length.toLocaleString()} matches
-            {!scanning && scanPartial && ' · stopped at scan budget'}
-            {!scanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
+            {scanning || deepScanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} ·{' '}
+            {messages.length.toLocaleString()} matches
+            {!scanning && !deepScanning && deepScanCanceled && hasMore && ' · canceled'}
+            {!scanning && !deepScanning && !deepScanCanceled && scanPartial && ' · stopped at scan budget'}
+            {!scanning && !deepScanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
-          {scanning ? (
-            <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onCancelScan}>
+          {scanning || deepScanning ? (
+            // Во время автопрохода эта кнопка обязана значить то же, что и
+            // большая внизу: оборвать ВЕСЬ цикл. Иначе она гасила бы только
+            // текущий шаг, а цикл шёл бы дальше — два «Cancel» с разным смыслом.
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+              onClick={deepScanning ? onCancelScanAll : onCancelScan}
+            >
               <X className="h-3 w-3" />
               Cancel
             </Button>
@@ -408,17 +427,46 @@ export function KafkaMessageBrowser({
 
       {hasMore &&
         (searchActive ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 w-full gap-1.5 font-mono text-[11px]"
-            disabled={scanning}
-            onClick={onScanMore}
-          >
-            {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-            {scanning ? 'Scanning…' : 'Scan more'}
-          </Button>
+          deepScanning ? (
+            // Во время автоцикла единственное осмысленное действие — прервать
+            // его: найденное и счётчик прочитанного остаются на экране.
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-full gap-1.5 font-mono text-[11px]"
+              onClick={onCancelScanAll}
+            >
+              <X className="h-3.5 w-3.5" />
+              Cancel · scanned {scanned.toLocaleString()}
+            </Button>
+          ) : (
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 flex-1 gap-1.5 font-mono text-[11px]"
+                disabled={scanning}
+                onClick={onScanMore}
+              >
+                {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
+                {scanning ? 'Scanning…' : 'Scan more'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 flex-1 gap-1.5 font-mono text-[11px]"
+                disabled={scanning}
+                onClick={onScanAll}
+                title="Keep scanning older messages until the beginning of the log. Cancel anytime — matches found so far stay."
+              >
+                <ChevronsDown className="h-3.5 w-3.5" />
+                Search all
+              </Button>
+            </div>
+          )
         ) : (
           <Button
             type="button"

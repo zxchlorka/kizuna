@@ -53,6 +53,9 @@ interface KafkaTopicTabState {
   searchField: string
   searchValue: string
   searchOp: KafkaMatchOp
+  // Автоцикл «Search all»: гоняет шаги скана до начала лога.
+  deepScanning: boolean
+  deepScanCanceled: boolean
   searchActive: boolean
   scanning: boolean
   scanned: number
@@ -178,6 +181,8 @@ interface KafkaStore {
     op?: KafkaMatchOp
   ) => Promise<void>
   scanMore: (connId: string, topic: string, tabId: string) => Promise<void>
+  scanAll: (connId: string, topic: string, tabId: string) => Promise<void>
+  cancelScanAll: (tabId: string) => void
   cancelScan: (tabId: string) => void
   clearSearch: (connId: string, topic: string, tabId: string) => Promise<void>
   produce: (connId: string, request: KafkaProduceRequest) => Promise<KafkaProduceResult>
@@ -206,6 +211,8 @@ function defaultTabState(): KafkaTopicTabState {
     searchField: '',
     searchValue: '',
     searchOp: 'eq',
+    deepScanning: false,
+    deepScanCanceled: false,
     searchActive: false,
     scanning: false,
     scanned: 0,
@@ -698,6 +705,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             searchValue: '',
             searchOp: 'eq',
             searchActive: false,
+            deepScanning: false,
+            deepScanCanceled: false,
             scanning: false,
             scanned: 0,
             scanPartial: false,
@@ -827,6 +836,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             // stale one cannot leak back in when the op switches to 'eq'.
             searchValue: op === 'eq' ? value : '',
             searchOp: op,
+            deepScanCanceled: false,
             searchActive: true,
             // A topic scan replaces the loaded view with its matches; drop any
             // client-side filter so the two operations never stack on one set.
@@ -842,6 +852,58 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
 
     scanMore: async (connId, topic, tabId) => {
       await runScanStep(connId, topic, tabId, false)
+    },
+
+    // scanAll гоняет шаги скана подряд, пока не кончится лог, не случится
+    // ошибка или пользователь не нажмёт Cancel. Лимита по количеству шагов нет
+    // сознательно: смысл кнопки в том, чтобы дочитать топик до конца, а выход
+    // из долгого ожидания — отмена, а не потолок.
+    //
+    // Каждый шаг сам домешивает свои совпадения и увеличивает `scanned`, так что
+    // после отмены на экране остаётся всё найденное и честное «сколько прочитано».
+    scanAll: async (connId, topic, tabId) => {
+      const start = ensureState(get().tabs, tabId)
+      if (start.deepScanning || !start.searchActive) return
+
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: true, deepScanCanceled: false },
+        },
+      }))
+
+      try {
+        for (;;) {
+          const tab = ensureState(get().tabs, tabId)
+          if (tab.deepScanCanceled || !tab.hasMore || !tab.nextCursor || tab.messagesError) break
+
+          // Курсор ДО шага: если бэкенд вернёт тот же самый, цикл не сдвинулся
+          // бы и крутился вечно. Без потолка по шагам это единственная защита.
+          const before = JSON.stringify(tab.nextCursor)
+          await runScanStep(connId, topic, tabId, false)
+
+          const after = ensureState(get().tabs, tabId)
+          if (after.deepScanCanceled || after.messagesError) break
+          if (JSON.stringify(after.nextCursor) === before) break
+        }
+      } finally {
+        set((state) => ({
+          tabs: { ...state.tabs, [tabId]: { ...ensureState(state.tabs, tabId), deepScanning: false } },
+        }))
+      }
+    },
+
+    // Отмена автоцикла: поднимает флаг (следующий виток не начнётся) и обрывает
+    // запрос, который уже в полёте, чтобы ожидание кончилось сразу, а не по
+    // завершении текущего шага.
+    cancelScanAll: (tabId) => {
+      kafkaScanControllers.get(tabId)?.abort()
+      set((state) => ({
+        tabs: {
+          ...state.tabs,
+          [tabId]: { ...ensureState(state.tabs, tabId), deepScanCanceled: true, scanning: false },
+        },
+      }))
     },
 
     cancelScan: (tabId) => {
@@ -865,6 +927,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             searchValue: '',
             searchOp: 'eq',
             searchActive: false,
+            deepScanning: false,
+            deepScanCanceled: false,
             scanning: false,
             scanned: 0,
             scanPartial: false,
