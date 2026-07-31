@@ -664,3 +664,81 @@ describe('Oldest-first direction', () => {
     expect(useKafkaStore.getState().tabs['tab-flip'].messages).toEqual([])
   })
 })
+
+describe('scanAll — автоцикл до начала лога', () => {
+  // Страница скана: сколько прочитано, сколько совпало, есть ли ещё старее.
+  function scanPage(scanned: number, matches: number[], hasOlder: boolean, cursor: number) {
+    return jsonResponse({
+      columns: [],
+      rows: matches.map((offset) => scanRow(0, offset)),
+      total: matches.length,
+      has_more: false,
+      meta: {
+        scanning: true,
+        scanned,
+        matched: matches.length,
+        has_older: hasOlder,
+        next_before_offsets: hasOlder ? { '0': cursor } : {},
+      },
+    })
+  }
+
+  it('идёт до конца лога сам и складывает найденное со всех шагов', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(scanPage(5000, [], true, 25000))
+      .mockResolvedValueOnce(scanPage(5000, [], true, 20000))
+      .mockResolvedValueOnce(scanPage(5000, [10009, 10008], true, 15000))
+      .mockResolvedValueOnce(scanPage(3000, [900], false, 0))
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-all', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-all')
+
+    const tab = useKafkaStore.getState().tabs['tab-all']
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(tab.scanned).toBe(18000)
+    expect(tab.messages.map((m) => m.offset)).toEqual([10009, 10008, 900])
+    expect(tab.hasMore).toBe(false)
+    expect(tab.deepScanning).toBe(false)
+    expect(tab.scanning).toBe(false)
+  })
+
+  it('останавливается по Cancel и сохраняет то, что уже нашёл', async () => {
+    let calls = 0
+    const fetchMock = vi.fn(() => {
+      calls += 1
+      // На третьем шаге отменяем прямо во время выполнения запроса.
+      if (calls === 3) {
+        useKafkaStore.getState().cancelScanAll('tab-cancel')
+      }
+      return Promise.resolve(scanPage(5000, calls === 2 ? [10005] : [], true, 30000 - calls * 5000))
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cancel', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-cancel')
+
+    const tab = useKafkaStore.getState().tabs['tab-cancel']
+    expect(tab.deepScanning).toBe(false)
+    // Найденное до отмены не теряется.
+    expect(tab.messages.map((m) => m.offset)).toEqual([10005])
+    // И видно, сколько успели прочитать: топик дочитан не до конца.
+    expect(tab.scanned).toBeGreaterThan(0)
+    expect(tab.hasMore).toBe(true)
+    expect(tab.deepScanCanceled).toBe(true)
+  })
+
+  it('не зацикливается, если бэкенд вернул тот же курсор', async () => {
+    const fetchMock = vi.fn(() => Promise.resolve(scanPage(10, [], true, 777)))
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stuck', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-stuck')
+
+    // Первый запрос — сам поиск, дальше ровно один шаг цикла, который не сдвинул
+    // курсор, после чего цикл обязан остановиться.
+    expect(fetchMock.mock.calls.length).toBeLessThanOrEqual(3)
+    expect(useKafkaStore.getState().tabs['tab-stuck'].deepScanning).toBe(false)
+  })
+})
