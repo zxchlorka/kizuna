@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  fieldPresence,
   formatPath,
   matchField,
   parsePath,
@@ -123,5 +124,57 @@ describe('traversePath', () => {
 
   it('returns no leaves for a missing path', () => {
     expect(traversePath({ a: 1 }, 'a.b.c')).toEqual([])
+  })
+})
+
+describe('fieldPresence — поиск по наличию поля', () => {
+  // Реальная форма сообщения: массив с одним объектом, Metadata опциональна.
+  const withMeta = '[{"UserID":2000,"Metadata":{"marketing_device_id":"x"}}]'
+  const noMeta = '[{"UserID":2000,"Field":"Gender"}]'
+  const nullMeta = '[{"UserID":2000,"Metadata":null}]'
+  const deepMeta = '[{"wrapper":{"inner":{"Metadata":{"a":1}}}}]'
+
+  it('finds a top-level optional field by bare name', () => {
+    expect(fieldPresence(withMeta, 'Metadata', true)).toBe(true)
+  })
+
+  it('does not find a field that is absent', () => {
+    expect(fieldPresence(noMeta, 'Metadata', true)).toBe(false)
+  })
+
+  it('treats a null value as present', () => {
+    expect(fieldPresence(nullMeta, 'Metadata', true)).toBe(true)
+  })
+
+  it('finds a field at any depth', () => {
+    expect(fieldPresence(deepMeta, 'Metadata', true)).toBe(true)
+  })
+
+  it('finds a nested leaf by its own name', () => {
+    expect(fieldPresence(withMeta, 'marketing_device_id', true)).toBe(true)
+  })
+
+  it('accepts a partial path', () => {
+    expect(fieldPresence(withMeta, 'Metadata.marketing_device_id', true)).toBe(true)
+  })
+
+  it('accepts the explicit array path', () => {
+    expect(fieldPresence(withMeta, '[].Metadata', true)).toBe(true)
+  })
+
+  it('inverts for the missing query', () => {
+    expect(fieldPresence(noMeta, 'Metadata', false)).toBe(true)
+    expect(fieldPresence(withMeta, 'Metadata', false)).toBe(false)
+  })
+
+  // Не-JSON не матчится ни одним оператором: у него нет JSON-полей вообще, и
+  // выдавать его на 'missing' значило бы утопить выдачу в мусоре.
+  it('never matches a non-JSON payload, not even for missing', () => {
+    expect(fieldPresence('plain text', 'Metadata', true)).toBe(false)
+    expect(fieldPresence('plain text', 'Metadata', false)).toBe(false)
+  })
+
+  it('an empty path matches everything (no filtering)', () => {
+    expect(fieldPresence(noMeta, '   ', true)).toBe(true)
   })
 })

@@ -386,7 +386,7 @@ func TestParseBeforeOffsets(t *testing.T) {
 func TestParseMatchFilter(t *testing.T) {
 	t.Parallel()
 
-	field, value := parseMatchFilter([]connector.FilterExpr{
+	field, value, _ := parseMatchFilter([]connector.FilterExpr{
 		{Column: "match_field", Value: " user.id "},
 		{Column: "match_value", Value: "42"},
 	})
@@ -394,7 +394,7 @@ func TestParseMatchFilter(t *testing.T) {
 		t.Fatalf("unexpected match filter: field=%q value=%q", field, value)
 	}
 
-	if field, _ := parseMatchFilter(nil); field != "" {
+	if field, _, _ := parseMatchFilter(nil); field != "" {
 		t.Fatalf("expected empty field for no filter, got %q", field)
 	}
 }
@@ -433,7 +433,7 @@ func TestMessageMatchesField(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := messageMatchesField(tc.row, tc.field, tc.want); got != tc.match {
+			if got := messageMatchesField(tc.row, tc.field, tc.want, matchOpEquals); got != tc.match {
 				t.Fatalf("messageMatchesField = %v, want %v", got, tc.match)
 			}
 		})
@@ -816,7 +816,7 @@ func TestJSONPathSharedFixtures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			row := map[string]any{"format": "json", "value": tc.doc}
-			if got := messageMatchesField(row, tc.path, tc.want); got != tc.match {
+			if got := messageMatchesField(row, tc.path, tc.want, matchOpEquals); got != tc.match {
 				t.Fatalf("messageMatchesField(%q, %q, %q) = %v, want %v", tc.doc, tc.path, tc.want, got, tc.match)
 			}
 		})
