@@ -280,7 +280,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if err != nil {
 		return nil, err
 	}
-	matchField, matchValue := parseMatchFilter(opts.Filters)
+	matchField, matchValue, matchOperator := parseMatchFilter(opts.Filters)
 	scanning := matchField != ""
 	seek, err := parseSeek(opts.Filters)
 	if err != nil {
@@ -462,7 +462,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		}
 		// Content search must inspect every candidate, so it deserializes them all
 		// before testing the match predicate.
-		rows = filterMatches(finalizeRows(rows), matchField, matchValue)
+		rows = filterMatches(finalizeRows(rows), matchField, matchValue, matchOperator)
 		meta["matched"] = len(rows)
 	} else {
 		// Deferred deserialization: only the rows that survived page selection are
@@ -1356,18 +1356,42 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 	return nil, nil
 }
 
+// matchOp is what a message must satisfy for the searched field.
+//
+// matchOpExists/matchOpMissing answer "does this field occur at all", which is
+// the only way to look for a field whose values you do not know yet — a newly
+// rolled-out optional field, for instance. matchOpEquals is the original
+// behavior and stays the default, so a request without match_op is unchanged.
+type matchOp string
+
+const (
+	matchOpEquals  matchOp = "eq"
+	matchOpExists  matchOp = "exists"
+	matchOpMissing matchOp = "missing"
+)
+
 // parseMatchFilter extracts the content-search predicate. An empty field means
-// no search (normal windowed paging). The value is compared verbatim.
-func parseMatchFilter(filters []connector.FilterExpr) (field string, value string) {
+// no search (normal windowed paging). The value is compared verbatim, and is
+// ignored entirely unless the op is matchOpEquals. An absent or unrecognized
+// match_op falls back to matchOpEquals.
+func parseMatchFilter(filters []connector.FilterExpr) (field string, value string, op matchOp) {
+	op = matchOpEquals
 	for _, filter := range filters {
 		switch strings.ToLower(strings.TrimSpace(filter.Column)) {
 		case "match_field":
 			field = strings.TrimSpace(filter.Value)
 		case "match_value":
 			value = filter.Value
+		case "match_op":
+			switch matchOp(strings.ToLower(strings.TrimSpace(filter.Value))) {
+			case matchOpExists:
+				op = matchOpExists
+			case matchOpMissing:
+				op = matchOpMissing
+			}
 		}
 	}
-	return field, value
+	return field, value, op
 }
 
 // buildPaginationCursor turns one GetData call's per-partition frontier into the
@@ -1592,10 +1616,10 @@ func lowestConsumedOffsets(rows []map[string]any) map[int32]int64 {
 }
 
 // filterMatches keeps only rows whose JSON value has field == value.
-func filterMatches(rows []map[string]any, field string, value string) []map[string]any {
+func filterMatches(rows []map[string]any, field string, value string, op matchOp) []map[string]any {
 	matches := make([]map[string]any, 0, 16)
 	for _, row := range rows {
-		if messageMatchesField(row, field, value) {
+		if messageMatchesField(row, field, value, op) {
 			matches = append(matches, row)
 		}
 	}
@@ -1615,7 +1639,12 @@ func filterMatches(rows []map[string]any, field string, value string) []map[stri
 // traversed implicitly without the '[]' marker ("events.name" == "events[].name").
 // The canonical TypeScript traversal is strict (root-anchored, '[]' required);
 // the shared fixture set uses full '[]' paths, on which both agree.
-func messageMatchesField(row map[string]any, field string, want string) bool {
+// The op decides what the resolved path must satisfy: equal to want, merely
+// present (any value, including null), or absent. A payload that is not JSON
+// matches NO op — including matchOpMissing. It technically lacks the field, but
+// so does every unrelated non-JSON record, and returning them all would bury the
+// messages the search is actually about.
+func messageMatchesField(row map[string]any, field string, want string, op matchOp) bool {
 	if field == "" {
 		return true
 	}
@@ -1634,7 +1663,26 @@ func messageMatchesField(row map[string]any, field string, want string) bool {
 	if len(segments) == 0 {
 		return false
 	}
-	return jsonPathMatchesAnywhere(parsed, segments, want)
+
+	switch op {
+	case matchOpExists:
+		return jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
+	case matchOpMissing:
+		return !jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
+	default:
+		return jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
+	}
+}
+
+// leafPredicate decides whether a fully resolved path counts as a match.
+type leafPredicate func(leaf any) bool
+
+// anyLeaf accepts whatever the path resolved to: reaching the leaf at all is
+// what "the field exists" means, so null and empty objects count as present.
+func anyLeaf(any) bool { return true }
+
+func equalsLeaf(want string) leafPredicate {
+	return func(leaf any) bool { return jsonLeafEquals(leaf, want) }
 }
 
 type jsonPathSegmentKind int
@@ -1727,20 +1775,20 @@ func parseJSONPath(field string) []jsonPathSegment {
 // every child so a hand-typed suffix path ("events[].name", "name") still finds
 // a nested match. Full paths from the root match on the first (root-anchored)
 // attempt, so this suffix fallback never changes their result.
-func jsonPathMatchesAnywhere(value any, segments []jsonPathSegment, want string) bool {
-	if jsonPathMatchesFrom(value, segments, want) {
+func jsonPathMatchesAnywhere(value any, segments []jsonPathSegment, leaf leafPredicate) bool {
+	if jsonPathMatchesFrom(value, segments, leaf) {
 		return true
 	}
 	switch typed := value.(type) {
 	case map[string]any:
 		for _, child := range typed {
-			if jsonPathMatchesAnywhere(child, segments, want) {
+			if jsonPathMatchesAnywhere(child, segments, leaf) {
 				return true
 			}
 		}
 	case []any:
 		for _, child := range typed {
-			if jsonPathMatchesAnywhere(child, segments, want) {
+			if jsonPathMatchesAnywhere(child, segments, leaf) {
 				return true
 			}
 		}
@@ -1753,9 +1801,9 @@ func jsonPathMatchesAnywhere(value any, segments []jsonPathSegment, want string)
 // iterating its elements. For backward compatibility a 'key' segment landing on
 // an array is also traversed implicitly (each element retried with the same
 // segment), so "events.name" behaves like "events[].name".
-func jsonPathMatchesFrom(value any, segments []jsonPathSegment, want string) bool {
+func jsonPathMatchesFrom(value any, segments []jsonPathSegment, leaf leafPredicate) bool {
 	if len(segments) == 0 {
-		return jsonLeafEquals(value, want)
+		return leaf(value)
 	}
 	seg := segments[0]
 	switch typed := value.(type) {
@@ -1764,11 +1812,11 @@ func jsonPathMatchesFrom(value any, segments []jsonPathSegment, want string) boo
 			return false
 		}
 		child, ok := typed[seg.key]
-		return ok && jsonPathMatchesFrom(child, segments[1:], want)
+		return ok && jsonPathMatchesFrom(child, segments[1:], leaf)
 	case []any:
 		if seg.kind == jsonPathIndex {
 			for _, child := range typed {
-				if jsonPathMatchesFrom(child, segments[1:], want) {
+				if jsonPathMatchesFrom(child, segments[1:], leaf) {
 					return true
 				}
 			}
@@ -1776,7 +1824,7 @@ func jsonPathMatchesFrom(value any, segments []jsonPathSegment, want string) boo
 		}
 		// Legacy implicit array traversal for a key segment.
 		for _, child := range typed {
-			if jsonPathMatchesFrom(child, segments, want) {
+			if jsonPathMatchesFrom(child, segments, leaf) {
 				return true
 			}
 		}

@@ -221,7 +221,7 @@ func TestKafkaMessageBrowseAndNestedSearchIntegration(t *testing.T) {
 	if len(search.Rows) != 1 {
 		t.Fatalf("nested search returned %d matches, want 1", len(search.Rows))
 	}
-	if !messageMatchesField(search.Rows[0], "src.event_data.events[].name", "Auth") {
+	if !messageMatchesField(search.Rows[0], "src.event_data.events[].name", "Auth", matchOpEquals) {
 		t.Fatal("nested search returned the wrong message")
 	}
 }

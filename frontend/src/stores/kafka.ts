@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { fetchWithTimeout, RequestAbortedError } from '@/lib/http'
-import { matchField } from '@/lib/jsonPaths'
+import { fieldPresence, matchField } from '@/lib/jsonPaths'
 import type { ColumnMeta, KafkaProduceRequest, KafkaProduceResult, ObjectItem } from '@/types/api'
 
 export interface KafkaMessageRow {
@@ -42,6 +42,7 @@ interface KafkaTopicTabState {
   // + this predicate (see filterLoadedMessages), so clearing it restores the
   // page and cursor instantly because they were never mutated.
   filterField: string
+  filterOp: KafkaMatchOp
   filterValue: string
   filterActive: boolean
 
@@ -51,6 +52,7 @@ interface KafkaTopicTabState {
   // holds the accumulated matches while a search session is active.
   searchField: string
   searchValue: string
+  searchOp: KafkaMatchOp
   searchActive: boolean
   scanning: boolean
   scanned: number
@@ -75,9 +77,15 @@ interface KafkaTopicTabState {
   messagesReturned: number
 }
 
+// What the searched field must satisfy. 'eq' is the original value search;
+// 'exists'/'missing' answer "does this field occur at all", which is the only
+// way to look for a field whose values are not known yet.
+export type KafkaMatchOp = 'eq' | 'exists' | 'missing'
+
 interface KafkaSearch {
   field: string
   value: string
+  op: KafkaMatchOp
 }
 
 // Which end of the log a browse starts from. 'newest' anchors at the end and
@@ -158,10 +166,17 @@ interface KafkaStore {
   // interchangeable.
   setDirection: (connId: string, topic: string, tabId: string, direction: KafkaDirection) => Promise<void>
   // Filter loaded (client-side, no network).
-  setLoadedFilter: (tabId: string, field: string, value: string) => void
+  setLoadedFilter: (tabId: string, field: string, value: string, op?: KafkaMatchOp) => void
   clearLoadedFilter: (tabId: string) => void
   // Search topic (budgeted backend scan).
-  searchTopic: (connId: string, topic: string, tabId: string, field: string, value: string) => Promise<void>
+  searchTopic: (
+    connId: string,
+    topic: string,
+    tabId: string,
+    field: string,
+    value: string,
+    op?: KafkaMatchOp
+  ) => Promise<void>
   scanMore: (connId: string, topic: string, tabId: string) => Promise<void>
   cancelScan: (tabId: string) => void
   clearSearch: (connId: string, topic: string, tabId: string) => Promise<void>
@@ -186,9 +201,11 @@ function defaultTabState(): KafkaTopicTabState {
     seekTimestamp: '',
     filterField: '',
     filterValue: '',
+    filterOp: 'eq',
     filterActive: false,
     searchField: '',
     searchValue: '',
+    searchOp: 'eq',
     searchActive: false,
     scanning: false,
     scanned: 0,
@@ -217,10 +234,14 @@ function ensureState(tabs: Record<string, KafkaTopicTabState>, tabId: string): K
 export function filterLoadedMessages(
   messages: KafkaMessageRow[],
   field: string,
-  value: string
+  value: string,
+  op: KafkaMatchOp = 'eq'
 ): KafkaMessageRow[] {
   const path = field.trim()
   if (path === '') return messages
+  if (op === 'exists' || op === 'missing') {
+    return messages.filter((row) => fieldPresence(row.value, path, op === 'exists'))
+  }
   return messages.filter((row) => matchField(row.value, path, value))
 }
 
@@ -328,6 +349,7 @@ async function requestMessages(
   if (search) {
     filters.push({ column: 'match_field', op: 'eq', value: search.field })
     filters.push({ column: 'match_value', op: 'eq', value: search.value })
+    filters.push({ column: 'match_op', op: 'eq', value: search.op })
   }
 
   const params = new URLSearchParams({ limit: '100' })
@@ -359,7 +381,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     if (current.scanning) return
     if (!reset && (!current.hasMore || !current.nextCursor)) return
 
-    const search: KafkaSearch = { field: current.searchField, value: current.searchValue }
+    const search: KafkaSearch = { field: current.searchField, value: current.searchValue, op: current.searchOp }
     const cursorOffsets = reset ? null : current.nextCursor
 
     // Supersede any lingering controller and register this step's own so Cancel
@@ -577,7 +599,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     refreshMessages: async (connId, topic, tabId) => {
       const current = ensureState(get().tabs, tabId)
       if (current.searchActive) {
-        await get().searchTopic(connId, topic, tabId, current.searchField, current.searchValue)
+        await get().searchTopic(connId, topic, tabId, current.searchField, current.searchValue, current.searchOp)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
@@ -670,9 +692,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             hasMore: false,
             filterField: '',
             filterValue: '',
+            filterOp: 'eq',
             filterActive: false,
             searchField: '',
             searchValue: '',
+            searchOp: 'eq',
             searchActive: false,
             scanning: false,
             scanned: 0,
@@ -719,7 +743,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         },
       }))
       if (previous.searchActive && previous.searchField) {
-        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue)
+        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue, previous.searchOp)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
@@ -753,13 +777,13 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
       // A search survives the flip for the same reason it survives a seek: the
       // direction changes which part of the log is swept, not what is looked for.
       if (previous.searchActive && previous.searchField) {
-        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue)
+        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue, previous.searchOp)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
     },
 
-    setLoadedFilter: (tabId, field, value) => {
+    setLoadedFilter: (tabId, field, value, op = 'eq') => {
       const trimmed = field.trim()
       set((state) => ({
         tabs: {
@@ -767,7 +791,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           [tabId]: {
             ...ensureState(state.tabs, tabId),
             filterField: trimmed,
-            filterValue: value,
+            filterValue: op === 'eq' ? value : '',
+            filterOp: op,
             filterActive: trimmed !== '',
           },
         },
@@ -782,13 +807,14 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             ...ensureState(state.tabs, tabId),
             filterField: '',
             filterValue: '',
+            filterOp: 'eq',
             filterActive: false,
           },
         },
       }))
     },
 
-    searchTopic: async (connId, topic, tabId, field, value) => {
+    searchTopic: async (connId, topic, tabId, field, value, op = 'eq') => {
       const trimmed = field.trim()
       if (trimmed === '') return
       set((state) => ({
@@ -797,12 +823,16 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           [tabId]: {
             ...ensureState(state.tabs, tabId),
             searchField: trimmed,
-            searchValue: value,
+            // A presence search has no value to compare; keep it empty so a
+            // stale one cannot leak back in when the op switches to 'eq'.
+            searchValue: op === 'eq' ? value : '',
+            searchOp: op,
             searchActive: true,
             // A topic scan replaces the loaded view with its matches; drop any
             // client-side filter so the two operations never stack on one set.
             filterField: '',
             filterValue: '',
+            filterOp: 'eq',
             filterActive: false,
           },
         },
@@ -833,6 +863,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             ...ensureState(state.tabs, tabId),
             searchField: '',
             searchValue: '',
+            searchOp: 'eq',
             searchActive: false,
             scanning: false,
             scanned: 0,

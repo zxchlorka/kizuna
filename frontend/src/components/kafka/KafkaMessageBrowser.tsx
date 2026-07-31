@@ -13,7 +13,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
-import { filterLoadedMessages, type KafkaDirection, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
+import {
+  filterLoadedMessages,
+  type KafkaDirection,
+  type KafkaMatchOp,
+  type KafkaMessageRow,
+  type KafkaSeek,
+} from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -28,10 +34,12 @@ interface KafkaMessageBrowserProps {
   filterActive: boolean
   filterField: string
   filterValue: string
+  filterOp: KafkaMatchOp
   // Search topic (backend scan).
   searchActive: boolean
   searchField: string
   searchValue: string
+  searchOp: KafkaMatchOp
   scanning: boolean
   scanned: number
   scanPartial: boolean
@@ -48,9 +56,9 @@ interface KafkaMessageBrowserProps {
   onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
-  onFilterLoaded: (field: string, value: string) => void
+  onFilterLoaded: (field: string, value: string, op: KafkaMatchOp) => void
   onClearFilter: () => void
-  onSearchTopic: (field: string, value: string) => void
+  onSearchTopic: (field: string, value: string, op: KafkaMatchOp) => void
   onScanMore: () => void
   onCancelScan: () => void
   onClearSearch: () => void
@@ -79,9 +87,11 @@ export function KafkaMessageBrowser({
   filterActive,
   filterField,
   filterValue,
+  filterOp,
   searchActive,
   searchField,
   searchValue,
+  searchOp,
   scanning,
   scanned,
   scanPartial,
@@ -110,6 +120,9 @@ export function KafkaMessageBrowser({
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
+  // 'exists'/'missing' ищут САМ ФАКТ наличия поля — единственный способ искать
+  // поле, значений которого ещё не знаешь (только раскатывается, например).
+  const [opInput, setOpInput] = useState<KafkaMatchOp>('eq')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -122,15 +135,16 @@ export function KafkaMessageBrowser({
     if (searchField) {
       setFieldInput(searchField)
       setValueInput(searchValue)
+      setOpInput(searchOp)
     }
-  }, [searchField, searchValue])
+  }, [searchField, searchValue, searchOp])
 
   // The visible table rows: raw loaded messages, narrowed by the client-side
   // "Filter loaded" predicate when one is applied. During a topic search the
   // messages ARE the scan matches and no client filter applies.
   const visibleMessages = useMemo(
-    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue) : messages),
-    [filterActive, filterField, filterValue, messages]
+    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue, filterOp) : messages),
+    [filterActive, filterField, filterValue, filterOp, messages]
   )
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
@@ -146,7 +160,7 @@ export function KafkaMessageBrowser({
   const submitFilter = (event: FormEvent) => {
     event.preventDefault()
     if (!canFilter) return
-    onFilterLoaded(fieldInput, valueInput)
+    onFilterLoaded(fieldInput, valueInput, opInput)
   }
 
   return (
@@ -240,14 +254,26 @@ export function KafkaMessageBrowser({
           <ListTree className="h-3.5 w-3.5" />
           Choose field
         </Button>
+        <select
+          value={opInput}
+          onChange={(event) => setOpInput(event.target.value as KafkaMatchOp)}
+          aria-label="Match operator"
+          title="equals — compare the value. has field / no field — look for the field itself, at any depth."
+          className="h-8 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none focus:border-orange-500/50"
+        >
+          <option value="eq">equals</option>
+          <option value="exists">has field</option>
+          <option value="missing">no field</option>
+        </select>
         <input
-          value={valueInput}
+          value={opInput === 'eq' ? valueInput : ''}
           onChange={(event) => setValueInput(event.target.value)}
-          placeholder="equals value"
+          placeholder={opInput === 'eq' ? 'equals value' : 'not used'}
           aria-label="Expected JSON field value"
+          disabled={opInput !== 'eq'}
           spellCheck={false}
           autoComplete="off"
-          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50 disabled:cursor-not-allowed disabled:opacity-50"
         />
         <Button
           type="submit"
@@ -491,7 +517,7 @@ export function KafkaMessageBrowser({
               size="sm"
               onClick={() => {
                 setConfirmOpen(false)
-                onSearchTopic(fieldInput, valueInput)
+                onSearchTopic(fieldInput, valueInput, opInput)
               }}
             >
               Search topic
