@@ -15,6 +15,7 @@ import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/lin
 import { cn } from '@/lib/utils'
 import {
   filterLoadedMessages,
+  MAX_SCAN_MATCHES,
   type KafkaDirection,
   type KafkaMatchOp,
   type KafkaMessageRow,
@@ -43,6 +44,9 @@ interface KafkaMessageBrowserProps {
   scanning: boolean
   scanned: number
   scanPartial: boolean
+  // The search stopped because it filled up on matches, not because the log ran
+  // out. Continuing is not offered: there is nowhere to put more rows.
+  scanLimitReached: boolean
   // Browse anchor — where reading starts. Composes with the search above rather
   // than replacing it: the seek narrows the range, the search narrows the rows.
   seek: KafkaSeek
@@ -99,6 +103,7 @@ export function KafkaMessageBrowser({
   scanning,
   scanned,
   scanPartial,
+  scanLimitReached,
   seek,
   partitionsWindowed,
   partitionsTotal,
@@ -327,8 +332,12 @@ export function KafkaMessageBrowser({
             {scanning || deepScanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} ·{' '}
             {messages.length.toLocaleString()} matches
             {!scanning && !deepScanning && deepScanCanceled && hasMore && ' · canceled'}
-            {!scanning && !deepScanning && !deepScanCanceled && scanPartial && ' · stopped at scan budget'}
-            {!scanning && !deepScanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
+            {/* The match ceiling outranks the budget note: both mean "stopped
+                early", but this one also explains why there is no way to
+                continue, so saying anything else here would be misleading. */}
+            {!scanning && !deepScanning && !deepScanCanceled && scanLimitReached && ' · stopped at the match limit'}
+            {!scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && scanPartial && ' · stopped at scan budget'}
+            {!scanning && !deepScanning && !scanLimitReached && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
           {scanning || deepScanning ? (
             // Во время автопрохода эта кнопка обязана значить то же, что и
@@ -440,6 +449,14 @@ export function KafkaMessageBrowser({
               <X className="h-3.5 w-3.5" />
               Cancel · scanned {scanned.toLocaleString()}
             </Button>
+          ) : scanLimitReached ? (
+            // Продолжать некуда: место под результаты кончилось, а не лог.
+            // Кнопки убраны, потому что нажатие всё равно не добавило бы ни
+            // одной строки — вместо этого написано, что делать дальше.
+            <p className="rounded-sm border border-border/70 bg-muted/20 px-3 py-2 font-mono text-[11px] text-muted-foreground">
+              Stopped at {MAX_SCAN_MATCHES.toLocaleString()} matches. Narrow the search — by value, partition or seek — to
+              look further into the log.
+            </p>
           ) : (
             <div className="flex gap-2">
               <Button

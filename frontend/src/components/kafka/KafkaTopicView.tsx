@@ -231,6 +231,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
             scanPartial={tab?.scanPartial ?? false}
+            scanLimitReached={tab?.scanLimitReached ?? false}
             seek={{ offset: tab?.seekOffset ?? '', timestamp: tab?.seekTimestamp ?? '' }}
             partitionsWindowed={tab?.partitionsWindowed ?? 0}
             partitionsTotal={tab?.partitionsTotal ?? 0}
