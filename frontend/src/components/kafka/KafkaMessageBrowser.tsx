@@ -13,7 +13,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
-import { filterLoadedMessages, type KafkaDirection, type KafkaMessageRow, type KafkaSeek } from '@/stores/kafka'
+import {
+  filterLoadedMessages,
+  type KafkaDirection,
+  type KafkaMatchOp,
+  type KafkaMessageRow,
+  type KafkaSeek,
+} from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -28,10 +34,12 @@ interface KafkaMessageBrowserProps {
   filterActive: boolean
   filterField: string
   filterValue: string
+  filterOp: KafkaMatchOp
   // Search topic (backend scan).
   searchActive: boolean
   searchField: string
   searchValue: string
+  searchOp: KafkaMatchOp
   scanning: boolean
   scanned: number
   scanPartial: boolean
@@ -48,10 +56,14 @@ interface KafkaMessageBrowserProps {
   onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
-  onFilterLoaded: (field: string, value: string) => void
+  onFilterLoaded: (field: string, value: string, op: KafkaMatchOp) => void
   onClearFilter: () => void
-  onSearchTopic: (field: string, value: string) => void
+  onSearchTopic: (field: string, value: string, op: KafkaMatchOp) => void
   onScanMore: () => void
+  onScanAll: () => void
+  onCancelScanAll: () => void
+  deepScanning: boolean
+  deepScanCanceled: boolean
   onCancelScan: () => void
   onClearSearch: () => void
   links: LinkRecord[]
@@ -79,9 +91,11 @@ export function KafkaMessageBrowser({
   filterActive,
   filterField,
   filterValue,
+  filterOp,
   searchActive,
   searchField,
   searchValue,
+  searchOp,
   scanning,
   scanned,
   scanPartial,
@@ -98,6 +112,10 @@ export function KafkaMessageBrowser({
   onClearFilter,
   onSearchTopic,
   onScanMore,
+  onScanAll,
+  onCancelScanAll,
+  deepScanning,
+  deepScanCanceled,
   onCancelScan,
   onClearSearch,
   links,
@@ -110,6 +128,9 @@ export function KafkaMessageBrowser({
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
   const [fieldInput, setFieldInput] = useState('')
   const [valueInput, setValueInput] = useState('')
+  // 'exists'/'missing' ищут САМ ФАКТ наличия поля — единственный способ искать
+  // поле, значений которого ещё не знаешь (только раскатывается, например).
+  const [opInput, setOpInput] = useState<KafkaMatchOp>('eq')
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -122,15 +143,16 @@ export function KafkaMessageBrowser({
     if (searchField) {
       setFieldInput(searchField)
       setValueInput(searchValue)
+      setOpInput(searchOp)
     }
-  }, [searchField, searchValue])
+  }, [searchField, searchValue, searchOp])
 
   // The visible table rows: raw loaded messages, narrowed by the client-side
   // "Filter loaded" predicate when one is applied. During a topic search the
   // messages ARE the scan matches and no client filter applies.
   const visibleMessages = useMemo(
-    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue) : messages),
-    [filterActive, filterField, filterValue, messages]
+    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue, filterOp) : messages),
+    [filterActive, filterField, filterValue, filterOp, messages]
   )
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
@@ -146,7 +168,7 @@ export function KafkaMessageBrowser({
   const submitFilter = (event: FormEvent) => {
     event.preventDefault()
     if (!canFilter) return
-    onFilterLoaded(fieldInput, valueInput)
+    onFilterLoaded(fieldInput, valueInput, opInput)
   }
 
   return (
@@ -240,14 +262,26 @@ export function KafkaMessageBrowser({
           <ListTree className="h-3.5 w-3.5" />
           Choose field
         </Button>
+        <select
+          value={opInput}
+          onChange={(event) => setOpInput(event.target.value as KafkaMatchOp)}
+          aria-label="Match operator"
+          title="equals — compare the value. has field / no field — look for the field itself, at any depth."
+          className="h-8 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none focus:border-orange-500/50"
+        >
+          <option value="eq">equals</option>
+          <option value="exists">has field</option>
+          <option value="missing">no field</option>
+        </select>
         <input
-          value={valueInput}
+          value={opInput === 'eq' ? valueInput : ''}
           onChange={(event) => setValueInput(event.target.value)}
-          placeholder="equals value"
+          placeholder={opInput === 'eq' ? 'equals value' : 'not used'}
           aria-label="Expected JSON field value"
+          disabled={opInput !== 'eq'}
           spellCheck={false}
           autoComplete="off"
-          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50 disabled:cursor-not-allowed disabled:opacity-50"
         />
         <Button
           type="submit"
@@ -290,12 +324,23 @@ export function KafkaMessageBrowser({
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
           {scanning && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
           <span>
-            {scanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} · {messages.length.toLocaleString()} matches
-            {!scanning && scanPartial && ' · stopped at scan budget'}
-            {!scanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
+            {scanning || deepScanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} ·{' '}
+            {messages.length.toLocaleString()} matches
+            {!scanning && !deepScanning && deepScanCanceled && hasMore && ' · canceled'}
+            {!scanning && !deepScanning && !deepScanCanceled && scanPartial && ' · stopped at scan budget'}
+            {!scanning && !deepScanning && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
-          {scanning ? (
-            <Button type="button" size="sm" variant="outline" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onCancelScan}>
+          {scanning || deepScanning ? (
+            // Во время автопрохода эта кнопка обязана значить то же, что и
+            // большая внизу: оборвать ВЕСЬ цикл. Иначе она гасила бы только
+            // текущий шаг, а цикл шёл бы дальше — два «Cancel» с разным смыслом.
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+              onClick={deepScanning ? onCancelScanAll : onCancelScan}
+            >
               <X className="h-3 w-3" />
               Cancel
             </Button>
@@ -382,17 +427,46 @@ export function KafkaMessageBrowser({
 
       {hasMore &&
         (searchActive ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="h-8 w-full gap-1.5 font-mono text-[11px]"
-            disabled={scanning}
-            onClick={onScanMore}
-          >
-            {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
-            {scanning ? 'Scanning…' : 'Scan more'}
-          </Button>
+          deepScanning ? (
+            // Во время автоцикла единственное осмысленное действие — прервать
+            // его: найденное и счётчик прочитанного остаются на экране.
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 w-full gap-1.5 font-mono text-[11px]"
+              onClick={onCancelScanAll}
+            >
+              <X className="h-3.5 w-3.5" />
+              Cancel · scanned {scanned.toLocaleString()}
+            </Button>
+          ) : (
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 flex-1 gap-1.5 font-mono text-[11px]"
+                disabled={scanning}
+                onClick={onScanMore}
+              >
+                {scanning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ChevronsDown className="h-3.5 w-3.5" />}
+                {scanning ? 'Scanning…' : 'Scan more'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 flex-1 gap-1.5 font-mono text-[11px]"
+                disabled={scanning}
+                onClick={onScanAll}
+                title="Keep scanning older messages until the beginning of the log. Cancel anytime — matches found so far stay."
+              >
+                <ChevronsDown className="h-3.5 w-3.5" />
+                Search all
+              </Button>
+            </div>
+          )
         ) : (
           <Button
             type="button"
@@ -491,7 +565,7 @@ export function KafkaMessageBrowser({
               size="sm"
               onClick={() => {
                 setConfirmOpen(false)
-                onSearchTopic(fieldInput, valueInput)
+                onSearchTopic(fieldInput, valueInput, opInput)
               }}
             >
               Search topic

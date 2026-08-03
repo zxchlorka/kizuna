@@ -293,7 +293,7 @@ func TestKafkaRepresentativeQAIntegration(t *testing.T) {
 		if len(res.Rows) != 1 {
 			t.Fatalf("nested Auth search returned %d matches, want exactly 1", len(res.Rows))
 		}
-		if !messageMatchesField(res.Rows[0], "src.event_data.events[].name", "Auth") {
+		if !messageMatchesField(res.Rows[0], "src.event_data.events[].name", "Auth", matchOpEquals) {
 			t.Fatal("nested Auth search returned the wrong message")
 		}
 		t.Logf("nested_array_auth_search matched=%d scanned=%v partial_scan=%v",
