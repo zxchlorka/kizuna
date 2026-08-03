@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState, type MouseEvent } from 'react'
-import { KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -29,18 +29,30 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
-import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel } from '@/components/ui/floating-menu'
+import { LINK_MENU_CAP, LinkPickerDialog, type LinkPickerItem } from '@/components/links/LinkPickerDialog'
+import {
+  FloatingMenu,
+  FloatingMenuItem,
+  FloatingMenuLabel,
+  FloatingMenuSeparator,
+} from '@/components/ui/floating-menu'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
 import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
 import {
   canReverse,
   captureFromKey,
   extractRedisValue,
+  isPerElementExtract,
+  keyLevelRedisLinks,
   linkSourceLabel,
+  linkSummary,
   linkTargetLabel,
+  memberRedisLinks,
   redisKeyMatchesPattern,
+  selectionRedisLinks,
   suggestKeyPattern,
 } from '@/lib/links'
+import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
@@ -84,6 +96,12 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const fetchLinks = useLinksStore((state) => state.fetch)
   const openLinkTarget = useOpenLinkTarget()
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
+  // Непусто, когда диалог открыт из меню элемента: предзаполняет режим selection
+  // и поле, по которому кликнули.
+  const [createFromElement, setCreateFromElement] = useState<{ field?: string } | null>(null)
+  const [pickerGroup, setPickerGroup] = useState<'key' | 'reverse' | 'perElement' | 'member' | 'selection' | null>(
+    null
+  )
 
   useEffect(() => {
     void fetchData(connId, object, tabId)
@@ -93,35 +111,66 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     void fetchLinks().catch(() => undefined)
   }, [fetchLinks])
 
-  const keyLinks = useMemo(
+  const keyLinks = useMemo(() => keyLevelRedisLinks(links, connId, object), [links, connId, object])
+  const memberLinks = useMemo(() => memberRedisLinks(links, connId, object), [links, connId, object])
+
+  const [memberMenu, setMemberMenu] = useState<{
+    x: number
+    y: number
+    member: string
+    field?: string
+    token: string | null
+  } | null>(null)
+
+  // Линки, применимые к точке, по которой кликнули: у хэша это поле строки,
+  // у коллекций поля нет и подходят только линки без source_field.
+  const elementSelectionLinks = useMemo(
+    () => selectionRedisLinks(links, connId, object, memberMenu?.field),
+    [links, connId, object, memberMenu?.field]
+  )
+
+  // Для справочной группы в шапке нужны ВСЕ per-element линки ключа, независимо
+  // от поля — пользователь должен видеть, что линк существует. Поэтому здесь
+  // прямой фильтр, а не selectionRedisLinks: тот сузил бы список до линков без
+  // source_field.
+  const perElementLinks = useMemo(
     () =>
       links.filter(
         (link) =>
           link.source_conn_id === connId &&
           link.source_kind === 'redis' &&
-          // member links are per-element (right-click a row), not key-level —
-          // they have no single key value, so keep them out of the header menu.
-          link.source_extract !== 'member' &&
+          isPerElementExtract(link.source_extract) &&
           redisKeyMatchesPattern(link.source_scope, object)
       ),
     [links, connId, object]
   )
 
-  const memberLinks = useMemo(
-    () =>
-      links.filter(
-        (link) =>
-          link.source_conn_id === connId &&
-          link.source_kind === 'redis' &&
-          link.source_extract === 'member' &&
-          redisKeyMatchesPattern(link.source_scope, object)
-      ),
-    [links, connId, object]
-  )
-  const [memberMenu, setMemberMenu] = useState<{ x: number; y: number; value: string } | null>(null)
-  const handleElementContextMenu = (value: string, event: MouseEvent) => {
+  const handleElementContextMenu = (value: string, event: MouseEvent, field?: string) => {
     event.preventDefault()
-    setMemberMenu({ x: event.clientX, y: event.clientY, value })
+    setMemberMenu({
+      x: event.clientX,
+      y: event.clientY,
+      member: value,
+      field,
+      // Значение фрагмента считается в момент клика: позже выделение может
+      // слететь от самого открытия меню.
+      token: valueAtPoint(event.clientX, event.clientY, event.currentTarget),
+    })
+  }
+
+  // Строковое значение живёт в textarea: там нет текстовых узлов, по которым
+  // работает caret-хиттест, поэтому значение берётся только из собственного
+  // выделения поля.
+  const handleStringContextMenu = (selected: string, event: MouseEvent) => {
+    event.preventDefault()
+    const token = trimToken(selected)
+    setMemberMenu({
+      x: event.clientX,
+      y: event.clientY,
+      member: selected,
+      field: undefined,
+      token: token === '' ? null : token,
+    })
   }
 
   const openLinkSource = useOpenLinkSource()
@@ -138,6 +187,86 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   )
 
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
+  const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
+
+  // Полный список группы для модалки: в меню помещается только LINK_MENU_CAP
+  // пунктов, здесь — всё, с полными метками.
+  const pickerItems = useMemo<LinkPickerItem[]>(() => {
+    if (pickerGroup === 'key') {
+      return keyLinks.map((link) => {
+        const value = extractRedisValue(link, object, stringValue, rows)
+        return {
+          id: link.id,
+          label: value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkTarget(link, value)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'reverse') {
+      return reverseLinks.map((link) => {
+        const value = captureFromKey(link.key_pattern ?? '', object)
+        return {
+          id: link.id,
+          label: value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkSource(link, value)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'perElement') {
+      return perElementLinks.map((link) => ({
+        id: link.id,
+        label: linkSummary(link),
+        disabled: true,
+        onPick: () => undefined,
+      }))
+    }
+    if (pickerGroup === 'member' && memberMenu) {
+      const member = memberMenu.member
+      return memberLinks.map((link) => ({
+        id: link.id,
+        label: linkTargetLabel(link, member),
+        onPick: () => {
+          openLinkTarget(link, member)
+          setMemberMenu(null)
+        },
+      }))
+    }
+    if (pickerGroup === 'selection' && memberMenu) {
+      const token = memberMenu.token
+      return elementSelectionLinks.map((link) => ({
+        id: link.id,
+        label: linkTargetLabel(link, token),
+        disabled: token === null,
+        onPick: () => {
+          if (token !== null) {
+            openLinkTarget(link, token)
+            setMemberMenu(null)
+          }
+        },
+      }))
+    }
+    return []
+  }, [
+    pickerGroup,
+    keyLinks,
+    reverseLinks,
+    perElementLinks,
+    memberLinks,
+    elementSelectionLinks,
+    memberMenu,
+    object,
+    stringValue,
+    rows,
+    openLinkTarget,
+    openLinkSource,
+  ])
+
   const hashFieldNames = useMemo(
     () => rows.map((r) => String(r.field ?? '')).filter((name) => name !== ''),
     [rows]
@@ -154,7 +283,13 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const currentTTL = typeof meta.ttl === 'number' ? meta.ttl : (ttlSeconds ?? null)
   const ttlLabel = formatRedisTTL(currentTTL)
   const isJson = Boolean(meta.is_json)
+  const hasBinary = Boolean(meta.has_binary)
   const readOnly = connection?.read_only ?? false
+  // Значение не UTF-8: бэкенд отдал его в escape-форме \xNN. Записать этот текст
+  // обратно как обычную строку значило бы уничтожить исходные байты, поэтому
+  // правки значений запрещаются. Удаление ключа и смена TTL при этом безопасны и
+  // остаются доступными — отсюда отдельный флаг, а не общий readOnly.
+  const valueEditingDisabled = readOnly || hasBinary
 
   const refresh = async () => {
     await fetchData(connId, object, tabId)
@@ -195,11 +330,19 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   const listOffset = opts?.offset ?? 0
   const listLimit = opts?.limit ?? 50
-  const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
 
   const redisContent = (() => {
     if (normalizedType === 'redis_string') {
-      return <StringEditor value={stringValue} isJson={isJson} saving={saving} readOnly={readOnly} onSave={(value) => runMutation({ type: 'update', data: { value } })} />
+      return (
+        <StringEditor
+          value={stringValue}
+          isJson={isJson}
+          saving={saving}
+          readOnly={valueEditingDisabled}
+          onSave={(value) => runMutation({ type: 'update', data: { value } })}
+          onSelectionContextMenu={handleStringContextMenu}
+        />
+      )
     }
 
     if (normalizedType === 'redis_hash') {
@@ -207,11 +350,16 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <HashEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onUpdate={(field, value) => runMutation({ type: 'update', where: { field }, data: { value } })}
           onDelete={(field) => runMutation({ type: 'delete', where: { field } })}
           onInsert={(field, value) => runMutation({ type: 'insert', data: { field, value } })}
-          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
+          onElementContextMenu={handleElementContextMenu}
+          readOnlyNote={
+            hasBinary && !readOnly
+              ? 'Value is not valid UTF-8. Shown as \\xNN escapes; editing is disabled so the original bytes survive.'
+              : undefined
+          }
         />
       )
     }
@@ -221,7 +369,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <ListEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           offset={listOffset}
           limit={listLimit}
           total={total}
@@ -238,7 +386,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             setOpts(tabId, nextOpts)
             void fetchData(connId, object, tabId, nextOpts)
           }}
-          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
+          onElementContextMenu={handleElementContextMenu}
         />
       )
     }
@@ -248,10 +396,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SetEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onInsert={(member) => runMutation({ type: 'insert', data: { member } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
-          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
+          onElementContextMenu={handleElementContextMenu}
         />
       )
     }
@@ -261,11 +409,11 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         <SortedSetEditor
           rows={rows}
           saving={saving}
-          readOnly={readOnly}
+          readOnly={valueEditingDisabled}
           onUpdateScore={(member, score) => runMutation({ type: 'update', where: { member }, data: { score } })}
           onDelete={(member) => runMutation({ type: 'delete', where: { member } })}
           onInsert={(member, score) => runMutation({ type: 'insert', data: { member, score } })}
-          onElementContextMenu={memberLinks.length > 0 ? handleElementContextMenu : undefined}
+          onElementContextMenu={handleElementContextMenu}
         />
       )
     }
@@ -380,6 +528,15 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         {ttlLabel}
                       </button>
                     )}
+                    {hasBinary && (
+                      <span
+                        className="inline-flex items-center rounded-sm border border-sky-500/30 bg-sky-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-sky-600 dark:text-sky-400"
+                        title="Value is not valid UTF-8. Shown as \xNN escapes; editing is disabled so the original bytes are not destroyed."
+                      >
+                        <Binary className="mr-1 h-3 w-3" />
+                        Binary
+                      </span>
+                    )}
                   </div>
                 </div>
               </div>
@@ -392,8 +549,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       Links
                     </Button>
                   </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    {keyLinks.map((link) => {
+                  {/* max-w — та же защита, что и у FloatingMenu: длина значения
+                      линка не должна определять ширину меню. */}
+                  <DropdownMenuContent align="end" className="max-w-[36rem]">
+                    {keyLinks.slice(0, LINK_MENU_CAP).map((link) => {
                       const value = extractRedisValue(link, object, stringValue, rows)
                       return (
                         <DropdownMenuItem
@@ -404,17 +563,24 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                           }}
                           className="font-mono text-xs"
                         >
-                          {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+                          <span className="block min-w-0 max-w-[32rem] truncate">
+                            {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+                          </span>
                         </DropdownMenuItem>
                       )
                     })}
+                    {keyLinks.length > LINK_MENU_CAP && (
+                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('key')}>
+                        {`Show all (${keyLinks.length})…`}
+                      </DropdownMenuItem>
+                    )}
                     {reverseLinks.length > 0 && <DropdownMenuSeparator />}
                     {reverseLinks.length > 0 && (
                       <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                         Back to source
                       </div>
                     )}
-                    {reverseLinks.map((link) => {
+                    {reverseLinks.slice(0, LINK_MENU_CAP).map((link) => {
                       const value = captureFromKey(link.key_pattern ?? '', object)
                       return (
                         <DropdownMenuItem
@@ -425,11 +591,37 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                           }}
                           className="font-mono text-xs"
                         >
-                          {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
+                          <span className="block min-w-0 max-w-[32rem] truncate">
+                            {value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value)}
+                          </span>
                         </DropdownMenuItem>
                       )
                     })}
-                    {keyLinks.length > 0 && <DropdownMenuSeparator />}
+                    {reverseLinks.length > LINK_MENU_CAP && (
+                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('reverse')}>
+                        {`Show all (${reverseLinks.length})…`}
+                      </DropdownMenuItem>
+                    )}
+                    {/* Per-element линки некликабельны в шапке: у них нет значения
+                        на уровне ключа. Показываем справочно, чтобы линк не
+                        выглядел пропавшим — переход делается правым кликом. */}
+                    {perElementLinks.length > 0 && <DropdownMenuSeparator />}
+                    {perElementLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Per-element · right-click a value
+                      </div>
+                    )}
+                    {perElementLinks.slice(0, LINK_MENU_CAP).map((link) => (
+                      <DropdownMenuItem key={`pe-${link.id}`} disabled className="font-mono text-xs">
+                        <span className="block min-w-0 max-w-[32rem] truncate">{linkSummary(link)}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    {perElementLinks.length > LINK_MENU_CAP && (
+                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('perElement')}>
+                        {`Show all (${perElementLinks.length})…`}
+                      </DropdownMenuItem>
+                    )}
+                    {(keyLinks.length > 0 || perElementLinks.length > 0) && <DropdownMenuSeparator />}
                     <DropdownMenuItem className="font-mono text-xs" onClick={() => setCreateLinkOpen(true)}>
                       + Create link…
                     </DropdownMenuItem>
@@ -509,25 +701,93 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         sourceKind="redis"
         sourceScope={suggestKeyPattern(object)}
         sourceFieldOptions={hashFieldNames}
-        onOpenChange={setCreateLinkOpen}
+        initialExtract={createFromElement ? 'selection' : undefined}
+        initialSourceField={createFromElement?.field}
+        onOpenChange={(next) => {
+          setCreateLinkOpen(next)
+          if (!next) {
+            setCreateFromElement(null)
+          }
+        }}
       />
 
       {memberMenu && (
         <FloatingMenu x={memberMenu.x} y={memberMenu.y} onClose={() => setMemberMenu(null)}>
-          <FloatingMenuLabel>Open from element</FloatingMenuLabel>
-          {memberLinks.map((link) => (
+          {memberLinks.length > 0 && <FloatingMenuLabel>Open from element</FloatingMenuLabel>}
+          {memberLinks.slice(0, LINK_MENU_CAP).map((link) => (
             <FloatingMenuItem
               key={link.id}
               onClick={() => {
-                openLinkTarget(link, memberMenu.value)
+                openLinkTarget(link, memberMenu.member)
                 setMemberMenu(null)
               }}
             >
-              {linkTargetLabel(link, memberMenu.value)}
+              {linkTargetLabel(link, memberMenu.member)}
             </FloatingMenuItem>
           ))}
+          {memberLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('member')}>
+              {`Show all (${memberLinks.length})…`}
+            </FloatingMenuItem>
+          )}
+
+          {elementSelectionLinks.length > 0 && memberLinks.length > 0 && <FloatingMenuSeparator />}
+          {elementSelectionLinks.length > 0 && (
+            <FloatingMenuLabel>
+              {memberMenu.token === null ? 'No value under cursor' : `Open from "${memberMenu.token}"`}
+            </FloatingMenuLabel>
+          )}
+          {elementSelectionLinks.slice(0, LINK_MENU_CAP).map((link) => (
+            <FloatingMenuItem
+              key={`sel-${link.id}`}
+              disabled={memberMenu.token === null}
+              onClick={() => {
+                if (memberMenu.token !== null) {
+                  openLinkTarget(link, memberMenu.token)
+                  setMemberMenu(null)
+                }
+              }}
+            >
+              {linkTargetLabel(link, memberMenu.token)}
+            </FloatingMenuItem>
+          ))}
+          {elementSelectionLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('selection')}>
+              {`Show all (${elementSelectionLinks.length})…`}
+            </FloatingMenuItem>
+          )}
+
+          {(memberLinks.length > 0 || elementSelectionLinks.length > 0) && <FloatingMenuSeparator />}
+          <FloatingMenuItem
+            onClick={() => {
+              setCreateFromElement({ field: memberMenu.field })
+              setMemberMenu(null)
+              setCreateLinkOpen(true)
+            }}
+          >
+            + Create link from here…
+          </FloatingMenuItem>
         </FloatingMenu>
       )}
+
+      <LinkPickerDialog
+        open={pickerGroup !== null}
+        onOpenChange={(next) => {
+          if (!next) setPickerGroup(null)
+        }}
+        title={
+          pickerGroup === 'reverse'
+            ? 'Back to source'
+            : pickerGroup === 'perElement'
+            ? 'Per-element links (right-click a value)'
+            : pickerGroup === 'selection'
+            ? `Open from "${memberMenu?.token ?? ''}"`
+            : pickerGroup === 'member'
+            ? 'Open from element'
+            : 'Links'
+        }
+        items={pickerItems}
+      />
     </>
   )
 }
