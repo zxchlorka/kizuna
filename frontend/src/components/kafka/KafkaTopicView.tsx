@@ -51,6 +51,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const searchTopic = useKafkaStore((state) => state.searchTopic)
   const scanMore = useKafkaStore((state) => state.scanMore)
   const cancelScan = useKafkaStore((state) => state.cancelScan)
+  const scanAll = useKafkaStore((state) => state.scanAll)
+  const cancelScanAll = useKafkaStore((state) => state.cancelScanAll)
   const clearSearch = useKafkaStore((state) => state.clearSearch)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const links = useLinksStore((state) => state.links)
@@ -219,9 +221,13 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             filterActive={tab?.filterActive ?? false}
             filterField={tab?.filterField ?? ''}
             filterValue={tab?.filterValue ?? ''}
+            filterOp={tab?.filterOp ?? 'eq'}
             searchActive={tab?.searchActive ?? false}
             searchField={tab?.searchField ?? ''}
             searchValue={tab?.searchValue ?? ''}
+            searchOp={tab?.searchOp ?? 'eq'}
+            deepScanning={tab?.deepScanning ?? false}
+            deepScanCanceled={tab?.deepScanCanceled ?? false}
             scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
             scanPartial={tab?.scanPartial ?? false}
@@ -234,10 +240,12 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onDirectionChange={(next) => void setDirection(connId, topic, tabId, next)}
             onRefresh={() => void refreshMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
-            onFilterLoaded={(field, value) => setLoadedFilter(tabId, field, value)}
+            onFilterLoaded={(field, value, op) => setLoadedFilter(tabId, field, value, op)}
             onClearFilter={() => clearLoadedFilter(tabId)}
-            onSearchTopic={(field, value) => void searchTopic(connId, topic, tabId, field, value)}
+            onSearchTopic={(field, value, op) => void searchTopic(connId, topic, tabId, field, value, op)}
             onScanMore={() => void scanMore(connId, topic, tabId)}
+            onScanAll={() => void scanAll(connId, topic, tabId)}
+            onCancelScanAll={() => cancelScanAll(tabId)}
             onCancelScan={() => cancelScan(tabId)}
             onClearSearch={() => void clearSearch(connId, topic, tabId)}
             links={topicLinks}

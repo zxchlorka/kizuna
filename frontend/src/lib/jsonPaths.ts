@@ -195,3 +195,47 @@ export function matchField(rawValue: string, path: string, want: string): boolea
   if (segments.length === 0) return false
   return traverse(parsed, segments).some((leaf) => leafEquals(leaf, want))
 }
+
+// pathExistsAnywhere reports whether the document contains the path at ANY
+// depth: it tries the path from the root, then retries it from every nested
+// object/array value. So "Metadata" finds both `[{"Metadata":…}]` and a
+// Metadata nested several levels down, while the full "[].Metadata" also works.
+//
+// This mirrors the Go jsonPathMatchesAnywhere traversal used by the backend
+// scan, so a path typed once behaves the same whether it is answered by the
+// server (Search topic) or on already-loaded rows (Filter loaded).
+//
+// Presence is about the path resolving at all: null, an empty object and an
+// empty array all count as present. matchField above stays strict and
+// root-anchored — this helper is additive and does not change value search.
+export function pathExistsAnywhere(value: unknown, segments: PathSegment[]): boolean {
+  if (traverse(value, segments).length > 0) {
+    return true
+  }
+  if (Array.isArray(value)) {
+    return value.some((child) => pathExistsAnywhere(child, segments))
+  }
+  if (isPlainObject(value)) {
+    return Object.values(value).some((child) => pathExistsAnywhere(child, segments))
+  }
+  return false
+}
+
+// fieldPresence answers "does this message have that field at all", the search
+// you need when the values are unknown -- a freshly rolled-out optional field,
+// for instance. Invalid JSON matches NEITHER 'exists' nor 'missing': it has no
+// JSON fields at all, and returning every non-JSON record for a 'missing' query
+// would bury the messages the search is about.
+export function fieldPresence(rawValue: string, path: string, wantPresent: boolean): boolean {
+  const trimmed = path.trim()
+  if (trimmed === '') return true
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawValue)
+  } catch {
+    return false
+  }
+  const segments = parsePath(trimmed)
+  if (segments.length === 0) return false
+  return pathExistsAnywhere(parsed, segments) === wantPresent
+}
