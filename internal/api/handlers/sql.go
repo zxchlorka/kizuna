@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -68,6 +69,7 @@ func (h *SQLHandler) Execute(w http.ResponseWriter, r *http.Request) {
 			DurationMs: time.Since(startedAt).Milliseconds(),
 			Error:      err.Error(),
 			ExecutedAt: startedAt.UTC().Format(time.RFC3339),
+			Canceled:   errors.Is(err, connector.ErrCanceled),
 		})
 		writeConnectorError(w, err)
 		return
@@ -114,6 +116,7 @@ func (h *SQLHandler) ExecuteMulti(w http.ResponseWriter, r *http.Request) {
 			RowsAffected: result.RowsAffected,
 			Error:        result.Error,
 			ExecutedAt:   time.Now().UTC().Format(time.RFC3339),
+			Canceled:     result.Canceled,
 		})
 	}
 

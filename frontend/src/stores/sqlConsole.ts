@@ -5,7 +5,7 @@ import type {
   ExplainResult,
   HistoryEntry,
 } from '@/types/api'
-import { apiFetch } from '@/lib/http'
+import { apiFetch, fetchWithTimeout, RequestAbortedError } from '@/lib/http'
 
 export interface SqlExecutionResult {
   id: string
@@ -61,6 +61,7 @@ interface SqlConsoleStore {
   runStatements: (connId: string, tabId: string, statements: string[]) => Promise<void>
   runExplain: (connId: string, tabId: string, statement: string) => Promise<void>
   runAnalyze: (connId: string, tabId: string, statement: string) => Promise<void>
+  cancelRun: (tabId: string) => void
 }
 
 const defaultTabState = (): SqlTabState => ({
@@ -93,6 +94,51 @@ function normalizeHistory(items: HistoryEntry[]): HistoryEntry[] {
 
 function explainLabel(result: ExplainResult, fallback: 'EXPLAIN' | 'ANALYZE'): string {
   return result.mode === 'analyze' ? 'ANALYZE' : fallback
+}
+
+// One run (execute/execute-multi/explain/analyze) at a time per tab -- the
+// toolbar disables Run/Explain/Analyze while `running` is true -- so a single
+// controller per tabId is enough. Kept outside Zustand state, mirroring
+// kafkaScanControllers in stores/kafka.ts: AbortController is a mutable,
+// non-serializable handle, not view state Cancel can act on it directly.
+const sqlRunControllers = new Map<string, AbortController>()
+
+// A run owns its tab's state only while its AbortController is the one stored
+// for that tab. Stop flips `running` off immediately so the toolbar reacts
+// without waiting on the network, which lets the user start a new run before the
+// aborted request's own catch handler fires. Without this check that stale
+// handler overwrites the new run's state — clearing its Stop button and showing
+// "canceled" while the second query is still executing.
+function isCurrentRun(tabId: string, controller: AbortController): boolean {
+  return sqlRunControllers.get(tabId) === controller
+}
+
+// Console requests carry no timeout — a legitimate query can run 30-40s+, so
+// every run below passes Infinity as fetchWithTimeout's timeoutMs and the
+// AbortController above is the only thing that can end the request.
+//
+// `startedAt` is a Date.now() taken just before the request went out. A canceled
+// run never gets a server-reported duration, and showing 0ms for a query the user
+// watched run for seconds reads as a bug in a tool meant for diagnosing slow
+// queries. This is wall-clock including request overhead, not server execution
+// time — approximate, but the only number available.
+function canceledResult(statement: string, label: string, startedAt: number): SqlResultItem {
+  return {
+    id: newResultId('stmt', 0),
+    kind: 'execute',
+    label,
+    statementIndex: 0,
+    statement,
+    result: {
+      columns: [],
+      rows: [],
+      rows_affected: 0,
+      duration_ms: Math.max(0, Date.now() - startedAt),
+      rows_returned: 0,
+      canceled: true,
+      statement,
+    },
+  }
 }
 
 export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
@@ -399,6 +445,11 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
+    sqlRunControllers.get(tabId)?.abort()
+    const controller = new AbortController()
+    sqlRunControllers.set(tabId, controller)
+    const startedAt = Date.now()
+
     try {
       const endpoint = trimmedStatements.length === 1 ? 'execute' : 'execute-multi'
       const body =
@@ -406,11 +457,16 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           ? JSON.stringify({ statement: trimmedStatements[0] })
           : JSON.stringify({ statements: trimmedStatements })
 
-      const res = await apiFetch(`/api/connections/${connId}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body,
-      })
+      const res = await fetchWithTimeout(
+        `/api/connections/${connId}/${endpoint}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body,
+        },
+        Infinity,
+        controller.signal
+      )
 
       if (!res.ok) {
         const payload = await res.json().catch(() => ({ error: res.statusText }))
@@ -430,6 +486,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         statement: trimmedStatements[index] ?? result.statement ?? '',
         result,
       }))
+
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
 
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
@@ -451,6 +514,36 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         await get().fetchHistory(connId, tabId)
       }
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
+      if (error instanceof RequestAbortedError) {
+        // Deliberate Cancel/Stop, not a failure: leave `error` unset so the
+        // console doesn't render a "failed" state, and mark the synthetic
+        // result canceled instead of erroring it.
+        const result = canceledResult(trimmedStatements[0], trimmedStatements.length > 1 ? 'Batch' : 'Stmt 1', startedAt)
+        set((state) => {
+          const tab = ensureState(state.tabs, tabId)
+          return {
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...tab,
+                running: false,
+                error: null,
+                results: [result],
+                activeResultId: result.id,
+              },
+            },
+          }
+        })
+        return
+      }
+
       const message = (error as Error).message
       const failedResult: SqlResultItem = {
         id: newResultId('stmt', 0),
@@ -484,6 +577,10 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           },
         }
       })
+    } finally {
+      if (sqlRunControllers.get(tabId) === controller) {
+        sqlRunControllers.delete(tabId)
+      }
     }
   },
 
@@ -510,12 +607,22 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
+    sqlRunControllers.get(tabId)?.abort()
+    const controller = new AbortController()
+    sqlRunControllers.set(tabId, controller)
+    const startedAt = Date.now()
+
     try {
-      const res = await apiFetch(`/api/connections/${connId}/explain`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: trimmed }),
-      })
+      const res = await fetchWithTimeout(
+        `/api/connections/${connId}/explain`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: trimmed }),
+        },
+        Infinity,
+        controller.signal
+      )
       if (!res.ok) {
         const payload = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(payload.error || res.statusText)
@@ -529,6 +636,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         statementIndex: 0,
         statement: trimmed,
         result,
+      }
+
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
       }
 
       set((state) => {
@@ -546,6 +660,33 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         }
       })
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
+      if (error instanceof RequestAbortedError) {
+        const result = canceledResult(trimmed, 'EXPLAIN', startedAt)
+        set((state) => {
+          const tab = ensureState(state.tabs, tabId)
+          return {
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...tab,
+                running: false,
+                error: null,
+                results: [result],
+                activeResultId: result.id,
+              },
+            },
+          }
+        })
+        return
+      }
+
       const message = (error as Error).message
       const failedResult: SqlResultItem = {
         id: newResultId('stmt', 0),
@@ -579,6 +720,10 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           },
         }
       })
+    } finally {
+      if (sqlRunControllers.get(tabId) === controller) {
+        sqlRunControllers.delete(tabId)
+      }
     }
   },
 
@@ -605,12 +750,22 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
+    sqlRunControllers.get(tabId)?.abort()
+    const controller = new AbortController()
+    sqlRunControllers.set(tabId, controller)
+    const startedAt = Date.now()
+
     try {
-      const res = await apiFetch(`/api/connections/${connId}/analyze`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: trimmed }),
-      })
+      const res = await fetchWithTimeout(
+        `/api/connections/${connId}/analyze`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: trimmed }),
+        },
+        Infinity,
+        controller.signal
+      )
       if (!res.ok) {
         const payload = await res.json().catch(() => ({ error: res.statusText }))
         throw new Error(payload.error || res.statusText)
@@ -624,6 +779,13 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         statementIndex: 0,
         statement: trimmed,
         result,
+      }
+
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
       }
 
       set((state) => {
@@ -641,6 +803,33 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         }
       })
     } catch (error) {
+      // A run owns the tab only while its controller is the current one — see
+      // isCurrentRun. Bail out otherwise so a run that was stopped cannot
+      // overwrite the state of the run that replaced it.
+      if (!isCurrentRun(tabId, controller)) {
+        return
+      }
+
+      if (error instanceof RequestAbortedError) {
+        const result = canceledResult(trimmed, 'ANALYZE', startedAt)
+        set((state) => {
+          const tab = ensureState(state.tabs, tabId)
+          return {
+            tabs: {
+              ...state.tabs,
+              [tabId]: {
+                ...tab,
+                running: false,
+                error: null,
+                results: [result],
+                activeResultId: result.id,
+              },
+            },
+          }
+        })
+        return
+      }
+
       const message = (error as Error).message
       const failedResult: SqlResultItem = {
         id: newResultId('stmt', 0),
@@ -674,6 +863,21 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
           },
         }
       })
+    } finally {
+      if (sqlRunControllers.get(tabId) === controller) {
+        sqlRunControllers.delete(tabId)
+      }
     }
+  },
+
+  cancelRun: (tabId) => {
+    // Abort the in-flight HTTP request directly (not just flip a flag): the
+    // aborted request's own catch handler flips `running` off and marks the
+    // result canceled. Setting `running: false` here too makes the toolbar
+    // react immediately instead of waiting on the network round-trip.
+    sqlRunControllers.get(tabId)?.abort()
+    set((state) => ({
+      tabs: { ...state.tabs, [tabId]: { ...ensureState(state.tabs, tabId), running: false } },
+    }))
   },
 }))

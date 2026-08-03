@@ -1,4 +1,4 @@
-import { AlertTriangle, Rows3, Sparkles } from 'lucide-react'
+import { AlertTriangle, Ban, Rows3, Sparkles } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { SqlResultItem } from '@/stores/sqlConsole'
 
@@ -10,6 +10,7 @@ interface SqlResultTabProps {
 
 export function SqlResultTab({ item, active, onClick }: SqlResultTabProps) {
   const isError = item.kind === 'execute' && Boolean(item.result.error)
+  const isCanceled = item.kind === 'execute' && Boolean(item.result.canceled)
 
   return (
     <button
@@ -22,6 +23,8 @@ export function SqlResultTab({ item, active, onClick }: SqlResultTabProps) {
     >
       {isError ? (
         <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+      ) : isCanceled ? (
+        <Ban className="h-3.5 w-3.5 text-muted-foreground" />
       ) : item.kind === 'explain' ? (
         <Sparkles className="h-3.5 w-3.5 text-amber-500" />
       ) : (

@@ -1,4 +1,4 @@
-import { AlertTriangle, FileCode2, History, Play, Sparkles } from 'lucide-react'
+import { AlertTriangle, FileCode2, History, Play, Sparkles, Square } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { DatabaseSwitcher } from '@/components/SqlConsole/DatabaseSwitcher'
 
@@ -8,6 +8,7 @@ interface SqlToolbarProps {
   tabId: string
   connectionLabel: string
   onRun: () => void
+  onCancel: () => void
   onExplain: () => void
   onAnalyze: () => void
   onFormat: () => void
@@ -20,6 +21,7 @@ export function SqlToolbar({
   tabId,
   connectionLabel,
   onRun,
+  onCancel,
   onExplain,
   onAnalyze,
   onFormat,
@@ -28,10 +30,17 @@ export function SqlToolbar({
   return (
     <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border bg-background/95 px-3 py-2">
       <div className="flex flex-wrap items-center gap-2">
-        <Button type="button" size="sm" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRun} disabled={running}>
-          <Play className="h-3.5 w-3.5" />
-          Run
-        </Button>
+        {running ? (
+          <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onCancel}>
+            <Square className="h-3.5 w-3.5" />
+            Stop
+          </Button>
+        ) : (
+          <Button type="button" size="sm" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onRun} disabled={running}>
+            <Play className="h-3.5 w-3.5" />
+            Run
+          </Button>
+        )}
         <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={onExplain} disabled={running}>
           <Sparkles className="h-3.5 w-3.5" />
           Explain

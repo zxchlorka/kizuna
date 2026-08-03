@@ -65,6 +65,20 @@ describe('fetchWithTimeout abort composition', () => {
     await expect(fetchWithTimeout('/x', undefined, 10_000, controller.signal)).resolves.toBe(response)
   })
 
+  it('with timeoutMs=Infinity, no internal timer is armed — only the external signal can abort', async () => {
+    vi.stubGlobal('fetch', abortAwareFetch())
+    const setTimeoutSpy = vi.spyOn(window, 'setTimeout')
+    const controller = new AbortController()
+    const promise = fetchWithTimeout('/x', undefined, Infinity, controller.signal)
+    // SQL console requests must never time out on their own (queries can
+    // legitimately run 30-40s+); Infinity is how a caller opts out of the
+    // internal deadline entirely, so setTimeout must never be scheduled.
+    expect(setTimeoutSpy).not.toHaveBeenCalled()
+    controller.abort()
+    await expect(promise).rejects.toBeInstanceOf(RequestAbortedError)
+    setTimeoutSpy.mockRestore()
+  })
+
   it('forwards the caller init while injecting the composed signal', async () => {
     const fetchMock = vi.fn(() => Promise.resolve(new Response('ok'))) as unknown as typeof fetch
     vi.stubGlobal('fetch', fetchMock)

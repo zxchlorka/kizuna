@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, Clock3 } from 'lucide-react'
+import { AlertTriangle, Ban, Check, Clock3 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { HistoryEntry as HistoryEntryType } from '@/types/api'
 
@@ -38,7 +38,9 @@ export function HistoryEntry({ entry, onClick, onDoubleClick }: HistoryEntryProp
           <span className={cn('rounded-sm border border-current/20 px-1.5 py-0.5 font-mono text-[11px]', durationTone(entry.duration_ms))}>
             {entry.duration_ms}ms
           </span>
-          {entry.error ? (
+          {entry.canceled ? (
+            <Ban className="h-3.5 w-3.5 text-muted-foreground" />
+          ) : entry.error ? (
             <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
           ) : (
             <Check className="h-3.5 w-3.5 text-emerald-500" />
