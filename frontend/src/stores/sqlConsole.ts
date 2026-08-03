@@ -46,6 +46,7 @@ interface SqlTabState {
 interface SqlConsoleStore {
   tabs: Record<string, SqlTabState>
   ensureTab: (tabId: string) => void
+  restoreEditorValues: (drafts: Record<string, string>) => void
   setEditorValue: (tabId: string, value: string) => void
   setSplitSize: (tabId: string, splitSize: number) => void
   setResultsCollapsed: (tabId: string, collapsed: boolean) => void
@@ -104,6 +105,22 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         [tabId]: ensureState(state.tabs, tabId),
       },
     }))
+  },
+
+  // Seeds editorValue (and historyDraft, so Up/Down history navigation starts
+  // from the restored text rather than blank) for tabs restored from
+  // localStorage on page load. Only touches editorValue/historyDraft -- results,
+  // history and everything else stay at their defaults, matching the "don't
+  // restore stale data" scope (see lib/workspacePersistence.ts).
+  restoreEditorValues: (drafts) => {
+    set((state) => {
+      const tabs = { ...state.tabs }
+      Object.entries(drafts).forEach(([tabId, value]) => {
+        const tab = ensureState(tabs, tabId)
+        tabs[tabId] = { ...tab, editorValue: value, historyDraft: value }
+      })
+      return { tabs }
+    })
   },
 
   setEditorValue: (tabId, value) => {
