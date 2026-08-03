@@ -37,7 +37,11 @@ export interface DataTableProps {
   getDraftValue: (rowKey: string, colName: string, fallback: unknown) => unknown
   isDirtyCell: (rowKey: string, colName: string) => boolean
   onNavigateToFk?: (colMeta: ColumnMeta, value: unknown) => void
-  onRowContextMenu?: (row: TableRow, event: MouseEvent) => void
+  // Fired from a right-click on a specific data cell (not the select column),
+  // carrying which column it landed on so the menu can offer "Copy cell" in
+  // addition to row-level actions. Right-clicking anywhere in a row's data
+  // cells covers the same area a row-level handler would.
+  onCellContextMenu?: (row: TableRow, columnName: string, value: unknown, event: MouseEvent) => void
 }
 
 const ROW_HEIGHT = 40
@@ -142,7 +146,7 @@ export function DataTable({
   getDraftValue,
   isDirtyCell,
   onNavigateToFk,
-  onRowContextMenu,
+  onCellContextMenu,
 }: DataTableProps) {
   const parentRef = useRef<HTMLDivElement>(null)
   const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({})
@@ -365,13 +369,17 @@ export function DataTable({
                         height: `${virtualRow.size}px`,
                         transform: `translateY(${virtualRow.start}px)`,
                       }}
-                      onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(row.original, event) : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td
                           key={cell.id}
                           className="overflow-hidden border-r border-border p-0 align-middle last:border-r-0"
                           style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
+                          onContextMenu={
+                            onCellContextMenu && cell.column.id !== '__select__'
+                              ? (event) => onCellContextMenu(row.original, cell.column.id, cell.getValue(), event)
+                              : undefined
+                          }
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
@@ -390,13 +398,17 @@ export function DataTable({
                         rowDeleted ? 'bg-destructive/5' : 'hover:bg-muted/35'
                       )}
                       style={{ height: `${ROW_HEIGHT}px` }}
-                      onContextMenu={onRowContextMenu ? (event) => onRowContextMenu(row.original, event) : undefined}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td
                           key={cell.id}
                           className="overflow-hidden border-r border-border p-0 align-middle last:border-r-0"
                           style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
+                          onContextMenu={
+                            onCellContextMenu && cell.column.id !== '__select__'
+                              ? (event) => onCellContextMenu(row.original, cell.column.id, cell.getValue(), event)
+                              : undefined
+                          }
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
