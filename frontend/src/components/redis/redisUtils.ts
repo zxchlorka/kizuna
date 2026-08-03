@@ -148,6 +148,27 @@ export function toNumberOrNull(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null
 }
 
+// Контекстное меню элемента висит на всей строке — и должно: по ПКМ в любом
+// месте строки открывается меню с её member и применимыми линками. А вот
+// «фрагмент под курсором» (valueAtPoint) обязан браться ТОЛЬКО из ячейки со
+// значением. Раньше контейнером для хиттеста была вся <tr>, поэтому ПКМ по имени
+// поля хэша, по индексу списка или по score давал token из этой колонки, и пункт
+// «Open from "…"» уходил открывать линк по имени поля вместо значения.
+//
+// Ячейка со значением помечается этим атрибутом, обработчик резолвит её от цели
+// клика. Константа одна на пометку и на поиск, чтобы они не разъехались.
+export const REDIS_VALUE_CELL_ATTR = 'data-redis-value-cell'
+
+export const redisValueCellProps = { [REDIS_VALUE_CELL_ATTR]: '' }
+
+// Ячейка со значением, внутри которой кликнули, либо null, если кликнули мимо
+// неё. null означает «фрагмента под курсором нет» — именно null, а не «искать по
+// всей строке»: valueAtPoint без контейнера снимает проверку принадлежности и
+// вернул бы ровно тот чужой токен, от которого мы уходим.
+export function redisValueCellAt(target: EventTarget | null): Element | null {
+  return target instanceof Element ? target.closest(`[${REDIS_VALUE_CELL_ATTR}]`) : null
+}
+
 export function normalizeRedisObjectType(type: ObjectType | string | undefined): RedisObjectType | 'namespace' | 'unsupported' {
   if (type === 'namespace') {
     return 'namespace'

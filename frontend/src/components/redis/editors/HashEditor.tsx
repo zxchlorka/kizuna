@@ -2,6 +2,7 @@ import { useState, type MouseEvent } from 'react'
 import { Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { redisValueCellProps } from '@/components/redis/redisUtils'
 import type { TableRow } from '@/types/api'
 
 interface HashEditorProps {
@@ -77,6 +78,7 @@ export function HashEditor({
                 <tr key={field} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event, field) : undefined}>
                   <td className="px-4 py-3 font-mono text-xs text-foreground">{field}</td>
                   <td
+                    {...redisValueCellProps}
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
                       if (readOnly) {

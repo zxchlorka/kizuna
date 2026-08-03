@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent } from 'react'
 import { ArrowDownUp, Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { redisValueCellProps } from '@/components/redis/redisUtils'
 import type { TableRow } from '@/types/api'
 
 interface SortedSetEditorProps {
@@ -115,7 +116,9 @@ export function SortedSetEditor({ rows, saving, readOnly = false, onUpdateScore,
                       score
                     )}
                   </td>
-                  <td className="px-4 py-3 font-mono text-xs text-foreground">{member}</td>
+                  <td {...redisValueCellProps} className="px-4 py-3 font-mono text-xs text-foreground">
+                    {member}
+                  </td>
                   <td className="px-4 py-3">
                     {readOnly ? (
                       <div className="text-right text-[10px] uppercase tracking-[0.12em] text-muted-foreground">—</div>
