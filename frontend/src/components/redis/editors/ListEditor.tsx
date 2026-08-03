@@ -3,6 +3,7 @@ import { ChevronLeft, ChevronRight, Plus, Save, Trash2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
+import { redisValueCellProps } from '@/components/redis/redisUtils'
 import type { TableRow } from '@/types/api'
 
 interface ListEditorProps {
@@ -82,6 +83,7 @@ export function ListEditor({
                 <tr key={`list-${index}`} className="align-top" onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(value, event) : undefined}>
                   <td className="px-4 py-3 font-mono text-xs text-muted-foreground">{index}</td>
                   <td
+                    {...redisValueCellProps}
                     className="px-4 py-3 font-mono text-xs text-foreground"
                     onDoubleClick={() => {
                       if (readOnly) {

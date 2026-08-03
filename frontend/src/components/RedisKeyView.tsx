@@ -18,6 +18,7 @@ import {
   getRedisTypePillClass,
   getRedisTTLStyle,
   normalizeRedisObjectType,
+  redisValueCellAt,
   stringifyRedisValue,
 } from '@/components/redis/redisUtils'
 import { Button } from '@/components/ui/button'
@@ -147,6 +148,12 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   const handleElementContextMenu = (value: string, event: MouseEvent, field?: string) => {
     event.preventDefault()
+    // Хиттест ограничен ячейкой со значением, а не всей строкой (см.
+    // redisValueCellAt): меню по-прежнему открывается по ПКМ в любом месте
+    // строки и знает её member, но «фрагмент под курсором» берётся только из
+    // значения. Клик мимо неё — по имени поля, индексу, score, кнопке — даёт
+    // null, и пункт «Open from …» остаётся выключенным.
+    const valueCell = redisValueCellAt(event.target)
     setMemberMenu({
       x: event.clientX,
       y: event.clientY,
@@ -154,7 +161,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       field,
       // Значение фрагмента считается в момент клика: позже выделение может
       // слететь от самого открытия меню.
-      token: valueAtPoint(event.clientX, event.clientY, event.currentTarget),
+      token: valueCell ? valueAtPoint(event.clientX, event.clientY, valueCell) : null,
     })
   }
 
