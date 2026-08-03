@@ -4,13 +4,18 @@ import { EmptyState } from '@/components/EmptyState'
 import { ExplainView } from '@/components/SqlConsole/ExplainView'
 import { SqlResultCell } from '@/components/SqlConsole/SqlResultCell'
 import { SqlResultTab } from '@/components/SqlConsole/SqlResultTab'
-import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel } from '@/components/ui/floating-menu'
+import { TableExportMenu } from '@/components/TableExportMenu'
+import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
 import type { SqlResultItem } from '@/stores/sqlConsole'
 import { cn } from '@/lib/utils'
 import { linkTargetLabel } from '@/lib/links'
 import { getPostgresTypeBadge } from '@/lib/postgresTypes'
+import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
+import { buildCSV, buildJSON, buildTSV, copySingleCellText, downloadTextFile, timestampForFilename, type ExportColumn } from '@/lib/tableExport'
 import { useLinksStore } from '@/stores/links'
+import { useToastStore } from '@/stores/toast'
 
 interface SqlResultsAreaProps {
   results: SqlResultItem[]
@@ -55,7 +60,13 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
   const openLinkTarget = useOpenLinkTarget()
   const linksFor = useLinksStore((state) => state.linksFor)
   const fetchLinks = useLinksStore((state) => state.fetch)
-  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; row: unknown[] } | null>(null)
+  const pushToast = useToastStore((state) => state.push)
+  const [rowMenu, setRowMenu] = useState<{ x: number; y: number; row: unknown[]; columnIndex?: number } | null>(null)
+  // Row indices INTO sortedRows (the order currently on screen), not the
+  // original query order — copy/export follow whatever the user is looking
+  // at. Reset below whenever the active result or the sort changes: after a
+  // re-sort the same index would otherwise silently point at a different row.
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set())
   useEffect(() => {
     void fetchLinks().catch(() => undefined)
   }, [fetchLinks])
@@ -63,6 +74,10 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
   useEffect(() => {
     setSortState(null)
   }, [activeResultId])
+
+  useEffect(() => {
+    setSelectedRows(new Set())
+  }, [activeResultId, sortState])
 
   const sortedRows = useMemo(() => {
     if (!activeResult || activeResult.kind !== 'execute' || !sortState) {
@@ -76,6 +91,48 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
 
   const activeExecuteResult = activeResult?.kind === 'execute' ? activeResult.result : null
   const truncatedLimit = activeExecuteResult?.applied_limit ?? activeExecuteResult?.rows_returned ?? 0
+
+  const exportColumns = useMemo<ExportColumn[]>(() => {
+    if (!activeExecuteResult) return []
+    return activeExecuteResult.columns.map((name, i) => ({ name, type: activeExecuteResult.column_types?.[i] }))
+  }, [activeExecuteResult])
+
+  const copyText = async (text: string, successMessage: string) => {
+    const result = await writeClipboardText(text)
+    if (result.ok) {
+      pushToast({ tone: 'success', title: 'Copied', message: successMessage })
+    } else {
+      pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
+    }
+  }
+
+  const handleCopyCell = (value: unknown) => void copyText(copySingleCellText(value), 'Cell copied to clipboard.')
+  const handleCopyRow = (row: unknown[], format: 'tsv' | 'json') =>
+    void copyText(
+      format === 'tsv' ? buildTSV(exportColumns, [row]) : buildJSON(exportColumns, [row]),
+      'Row copied to clipboard.'
+    )
+
+  const handleCopy = (format: 'tsv' | 'json', scope: 'all' | 'selected') => {
+    const rows = scope === 'all' ? sortedRows : sortedRows.filter((_, index) => selectedRows.has(index))
+    const text = format === 'tsv' ? buildTSV(exportColumns, rows) : buildJSON(exportColumns, rows)
+    void copyText(text, `${rows.length} row${rows.length === 1 ? '' : 's'} copied to clipboard.`)
+  }
+
+  const handleExport = (format: 'csv' | 'json') => {
+    const stamp = timestampForFilename()
+    const content = format === 'csv' ? buildCSV(exportColumns, sortedRows) : buildJSON(exportColumns, sortedRows)
+    const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'
+    downloadTextFile(`query-result-${stamp}.${format}`, mime, content)
+    pushToast({
+      tone: 'success',
+      title: 'Exported',
+      message: `${sortedRows.length} row${sortedRows.length === 1 ? '' : 's'} exported as ${format.toUpperCase()}.`,
+    })
+  }
+
+  const allSelected = sortedRows.length > 0 && selectedRows.size === sortedRows.length
+  const someSelected = selectedRows.size > 0 && !allSelected
 
   if (results.length === 0) {
     return (
@@ -91,15 +148,27 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
 
   return (
     <div className="flex h-full flex-col overflow-hidden">
-      <div className="flex min-h-[38px] items-center overflow-x-auto border-b border-border bg-muted/20">
-        {results.map((result) => (
-          <SqlResultTab
-            key={result.id}
-            item={result}
-            active={result.id === activeResult?.id}
-            onClick={() => onSelectResult(result.id)}
-          />
-        ))}
+      <div className="flex min-h-[38px] items-center justify-between gap-2 overflow-x-auto border-b border-border bg-muted/20">
+        <div className="flex min-h-[38px] items-center overflow-x-auto">
+          {results.map((result) => (
+            <SqlResultTab
+              key={result.id}
+              item={result}
+              active={result.id === activeResult?.id}
+              onClick={() => onSelectResult(result.id)}
+            />
+          ))}
+        </div>
+        {activeExecuteResult && (activeExecuteResult.columns?.length ?? 0) > 0 && (
+          <div className="shrink-0 px-2">
+            <TableExportMenu
+              totalRowCount={sortedRows.length}
+              selectedRowCount={selectedRows.size}
+              onCopy={handleCopy}
+              onExport={handleExport}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-hidden">
@@ -147,6 +216,17 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
             <table className="min-w-full border-collapse text-sm">
               <thead className="sticky top-0 z-10 bg-background">
                 <tr>
+                  <th className="w-9 border-b border-r border-border px-2 py-2">
+                    <div className="flex items-center justify-center">
+                      <TableCheckbox
+                        checked={allSelected}
+                        indeterminate={someSelected}
+                        onChange={(checked) =>
+                          setSelectedRows(checked ? new Set(sortedRows.map((_, i) => i)) : new Set())
+                        }
+                      />
+                    </div>
+                  </th>
                   {activeResult.result.columns.map((column, index) => {
                     const activeSort = sortState?.columnIndex === index ? sortState.direction : null
                     const columnType = activeResult.result.column_types?.[index] ?? 'unknown'
@@ -182,16 +262,31 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
               </thead>
               <tbody>
                 {sortedRows.map((row, rowIndex) => (
-                  <tr
-                    key={`${activeResult.id}-${rowIndex}`}
-                    className="odd:bg-muted/10"
-                    onContextMenu={(event: MouseEvent) => {
-                      event.preventDefault()
-                      setRowMenu({ x: event.clientX, y: event.clientY, row })
-                    }}
-                  >
+                  <tr key={`${activeResult.id}-${rowIndex}`} className="odd:bg-muted/10">
+                    <td className="border-b border-r border-border/70 px-2 py-2 align-top">
+                      <div className="flex items-center justify-center">
+                        <TableCheckbox
+                          checked={selectedRows.has(rowIndex)}
+                          onChange={(checked) =>
+                            setSelectedRows((prev) => {
+                              const next = new Set(prev)
+                              if (checked) next.add(rowIndex)
+                              else next.delete(rowIndex)
+                              return next
+                            })
+                          }
+                        />
+                      </div>
+                    </td>
                     {row.map((value, columnIndex) => (
-                      <td key={`${activeResult.id}-${rowIndex}-${columnIndex}`} className="max-w-[320px] border-b border-r border-border/70 px-3 py-2 align-top font-mono text-[12px] text-foreground">
+                      <td
+                        key={`${activeResult.id}-${rowIndex}-${columnIndex}`}
+                        className="max-w-[320px] border-b border-r border-border/70 px-3 py-2 align-top font-mono text-[12px] text-foreground"
+                        onContextMenu={(event: MouseEvent) => {
+                          event.preventDefault()
+                          setRowMenu({ x: event.clientX, y: event.clientY, row, columnIndex })
+                        }}
+                      >
                         <SqlResultCell
                           value={value}
                           columnName={activeResult.result.columns[columnIndex] ?? `column_${columnIndex + 1}`}
@@ -205,6 +300,34 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
             </table>
             {rowMenu && activeExecuteResult && (
               <FloatingMenu x={rowMenu.x} y={rowMenu.y} onClose={() => setRowMenu(null)}>
+                <FloatingMenuLabel>Copy</FloatingMenuLabel>
+                {rowMenu.columnIndex !== undefined && (
+                  <FloatingMenuItem
+                    onClick={() => {
+                      handleCopyCell(rowMenu.row[rowMenu.columnIndex!])
+                      setRowMenu(null)
+                    }}
+                  >
+                    Copy cell
+                  </FloatingMenuItem>
+                )}
+                <FloatingMenuItem
+                  onClick={() => {
+                    handleCopyRow(rowMenu.row, 'tsv')
+                    setRowMenu(null)
+                  }}
+                >
+                  Copy row (TSV)
+                </FloatingMenuItem>
+                <FloatingMenuItem
+                  onClick={() => {
+                    handleCopyRow(rowMenu.row, 'json')
+                    setRowMenu(null)
+                  }}
+                >
+                  Copy row (JSON)
+                </FloatingMenuItem>
+                <FloatingMenuSeparator />
                 <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
                 {(() => {
                   const items: JSX.Element[] = []
