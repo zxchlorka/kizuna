@@ -12,7 +12,13 @@ import {
 // jsonPathSharedFixtures in internal/connector/kafka/kafka_test.go. This is the
 // cross-language proof that the Go matcher and the TS traversal agree on the
 // canonical grammar. Only full paths from the root are used (no legacy suffix
-// paths), which is where strict TS traversal and lenient Go matching coincide.
+// paths).
+//
+// The implicit-array cases at the end used to be excluded from this matrix: the
+// TS traversal pruned a key segment that landed on an array while the Go matcher
+// retried it across the elements, so a hand-typed "events.name" was found by
+// Search topic and not by Filter loaded. TS now implements the same retry, which
+// is what lets those rows live here.
 const sharedFixtures: { name: string; doc: string; path: string; want: string; match: boolean }[] = [
   { name: 'top-level string', doc: '{"event_type":"batch","count":3,"ok":true}', path: 'event_type', want: 'batch', match: true },
   { name: 'top-level number', doc: '{"event_type":"batch","count":3,"ok":true}', path: 'count', want: '3', match: true },
@@ -33,6 +39,11 @@ const sharedFixtures: { name: string; doc: string; path: string; want: string; m
   { name: 'invalid json', doc: '{not json', path: 'a', want: 'anything', match: false },
   { name: 'key with dot bracket notation', doc: '{"key.with.dot":{"name":"Zulu"}}', path: '["key.with.dot"].name', want: 'Zulu', match: true },
   { name: 'key with dot plain path does not match', doc: '{"key.with.dot":{"name":"Zulu"}}', path: 'key.with.dot.name', want: 'Zulu', match: false },
+  { name: 'key segment retried across an array', doc: '{"a":[{"b":1}]}', path: 'a.b', want: '1', match: true },
+  { name: 'key segment retried across an array, no such value', doc: '{"a":[{"b":1}]}', path: 'a.b', want: '2', match: false },
+  { name: 'implicit array traversal matches the explicit form', doc: '{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}', path: 'src.event_data.events.name', want: 'Auth', match: true },
+  { name: 'inherited property is not a field', doc: '{"x":1}', path: 'toString', want: 'x', match: false },
+  { name: 'inherited property is not a field, nested', doc: '{"a":{"b":1}}', path: 'a.constructor', want: 'x', match: false },
 ]
 
 describe('matchField (shared cross-language fixtures)', () => {
@@ -176,5 +187,28 @@ describe('fieldPresence — поиск по наличию поля', () => {
 
   it('an empty path matches everything (no filtering)', () => {
     expect(fieldPresence(noMeta, '   ', true)).toBe(true)
+  })
+
+  // `in` walks the prototype chain, so a presence search for any
+  // Object.prototype member reported every JSON object as having that field —
+  // and, inverted, reported that no message was missing it. The backend
+  // resolves the same segment with a map lookup and has no such members.
+  it('does not treat an inherited property as a field', () => {
+    for (const inherited of ['toString', 'constructor', 'valueOf', 'hasOwnProperty']) {
+      expect(fieldPresence('{"x":1}', inherited, true)).toBe(false)
+      expect(fieldPresence('{"x":1}', inherited, false)).toBe(true)
+    }
+  })
+
+  it('still finds an own property that shadows a prototype member', () => {
+    expect(fieldPresence('{"toString":"mine"}', 'toString', true)).toBe(true)
+  })
+
+  // Hand-typed "a.b" over an array of objects: the shape most Kafka payloads
+  // actually have. The backend scan matched it, the client-side filter did not.
+  it('retries a key segment across array elements, like the backend scan', () => {
+    expect(fieldPresence('{"a":[{"b":1}]}', 'a.b', true)).toBe(true)
+    expect(fieldPresence('{"events":[{"name":"Auth"}]}', 'events.name', true)).toBe(true)
+    expect(fieldPresence('{"events":[{"name":"Auth"}]}', 'events[].name', true)).toBe(true)
   })
 })

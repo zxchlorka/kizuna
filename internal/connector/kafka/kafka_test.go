@@ -778,8 +778,13 @@ func TestParseJSONPath(t *testing.T) {
 // same documents/paths/wants/expectations are asserted in TypeScript by
 // frontend/src/lib/jsonPaths.test.ts, so the Go matcher and the TS traversal
 // provably agree on the canonical grammar. Only full paths from the root are
-// used here (no legacy suffix paths), which is where the strict TS traversal and
-// the lenient Go matcher must produce identical results.
+// used here (no legacy suffix paths).
+//
+// The implicit-array cases at the end used to be excluded from this matrix: the
+// TS traversal pruned a key segment that landed on an array while the Go matcher
+// retried it across the elements, so a hand-typed "events.name" was found by
+// Search topic and not by Filter loaded. TS now implements the same retry, which
+// is what lets those rows live here.
 var jsonPathSharedFixtures = []struct {
 	name  string
 	doc   string
@@ -806,6 +811,11 @@ var jsonPathSharedFixtures = []struct {
 	{name: "invalid json", doc: `{not json`, path: "a", want: "anything", match: false},
 	{name: "key with dot bracket notation", doc: `{"key.with.dot":{"name":"Zulu"}}`, path: `["key.with.dot"].name`, want: "Zulu", match: true},
 	{name: "key with dot plain path does not match", doc: `{"key.with.dot":{"name":"Zulu"}}`, path: "key.with.dot.name", want: "Zulu", match: false},
+	{name: "key segment retried across an array", doc: `{"a":[{"b":1}]}`, path: "a.b", want: "1", match: true},
+	{name: "key segment retried across an array, no such value", doc: `{"a":[{"b":1}]}`, path: "a.b", want: "2", match: false},
+	{name: "implicit array traversal matches the explicit form", doc: `{"src":{"event_data":{"events":[{"name":"View"},{"name":"Auth"}]}}}`, path: "src.event_data.events.name", want: "Auth", match: true},
+	{name: "inherited property is not a field", doc: `{"x":1}`, path: "toString", want: "x", match: false},
+	{name: "inherited property is not a field, nested", doc: `{"a":{"b":1}}`, path: "a.constructor", want: "x", match: false},
 }
 
 func TestJSONPathSharedFixtures(t *testing.T) {
