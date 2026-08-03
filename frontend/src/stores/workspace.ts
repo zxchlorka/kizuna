@@ -116,6 +116,7 @@ interface WorkspaceStore {
   openConnection: (connId: string) => void
   closeConnection: (connId: string) => void
   purgeConnection: (connId: string) => void
+  pruneMissingConnections: (liveConnIds: string[]) => void
 }
 
 function buildFilterSignature(filters: FilterExpr[]): string {
@@ -174,6 +175,87 @@ const treeRefreshSeq = new Map<string, number>()
 
 function hasLoadingTreeRequests(loadingByKey: Record<string, boolean>): boolean {
   return Object.values(loadingByKey).some(Boolean)
+}
+
+// Shared by purgeConnection (one known-deleted connection) and
+// pruneMissingConnections (bulk, run once on startup after the connection list
+// loads: drop any restored tab whose connection doesn't exist at all -- deleted
+// since the tab was last open, or restored from a different browser/config).
+// Both are "forget every trace of connections matching this predicate"; only
+// what counts as dead differs.
+function purgeTabsWhere(state: WorkspaceStore, isConnDead: (connId: string) => boolean): Partial<WorkspaceStore> {
+  const isDeadTab = (tab: WorkspaceTab) =>
+    isConnDead(tab.connId) || isConnDead(tabPageId(tab)) || (tab.anchorConnId != null && isConnDead(tab.anchorConnId))
+  const removedTabIds = new Set(state.tabs.filter(isDeadTab).map((tab) => tab.id))
+  const remainingTabs = state.tabs.filter((tab) => !isDeadTab(tab))
+
+  const nextActiveByConnection: Record<string, string> = {}
+  Object.entries(state.activeTabByConnection).forEach(([id, tabId]) => {
+    if (!isConnDead(id) && !removedTabIds.has(tabId)) {
+      nextActiveByConnection[id] = tabId
+    }
+  })
+
+  const nextTreeItems = { ...state.treeItems }
+  const nextTreeCursors = { ...state.treeCursors }
+  const nextLoadingByKey = { ...state.treeLoadingByKey }
+  const nextErrorByKey = { ...state.treeErrorByKey }
+  const nextLoadedByKey = { ...state.treeLoadedByKey }
+  const nextExpanded = new Set<string>()
+  state.expandedSchemas.forEach((key) => {
+    if (!isConnDead(parseTreeKey(key).connId)) {
+      nextExpanded.add(key)
+    }
+  })
+  for (const record of [nextTreeItems, nextTreeCursors, nextLoadingByKey, nextErrorByKey, nextLoadedByKey]) {
+    Object.keys(record).forEach((key) => {
+      if (isConnDead(parseTreeKey(key).connId)) {
+        delete (record as Record<string, unknown>)[key]
+      }
+    })
+  }
+
+  const dropDeadKeys = <T,>(record: Record<string, T>): Record<string, T> => {
+    const next: Record<string, T> = {}
+    Object.entries(record).forEach(([key, value]) => {
+      if (!isConnDead(key)) {
+        next[key] = value
+      }
+    })
+    return next
+  }
+
+  // A page whose tree was switched to a dead connection loses that binding too,
+  // otherwise the page would query the dead UUID on next render.
+  const nextTreeConnByPage: Record<string, string> = {}
+  Object.entries(state.treeConnByPage).forEach(([pageId, viewConnId]) => {
+    if (!isConnDead(pageId) && !isConnDead(viewConnId)) {
+      nextTreeConnByPage[pageId] = viewConnId
+    }
+  })
+
+  return {
+    tabs: remainingTabs,
+    openConnectionIds: state.openConnectionIds.filter((id) => !isConnDead(id)),
+    activeTabByConnection: nextActiveByConnection,
+    activeTabId: state.activeTabId && removedTabIds.has(state.activeTabId) ? null : state.activeTabId,
+    navigationHistory: state.navigationHistory.filter(
+      (entry) => !removedTabIds.has(entry.fromTabId) && !removedTabIds.has(entry.toTabId)
+    ),
+    treeItems: nextTreeItems,
+    treeCursors: nextTreeCursors,
+    treeLoadingByKey: nextLoadingByKey,
+    treeErrorByKey: nextErrorByKey,
+    treeLoadedByKey: nextLoadedByKey,
+    treeLoading: hasLoadingTreeRequests(nextLoadingByKey),
+    expandedSchemas: nextExpanded,
+    treeErrorsByConnection: dropDeadKeys(state.treeErrorsByConnection),
+    treeRefreshingByConnection: dropDeadKeys(state.treeRefreshingByConnection),
+    selectedNodeByConnection: dropDeadKeys(state.selectedNodeByConnection),
+    availableSchemasByConnection: dropDeadKeys(state.availableSchemasByConnection),
+    visibleSchemasByConnection: dropDeadKeys(state.visibleSchemasByConnection),
+    treeConnByPage: nextTreeConnByPage,
+  }
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
@@ -732,76 +814,15 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   // connection's page but READING from the deleted one survived it and kept
   // requesting a dead UUID, surfacing as `connection "..." not found`.
   purgeConnection: (connId: string) => {
-    set((state) => {
-      const isDead = (tab: WorkspaceTab) =>
-        tab.connId === connId || tab.anchorConnId === connId || tabPageId(tab) === connId
-      const removedTabIds = new Set(state.tabs.filter(isDead).map((tab) => tab.id))
-      const remainingTabs = state.tabs.filter((tab) => !isDead(tab))
+    set((state) => purgeTabsWhere(state, (id) => id === connId))
+  },
 
-      const nextActiveByConnection: Record<string, string> = {}
-      Object.entries(state.activeTabByConnection).forEach(([id, tabId]) => {
-        if (id !== connId && !removedTabIds.has(tabId)) {
-          nextActiveByConnection[id] = tabId
-        }
-      })
-
-      const nextTreeItems = { ...state.treeItems }
-      const nextTreeCursors = { ...state.treeCursors }
-      const nextLoadingByKey = { ...state.treeLoadingByKey }
-      const nextErrorByKey = { ...state.treeErrorByKey }
-      const nextLoadedByKey = { ...state.treeLoadedByKey }
-      const nextExpanded = new Set<string>()
-      state.expandedSchemas.forEach((key) => {
-        if (parseTreeKey(key).connId !== connId) {
-          nextExpanded.add(key)
-        }
-      })
-      for (const record of [nextTreeItems, nextTreeCursors, nextLoadingByKey, nextErrorByKey, nextLoadedByKey]) {
-        Object.keys(record).forEach((key) => {
-          if (parseTreeKey(key).connId === connId) {
-            delete (record as Record<string, unknown>)[key]
-          }
-        })
-      }
-
-      const dropKey = <T,>(record: Record<string, T>): Record<string, T> => {
-        const next = { ...record }
-        delete next[connId]
-        return next
-      }
-
-      // A page whose tree was switched to the deleted connection loses that
-      // binding too, otherwise the page would query the dead UUID on next render.
-      const nextTreeConnByPage: Record<string, string> = {}
-      Object.entries(state.treeConnByPage).forEach(([pageId, viewConnId]) => {
-        if (pageId !== connId && viewConnId !== connId) {
-          nextTreeConnByPage[pageId] = viewConnId
-        }
-      })
-
-      return {
-        tabs: remainingTabs,
-        openConnectionIds: state.openConnectionIds.filter((id) => id !== connId),
-        activeTabByConnection: nextActiveByConnection,
-        activeTabId: state.activeTabId && removedTabIds.has(state.activeTabId) ? null : state.activeTabId,
-        navigationHistory: state.navigationHistory.filter(
-          (entry) => !removedTabIds.has(entry.fromTabId) && !removedTabIds.has(entry.toTabId)
-        ),
-        treeItems: nextTreeItems,
-        treeCursors: nextTreeCursors,
-        treeLoadingByKey: nextLoadingByKey,
-        treeErrorByKey: nextErrorByKey,
-        treeLoadedByKey: nextLoadedByKey,
-        treeLoading: hasLoadingTreeRequests(nextLoadingByKey),
-        expandedSchemas: nextExpanded,
-        treeErrorsByConnection: dropKey(state.treeErrorsByConnection),
-        treeRefreshingByConnection: dropKey(state.treeRefreshingByConnection),
-        selectedNodeByConnection: dropKey(state.selectedNodeByConnection),
-        availableSchemasByConnection: dropKey(state.availableSchemasByConnection),
-        visibleSchemasByConnection: dropKey(state.visibleSchemasByConnection),
-        treeConnByPage: nextTreeConnByPage,
-      }
-    })
+  // Bulk form of purgeConnection, run once at startup after the connection list
+  // has loaded (see lib/workspacePersistence.ts): drops every restored tab whose
+  // connection isn't in the live set, rather than one specific known-deleted id.
+  pruneMissingConnections: (liveConnIds: string[]) => {
+    const live = new Set(liveConnIds)
+    set((state) => purgeTabsWhere(state, (id) => !live.has(id)))
   },
 }))
 
