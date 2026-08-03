@@ -377,7 +377,18 @@ export function DataTable({
                           style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
                           onContextMenu={
                             onCellContextMenu && cell.column.id !== '__select__'
-                              ? (event) => onCellContextMenu(row.original, cell.column.id, cell.getValue(), event)
+                              ? (event) =>
+                                  onCellContextMenu(
+                                    row.original,
+                                    cell.column.id,
+                                    // Same value the cell is DISPLAYING: in edit
+                                    // mode EditableCell renders the draft, so
+                                    // handing the menu cell.getValue() made
+                                    // "Copy cell" copy the pre-edit value of a
+                                    // cell the user had just changed.
+                                    getDraftValue(rowKey, cell.column.id, cell.getValue()),
+                                    event
+                                  )
                               : undefined
                           }
                         >
@@ -406,7 +417,18 @@ export function DataTable({
                           style={{ width: cell.column.getSize(), height: ROW_HEIGHT }}
                           onContextMenu={
                             onCellContextMenu && cell.column.id !== '__select__'
-                              ? (event) => onCellContextMenu(row.original, cell.column.id, cell.getValue(), event)
+                              ? (event) =>
+                                  onCellContextMenu(
+                                    row.original,
+                                    cell.column.id,
+                                    // Same value the cell is DISPLAYING: in edit
+                                    // mode EditableCell renders the draft, so
+                                    // handing the menu cell.getValue() made
+                                    // "Copy cell" copy the pre-edit value of a
+                                    // cell the user had just changed.
+                                    getDraftValue(rowKey, cell.column.id, cell.getValue()),
+                                    event
+                                  )
                               : undefined
                           }
                         >

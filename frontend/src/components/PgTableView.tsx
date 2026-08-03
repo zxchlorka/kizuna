@@ -33,7 +33,7 @@ import {
   timestampForFilename,
   type ExportColumn,
 } from '@/lib/tableExport'
-import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
+import { buildBulkMutatePayload, draftCellValue, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
   buildRowIdentity,
   filtersEqual,
@@ -62,6 +62,13 @@ const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
 const EMPTY_DRAFT_DELETES: Record<string, DraftDeleteState> = {}
 const EMPTY_INSERTS: Record<string, unknown>[] = []
 type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | null
+
+// One checked row: how to address it in a mutation, and what it contained when
+// it was checked. See the selectedRows state for why both halves are kept.
+interface SelectedRow {
+  where: Record<string, unknown>
+  row: TableRow
+}
 
 function parseObjectName(object: string): { schema: string; table: string } {
   const [schema, table] = object.includes('.') ? object.split('.', 2) : ['public', object]
@@ -119,7 +126,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     { x: number; y: number; row: TableRow; column?: string; value?: unknown } | null
   >(null)
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
-  const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
+  // rowKey -> the row's PK predicate AND the row itself.
+  //
+  // Selection survives paging on purpose (Delete selected has always acted on
+  // every selected row, wherever it was selected), and `where` alone is enough
+  // to delete. Copy/export need the row's actual values, which only exist for
+  // the page they were read from -- so the row is captured at selection time.
+  // Deriving them later by intersecting with the current page instead is what
+  // made "Copy selected (12)" put 3 rows, or none, on the clipboard.
+  const [selectedRows, setSelectedRows] = useState<Map<string, SelectedRow>>(new Map())
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -215,11 +230,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     return out
   }, [rowIdentityEntries])
 
-  const rowIdentityByKey = useMemo(() => {
-    const out = new Map<string, RowIdentity>()
+  // Keyed by rowKey and carrying the whole entry, not just the identity: row
+  // selection needs the row's values as well as its PK predicate (see
+  // selectedRows), and a second parallel map would be one more thing to keep in
+  // step with this one.
+  const rowEntryByKey = useMemo(() => {
+    const out = new Map<string, (typeof rowIdentityEntries)[number] & { identity: RowIdentity }>()
     rowIdentityEntries.forEach((entry) => {
       if (entry.identity) {
-        out.set(entry.rowKey, entry.identity)
+        out.set(entry.rowKey, { ...entry, identity: entry.identity })
       }
     })
     return out
@@ -385,13 +404,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [refresh])
 
   const getDraftValue = useCallback(
-    (rowKey: string, columnName: string, fallback: unknown) => {
-      const rowDraft = draftUpdates[rowKey]
-      if (!rowDraft || !(columnName in rowDraft.data)) {
-        return fallback
-      }
-      return rowDraft.data[columnName]
-    },
+    (rowKey: string, columnName: string, fallback: unknown) =>
+      draftCellValue(draftUpdates, rowKey, columnName, fallback),
     [draftUpdates]
   )
 
@@ -403,33 +417,33 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const handleCellChange = useCallback(
     (rowKey: string, columnName: string, value: unknown) => {
       if (!editMode || !hasPrimaryKey) return
-      const identity = rowIdentityByKey.get(rowKey)
+      const identity = rowEntryByKey.get(rowKey)?.identity
       if (!identity) {
         setLocalError('Cannot edit this row: primary key value is missing.')
         return
       }
       setDraftCell(tabId, rowKey, identity.where, columnName, value)
     },
-    [editMode, hasPrimaryKey, rowIdentityByKey, setDraftCell, tabId]
+    [editMode, hasPrimaryKey, rowEntryByKey, setDraftCell, tabId]
   )
 
   const handleToggleRow = useCallback(
     (rowKey: string, checked: boolean) => {
       if (!hasPrimaryKey) return
-      const identity = rowIdentityByKey.get(rowKey)
-      if (!identity) return
+      const entry = rowEntryByKey.get(rowKey)
+      if (!entry?.identity) return
 
       setSelectedRows((prev) => {
         const next = new Map(prev)
         if (checked) {
-          next.set(rowKey, identity.where)
+          next.set(rowKey, { where: entry.identity.where, row: entry.row })
         } else {
           next.delete(rowKey)
         }
         return next
       })
     },
-    [hasPrimaryKey, rowIdentityByKey]
+    [hasPrimaryKey, rowEntryByKey]
   )
 
   const handleToggleAll = useCallback(
@@ -438,10 +452,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       setSelectedRows((prev) => {
         const next = new Map(prev)
         rowKeys.forEach((rowKey) => {
-          const identity = rowIdentityByKey.get(rowKey)
-          if (!identity) return
+          const entry = rowEntryByKey.get(rowKey)
+          if (!entry?.identity) return
           if (checked) {
-            next.set(rowKey, identity.where)
+            next.set(rowKey, { where: entry.identity.where, row: entry.row })
           } else {
             next.delete(rowKey)
           }
@@ -449,7 +463,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         return next
       })
     },
-    [hasPrimaryKey, rowIdentityByKey]
+    [hasPrimaryKey, rowEntryByKey]
   )
 
   const handleDeleteSelected = useCallback(() => {
@@ -459,8 +473,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       return
     }
     if (editMode) {
-      selectedRows.forEach((where, rowKey) => {
-        toggleDraftDelete(tabId, rowKey, where, true)
+      selectedRows.forEach((selected, rowKey) => {
+        toggleDraftDelete(tabId, rowKey, selected.where, true)
       })
       setSelectedRows(new Map())
       return
@@ -477,14 +491,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setIsSaving(true)
     setLocalError(null)
     try {
-      for (const where of selectedRows.values()) {
+      for (const selected of selectedRows.values()) {
         await mutate(
           connId,
           {
             type: 'delete',
             schema: schemaName,
             object: tableName,
-            where,
+            where: selected.where,
           },
           tabId,
           { reload: false }
@@ -687,10 +701,23 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     () => columns.map((column) => ({ name: column.name, type: column.data_type })),
     [columns]
   )
-  const toExportRow = useCallback((row: TableRow) => columns.map((column) => row[column.name]), [columns])
-  const selectedRowObjects = useMemo(
-    () => rowIdentityEntries.filter((entry) => selectedRows.has(entry.rowKey)).map((entry) => entry.row),
-    [rowIdentityEntries, selectedRows]
+  // Copy/export reproduce what the grid is SHOWING, which in edit mode means the
+  // unsaved draft rather than the value it replaced -- the same rule EditableCell
+  // renders by. rowKey is passed explicitly for selected rows, whose row objects
+  // may come from a page that is no longer loaded and so are not in rowKeyByRow.
+  const toExportRow = useCallback(
+    (row: TableRow, rowKey?: string) => {
+      const key = rowKey ?? rowKeyByRow.get(row)
+      return columns.map((column) => draftCellValue(draftUpdates, key, column.name, row[column.name]))
+    },
+    [columns, draftUpdates, rowKeyByRow]
+  )
+  // Insertion order, i.e. the order the rows were checked in. Every checked row
+  // is here regardless of which page it was checked on, so this list always has
+  // exactly `selectedRows.size` entries -- the number the menu shows.
+  const selectedRowEntries = useMemo(
+    () => Array.from(selectedRows, ([rowKey, selected]) => ({ rowKey, row: selected.row })),
+    [selectedRows]
   )
 
   const copyText = useCallback(
@@ -725,17 +752,19 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleCopy = useCallback(
     (format: 'tsv' | 'json', scope: 'all' | 'selected') => {
-      const sourceRows = scope === 'all' ? rows : selectedRowObjects
-      const exportRows = sourceRows.map(toExportRow)
+      const exportRows =
+        scope === 'all'
+          ? rows.map((row) => toExportRow(row))
+          : selectedRowEntries.map((entry) => toExportRow(entry.row, entry.rowKey))
       const text = format === 'tsv' ? buildTSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
       void copyText(text, `${exportRows.length} row${exportRows.length === 1 ? '' : 's'} copied to clipboard.`)
     },
-    [copyText, exportColumns, rows, selectedRowObjects, toExportRow]
+    [copyText, exportColumns, rows, selectedRowEntries, toExportRow]
   )
 
   const handleExport = useCallback(
     (format: 'csv' | 'json') => {
-      const exportRows = rows.map(toExportRow)
+      const exportRows = rows.map((row) => toExportRow(row))
       const stamp = timestampForFilename()
       const content = format === 'csv' ? buildCSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
       const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'
