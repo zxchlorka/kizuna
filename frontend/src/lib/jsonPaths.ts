@@ -127,20 +127,44 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+// descendKey applies one 'key' segment to one value, appending whatever it
+// reaches to out.
+//
+// Own properties only: the membership test used to be `seg.key in current`,
+// and `in` walks the prototype chain, so searching for a field named
+// `toString`, `constructor` or `valueOf` matched EVERY JSON object even though
+// no payload contains that field. The Go side resolves the same segment with a
+// plain map lookup (jsonPathMatchesFrom in internal/connector/kafka/messages.go),
+// which has no prototype chain at all.
+//
+// A key segment landing on an array is retried on each element, so "events.name"
+// behaves like "events[].name". That mirrors Go's "legacy implicit array
+// traversal" in the same function: without it a hand-typed `a.b` found nothing
+// on `{"a":[{"b":1}]}` while the backend scan found it, and the two searches
+// disagreed on the single most common Kafka payload shape.
+function descendKey(current: unknown, key: string, out: unknown[]): void {
+  if (Array.isArray(current)) {
+    for (const el of current) descendKey(el, key, out)
+    return
+  }
+  if (isPlainObject(current) && Object.prototype.hasOwnProperty.call(current, key)) {
+    out.push(current[key])
+  }
+}
+
 // traverse walks value following segments from the root and returns every leaf
-// reached. A 'key' segment descends objects only; an 'index' segment fans out
-// across array elements, so a path with '[]' can yield multiple leaves. A step
-// that does not apply (missing key, key on a non-object, '[]' on a non-array)
-// prunes that branch rather than throwing.
+// reached. A 'key' segment descends objects (and fans out across an array it
+// lands on, see descendKey); an 'index' segment fans out across array elements,
+// so a path with '[]' can yield multiple leaves. A step that does not apply
+// (missing key, key on a scalar, '[]' on a non-array) prunes that branch rather
+// than throwing.
 export function traverse(value: unknown, segments: PathSegment[]): unknown[] {
   let frontier: unknown[] = [value]
   for (const seg of segments) {
     const next: unknown[] = []
     for (const current of frontier) {
       if (seg.type === 'key') {
-        if (isPlainObject(current) && seg.key in current) {
-          next.push(current[seg.key])
-        }
+        descendKey(current, seg.key, next)
       } else if (Array.isArray(current)) {
         for (const el of current) next.push(el)
       }
