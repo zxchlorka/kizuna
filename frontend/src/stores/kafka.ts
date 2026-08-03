@@ -65,6 +65,11 @@ interface KafkaTopicTabState {
   // flag — one drives the "Scan more"/scanned UI, the other the amber coverage
   // banner.
   scanPartial: boolean
+  // The accumulated matches reached MAX_SCAN_MATCHES and the search stopped
+  // holding more. Distinct from scanPartial (the backend ran out of budget for
+  // one window) and from hasMore (the log still has messages): this one says
+  // the CLIENT stopped, and it is the reason "Scan more"/"Search all" go away.
+  scanLimitReached: boolean
 
   // Coverage/partial-result state for the normal (non-search) browse path —
   // see MessagesResponse.meta. The search/scan path never writes these; it has
@@ -217,6 +222,7 @@ function defaultTabState(): KafkaTopicTabState {
     scanning: false,
     scanned: 0,
     scanPartial: false,
+    scanLimitReached: false,
     partial: false,
     partialReason: null,
     partitionsTotal: 0,
@@ -301,6 +307,17 @@ const kafkaMessageRequests = new Map<string, Promise<void>>()
 // In-flight "Search topic" scan step per tab. Kept out of the reactive store so
 // Cancel can abort the underlying HTTP request directly (see cancelScan).
 const kafkaScanControllers = new Map<string, AbortController>()
+
+// Ceiling on the matches one search session accumulates. "Search all" walks the
+// whole log by design (there is deliberately no step limit — see scanAll), so
+// without a ceiling on the RESULTS a broad predicate on a big topic grows the
+// message array and the rendered table without bound.
+//
+// 5000 is chosen to be larger than any result set someone reads row by row,
+// while still rendering as a plain table: the row list is not virtualized, so
+// this doubles as the bound on DOM size. Raising it materially would mean
+// virtualizing KafkaMessageBrowser's table first.
+export const MAX_SCAN_MATCHES = 5000
 
 function kafkaTopicKey(connId: string, topic: string, tabId: string): string {
   return `${tabId}::${connId}::${topic}`
@@ -407,28 +424,55 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: true,
             messagesError: null,
             ...(reset
-              ? { messages: [], scanned: 0, scanPartial: false, nextCursor: null, hasMore: false }
+              ? {
+                  messages: [],
+                  scanned: 0,
+                  scanPartial: false,
+                  scanLimitReached: false,
+                  nextCursor: null,
+                  hasMore: false,
+                }
               : {}),
           },
         },
       }
     })
 
+    // A step owns the tab's scan state only while its controller is the one
+    // registered for the tab. Cancel flips `scanning` off immediately, so the
+    // user can start a new search before this step's promise has settled; once
+    // that happens every write below belongs to the newer step, not this one.
+    // The `finally` already reasons this way — these two do the same, so a
+    // superseded step can neither clear the new step's spinner, report its
+    // error, nor append its own rows to the new step's freshly reset list.
+    const isCurrentStep = () => kafkaScanControllers.get(tabId) === controller
+
     try {
       const data = await requestMessages(connId, topic, current.partitionFilter, cursorOffsets, search, seekOf(current), directionOf(current), controller.signal)
+      if (!isCurrentStep()) {
+        return
+      }
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         const base = reset ? [] : tab.messages
         const seen = new Set(base.map((row) => `${row.partition}:${row.offset}`))
         const matches = (data.rows ?? []).filter((row) => !seen.has(`${row.partition}:${row.offset}`))
+        const merged = [...base, ...matches]
+        // Every match is held in memory AND rendered as its own table row, so an
+        // unbounded accumulation is what actually kills the tab: a broad
+        // predicate ("has field" on a field most messages carry) over a large
+        // topic grows both without limit until the browser gives up. Truncating
+        // keeps the page responsive and, unlike a silent stop, the UI says so.
+        const capped = merged.length > MAX_SCAN_MATCHES ? merged.slice(0, MAX_SCAN_MATCHES) : merged
         return {
           tabs: {
             ...state.tabs,
             [tabId]: {
               ...tab,
-              messages: [...base, ...matches],
+              messages: capped,
               scanned: (reset ? 0 : tab.scanned) + (data.meta?.scanned ?? 0),
               scanPartial: Boolean(data.meta?.partial_scan),
+              scanLimitReached: capped.length >= MAX_SCAN_MATCHES,
               hasMore: readMore(data.meta, directionOf(current)),
               nextCursor: readCursor(data.meta, directionOf(current)),
               scanning: false,
@@ -437,6 +481,9 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         }
       })
     } catch (error) {
+      if (!isCurrentStep()) {
+        return
+      }
       if (error instanceof RequestAbortedError) {
         // Deliberate Cancel: keep the matches accumulated so far, just stop.
         set((state) => ({
@@ -710,6 +757,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: false,
             scanned: 0,
             scanPartial: false,
+            scanLimitReached: false,
             partial: false,
             partialReason: null,
             partitionsTotal: 0,
@@ -742,6 +790,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: false,
             scanned: 0,
             scanPartial: false,
+            scanLimitReached: false,
             partial: false,
             partialReason: null,
             partitionsTotal: 0,
@@ -774,6 +823,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: false,
             scanned: 0,
             scanPartial: false,
+            scanLimitReached: false,
             partial: false,
             partialReason: null,
             partitionsTotal: 0,
@@ -855,9 +905,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     },
 
     // scanAll гоняет шаги скана подряд, пока не кончится лог, не случится
-    // ошибка или пользователь не нажмёт Cancel. Лимита по количеству шагов нет
-    // сознательно: смысл кнопки в том, чтобы дочитать топик до конца, а выход
-    // из долгого ожидания — отмена, а не потолок.
+    // ошибка, не упрётся в потолок найденного или пользователь не нажмёт Cancel.
+    // Лимита по количеству ШАГОВ по-прежнему нет сознательно: смысл кнопки в
+    // том, чтобы дочитать топик до конца. А вот потолок по НАЙДЕННОМУ есть —
+    // MAX_SCAN_MATCHES, иначе широкий предикат на большом топике растит и массив
+    // сообщений, и таблицу без границы (см. константу).
     //
     // Каждый шаг сам домешивает свои совпадения и увеличивает `scanned`, так что
     // после отмены на экране остаётся всё найденное и честное «сколько прочитано».
@@ -876,6 +928,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         for (;;) {
           const tab = ensureState(get().tabs, tabId)
           if (tab.deepScanCanceled || !tab.hasMore || !tab.nextCursor || tab.messagesError) break
+          if (tab.scanLimitReached) break
 
           // Курсор ДО шага: если бэкенд вернёт тот же самый, цикл не сдвинулся
           // бы и крутился вечно. Без потолка по шагам это единственная защита.
@@ -932,6 +985,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             scanning: false,
             scanned: 0,
             scanPartial: false,
+            scanLimitReached: false,
             messages: [],
             nextCursor: null,
             hasMore: false,
