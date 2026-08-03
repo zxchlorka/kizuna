@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/zxchlorka/kizuna/internal/connector"
@@ -138,6 +139,57 @@ func (c *RedisConnector) invalidateKeyMeta(keys ...string) {
 	}
 }
 
+// redisSafeString готовит значение, пришедшее из Redis, к JSON-сериализации.
+// Redis binary-safe и возвращает произвольные байты, а encoding/json молча
+// заменяет каждый невалидный UTF-8 байт на U+FFFD — protobuf-значение доезжало
+// до UI как «????», причём исходные байты были уже потеряны.
+//
+// Валидный UTF-8 не трогаем вообще. Остальное рендерим как \xNN, сохраняя
+// печатный ASCII внутри — ровно в той форме, которую показывают redis-cli и
+// другие Redis-клиенты. Второе значение — признак того, что escape применялся.
+func redisSafeString(s string) (string, bool) {
+	if utf8.ValidString(s) {
+		return s, false
+	}
+
+	var b strings.Builder
+	b.Grow(len(s) * 4)
+	for i := 0; i < len(s); i++ {
+		switch c := s[i]; {
+		// Обратный слэш экранируем, иначе вывод неоднозначен: буквальный
+		// текст `\x41` в данных нельзя было бы отличить от байта 0x41.
+		case c == '\\':
+			b.WriteString(`\\`)
+		case c >= 0x20 && c <= 0x7e:
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, `\x%02x`, c)
+		}
+	}
+	return b.String(), true
+}
+
+// sanitizeRedisRows экранирует бинарные значения во всех строковых полях строк.
+// Единственная точка на все типы ключей: сюда сходятся string/hash/list/set/
+// zset/stream/json. Числовые поля (score, index) не трогаются.
+func sanitizeRedisRows(rows []map[string]any) bool {
+	found := false
+	for _, row := range rows {
+		for key, value := range row {
+			text, ok := value.(string)
+			if !ok {
+				continue
+			}
+			safe, binary := redisSafeString(text)
+			if binary {
+				row[key] = safe
+				found = true
+			}
+		}
+	}
+	return found
+}
+
 func redisDataResult(
 	columns []connector.ColumnMeta,
 	rows []map[string]any,
@@ -147,6 +199,11 @@ func redisDataResult(
 ) *connector.DataResult {
 	if meta == nil {
 		meta = make(map[string]any)
+	}
+	// has_binary поднимает фронт в read-only: показанный текст — это escape-форма,
+	// и запись её обратно как обычной строки уничтожила бы исходные байты.
+	if sanitizeRedisRows(rows) {
+		meta["has_binary"] = true
 	}
 	return &connector.DataResult{
 		Columns: columns,

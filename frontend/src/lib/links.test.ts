@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { extractMessageField } from '@/lib/links'
+import {
+  extractMessageField,
+  isPerElementExtract,
+  keyLevelRedisLinks,
+  memberRedisLinks,
+  selectionRedisLinks,
+} from '@/lib/links'
+import type { LinkRecord } from '@/types/api'
 
 describe('extractMessageField', () => {
   // Backward compatibility: existing saved links use bare dot-paths and must
@@ -50,5 +57,74 @@ describe('extractMessageField', () => {
 
   it('does not match a dotted key through a plain dot-path', () => {
     expect(extractMessageField('{"key.with.dot":{"name":"Zulu"}}', 'key.with.dot.name')).toBeNull()
+  })
+})
+
+function link(partial: Partial<LinkRecord>): LinkRecord {
+  return {
+    id: 'l1',
+    source_conn_id: 'redis-1',
+    source_kind: 'redis',
+    source_scope: 'profile:*',
+    target_conn_id: 'redis-1',
+    target_kind: 'redis',
+    key_pattern: 'c:*',
+    ...partial,
+  }
+}
+
+describe('isPerElementExtract', () => {
+  it('is true for member and selection', () => {
+    expect(isPerElementExtract('member')).toBe(true)
+    expect(isPerElementExtract('selection')).toBe(true)
+  })
+
+  it('is false for key-level modes and for undefined', () => {
+    expect(isPerElementExtract('value_field')).toBe(false)
+    expect(isPerElementExtract('key_capture')).toBe(false)
+    expect(isPerElementExtract('string_value')).toBe(false)
+    expect(isPerElementExtract(undefined)).toBe(false)
+  })
+})
+
+describe('selectionRedisLinks', () => {
+  const cookies = link({ id: 'c', source_extract: 'selection', source_field: 'cookie_ids', key_pattern: 'c:*' })
+  const devices = link({ id: 'd', source_extract: 'selection', source_field: 'device_ids', key_pattern: 'd:*' })
+  const anywhere = link({ id: 'any', source_extract: 'selection', key_pattern: 'x:*' })
+  const all = [cookies, devices, anywhere]
+
+  it('offers only the link of the field that was clicked', () => {
+    expect(selectionRedisLinks(all, 'redis-1', 'profile:42', 'cookie_ids').map((l) => l.id)).toEqual(['c', 'any'])
+  })
+
+  it('does not offer a foreign field link', () => {
+    expect(selectionRedisLinks(all, 'redis-1', 'profile:42', 'device_ids').map((l) => l.id)).toEqual(['d', 'any'])
+  })
+
+  it('offers only field-less links when there is no field (collection element)', () => {
+    expect(selectionRedisLinks(all, 'redis-1', 'profile:42', undefined).map((l) => l.id)).toEqual(['any'])
+  })
+
+  it('ignores links of another connection', () => {
+    expect(selectionRedisLinks(all, 'redis-2', 'profile:42', 'cookie_ids')).toEqual([])
+  })
+
+  it('ignores links whose key pattern does not match', () => {
+    expect(selectionRedisLinks(all, 'redis-1', 'session:42', 'cookie_ids')).toEqual([])
+  })
+})
+
+describe('memberRedisLinks and keyLevelRedisLinks', () => {
+  const member = link({ id: 'm', source_scope: 'c:*', source_extract: 'member' })
+  const selection = link({ id: 's', source_extract: 'selection', source_field: 'cookie_ids' })
+  const keyLevel = link({ id: 'k', source_extract: 'value_field', source_field: 'owner_id' })
+  const all = [member, selection, keyLevel]
+
+  it('member links are matched by key pattern only', () => {
+    expect(memberRedisLinks(all, 'redis-1', 'c:abc').map((l) => l.id)).toEqual(['m'])
+  })
+
+  it('key-level links exclude every per-element mode', () => {
+    expect(keyLevelRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).toEqual(['k'])
   })
 })
