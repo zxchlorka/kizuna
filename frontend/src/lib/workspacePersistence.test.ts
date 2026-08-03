@@ -4,6 +4,7 @@ import {
   restoreWorkspace,
   syncWorkspaceWithConnections,
 } from '@/lib/workspacePersistence'
+import { useDataStore } from '@/stores/data'
 import { useSqlConsoleStore } from '@/stores/sqlConsole'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
 
@@ -44,6 +45,7 @@ function resetStores() {
     navigationHistory: [],
   })
   useSqlConsoleStore.setState({ tabs: {} })
+  useDataStore.setState({ tabs: {} })
 }
 
 beforeEach(() => {
@@ -132,6 +134,66 @@ describe('restoreWorkspace — loading', () => {
 
     const sqlConsole = useSqlConsoleStore.getState()
     expect(sqlConsole.tabs['c1:sql:1'].editorValue).toBe('select * from users')
+  })
+
+  it('re-seeds the data store with a filtered tab’s filters, so the first fetch is filtered', () => {
+    const filters = [{ column: 'customer_id', op: 'eq' as const, value: '42' }]
+    localStorageMock.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        tabs: [{ ...objectTab('t1', 'c1'), label: 'orders (filtered)', initialFilters: filters }],
+        activeTabId: 't1',
+        activeTabByConnection: { c1: 't1' },
+        openConnectionIds: ['c1'],
+        sqlDrafts: {},
+      })
+    )
+
+    restoreWorkspace()
+
+    // Without this the tab kept its "(filtered)" label while the data store
+    // still held the default `filters: []`, and PgTableView's mount effect
+    // fetched the whole table.
+    expect(useDataStore.getState().tabs['t1'].opts.filters).toEqual(filters)
+    expect(useDataStore.getState().tabs['t1'].opts.offset).toBe(0)
+  })
+
+  it('leaves the data store alone for an unfiltered tab', () => {
+    localStorageMock.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        tabs: [objectTab('t1', 'c1')],
+        activeTabId: 't1',
+        activeTabByConnection: {},
+        openConnectionIds: ['c1'],
+        sqlDrafts: {},
+      })
+    )
+
+    restoreWorkspace()
+
+    expect(useDataStore.getState().tabs['t1']).toBeUndefined()
+  })
+
+  it('rejects the whole snapshot when initialFilters is not a filter array', () => {
+    localStorageMock.setItem(
+      STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        tabs: [{ ...objectTab('t1', 'c1'), initialFilters: 'customer_id=42' }],
+        activeTabId: 't1',
+        activeTabByConnection: {},
+        openConnectionIds: ['c1'],
+        sqlDrafts: {},
+      })
+    )
+
+    restoreWorkspace()
+
+    expect(useWorkspaceStore.getState().tabs).toEqual([])
+    expect(useDataStore.getState().tabs['t1']).toBeUndefined()
   })
 
   it('falls back to defaults on corrupt JSON instead of throwing', () => {
