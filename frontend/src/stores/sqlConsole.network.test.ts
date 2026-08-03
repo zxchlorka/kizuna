@@ -74,6 +74,83 @@ describe('runStatements — cancel', () => {
     expect(result0.result.error).toBeUndefined()
   })
 
+  it('reports a cancelled batch as a batch, not as its first statement', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const statements = ["insert into t values ('one')", 'select pg_sleep(30)', "insert into t values ('three')"]
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-batch', statements)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-batch')
+    await pending
+
+    const result = asExecute(useSqlConsoleStore.getState().tabs['tab-batch'].results[0])
+    expect(result.result.canceled).toBe(true)
+    expect(result.label).toBe('Batch')
+    // The entry stands for the whole run, so it must not carry (and the UI must
+    // not print) the first statement as if that were the one cancelled: by then
+    // it had almost certainly committed.
+    expect(result.batchScope).toBe(true)
+    expect(result.statement).toBe('')
+    expect(result.result.statement).toBe('')
+  })
+
+  it('still names the single cancelled statement when the run was not a batch', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-single', ['select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-single')
+    await pending
+
+    const result = asExecute(useSqlConsoleStore.getState().tabs['tab-single'].results[0])
+    expect(result.label).toBe('Stmt 1')
+    expect(result.batchScope).toBeUndefined()
+    expect(result.statement).toBe('select pg_sleep(30)')
+  })
+
+  it('refreshes an open History panel after a cancel, since it holds the only record of what ran', async () => {
+    const historyCalls: string[] = []
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/history')) {
+        historyCalls.push(url)
+        return Promise.resolve(jsonResponse([]))
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-hist')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-hist', true)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-hist', ['insert into t values (1)', 'select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-hist')
+    await pending
+
+    expect(historyCalls).toHaveLength(1)
+    // A failed history refresh must not turn a deliberate cancel into a failure.
+    expect(useSqlConsoleStore.getState().tabs['tab-hist'].error).toBeNull()
+  })
+
   it('cancelRun on one tab does not touch another tab running concurrently', async () => {
     const pendingSignals = new Map<string, AbortSignal>()
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
