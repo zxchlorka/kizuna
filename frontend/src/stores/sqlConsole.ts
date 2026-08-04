@@ -44,6 +44,11 @@ interface SqlTabState {
   historyOpen: boolean
   history: HistoryEntry[]
   historyLoading: boolean
+  // Kept apart from `error`, which means "the SQL run failed" and drives the
+  // console's failure state. A history read is a side panel refreshing itself;
+  // when it fails it must not repaint a successful -- or deliberately
+  // cancelled -- run as a failure.
+  historyError: string | null
   historySearch: string
   historyCursor: number
   historyDraft: string
@@ -81,6 +86,7 @@ const defaultTabState = (): SqlTabState => ({
   historyOpen: false,
   history: [],
   historyLoading: false,
+  historyError: null,
   historySearch: '',
   historyCursor: -1,
   historyDraft: '',
@@ -113,8 +119,25 @@ function normalizeHistory(items: HistoryEntry[]): HistoryEntry[] {
 const HISTORY_SETTLE_ATTEMPTS = 5
 const HISTORY_SETTLE_DELAY_MS = 150
 
-function newestHistoryID(tabs: Record<string, SqlTabState>, tabId: string): string | null {
-  return ensureState(tabs, tabId).history[0]?.id ?? null
+// "Our run landed" is an entry that was not in the list before AND whose command
+// is one this run submitted. Both halves are load-bearing: history is per
+// CONNECTION, so a second console tab on the same connection writes into the
+// same list, and merely watching for "the newest entry changed" let that other
+// tab's statement end our wait before ours had been written.
+//
+// ponytail: two identical statements running concurrently on one connection can
+// still satisfy this. Closing that needs the server to hand back a run id (or a
+// real cancel endpoint that returns the results instead of the client aborting
+// blind) -- worth doing when cancel stops being a bare HTTP abort.
+function runLanded(
+  tabs: Record<string, SqlTabState>,
+  tabId: string,
+  knownIDs: Set<string>,
+  ourStatements: Set<string>
+): boolean {
+  return ensureState(tabs, tabId).history.some(
+    (entry) => !knownIDs.has(entry.id) && ourStatements.has(entry.command.trim())
+  )
 }
 
 function explainLabel(result: ExplainResult, fallback: 'EXPLAIN' | 'ANALYZE'): string {
@@ -420,12 +443,15 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
               ...tab,
               history,
               historyLoading: false,
-              error: null,
+              historyError: null,
             },
           },
         }
       })
     } catch (error) {
+      // Only the panel's own error. `tab.error` belongs to the SQL run and is
+      // deliberately left alone: a history refresh that fails after a cancel
+      // used to repaint that cancel as a failed statement.
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return {
@@ -434,7 +460,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             [tabId]: {
               ...tab,
               historyLoading: false,
-              error: (error as Error).message,
+              historyError: (error as Error).message,
             },
           },
         }
@@ -589,13 +615,14 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         // just told to go and check. See HISTORY_SETTLE_ATTEMPTS for why this
         // reads more than once.
         if (ensureState(get().tabs, tabId).historyOpen) {
-          const before = newestHistoryID(get().tabs, tabId)
+          const knownIDs = new Set(ensureState(get().tabs, tabId).history.map((entry) => entry.id))
+          const ourStatements = new Set(trimmedStatements)
           for (let attempt = 0; attempt < HISTORY_SETTLE_ATTEMPTS; attempt += 1) {
             if (attempt > 0) {
               await new Promise((resolve) => setTimeout(resolve, HISTORY_SETTLE_DELAY_MS))
             }
             await get().fetchHistory(connId, tabId)
-            if (newestHistoryID(get().tabs, tabId) !== before) {
+            if (runLanded(get().tabs, tabId, knownIDs, ourStatements)) {
               break
             }
           }

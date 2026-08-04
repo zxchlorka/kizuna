@@ -268,6 +268,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         <HistoryPanel
           open={tab.historyOpen}
           loading={tab.historyLoading}
+          error={tab.historyError}
           search={tab.historySearch}
           items={tab.history}
           onSearchChange={(value) => setHistorySearch(tabId, value)}
