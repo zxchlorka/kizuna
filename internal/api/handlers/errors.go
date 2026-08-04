@@ -42,6 +42,21 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	})
 }
 
+// decodeJSON parses the request body into dst. On failure it has already
+// written the 400, so the caller only has to return.
+//
+// The decoder error is included: it describes the caller's own payload
+// ("invalid character 'x' looking for beginning of value"), which is the one
+// detail that makes a malformed request debuggable, and it leaks nothing about
+// the server. Half the handlers used to drop it.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return false
+	}
+	return true
+}
+
 func writeConnectorError(w http.ResponseWriter, err error) {
 	status, msg := mapConnectorError(err)
 	writeError(w, status, msg)

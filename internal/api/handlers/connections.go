@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -75,8 +74,7 @@ func (h *ConnectionsHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req connectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -116,8 +114,7 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) {
 	var req connectionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -184,8 +181,7 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		KafkaConfig *config.KafkaConfig `json:"kafka_config"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -269,8 +265,7 @@ func (h *ConnectionsHandler) UpdateVisibleSchemas(w http.ResponseWriter, r *http
 		VisibleSchemas []string `json:"visible_schemas"`
 	}
 
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 

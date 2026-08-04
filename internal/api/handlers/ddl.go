@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -22,8 +21,7 @@ func (h *DDLHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var op connector.DDLOp
-	if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeJSON(w, r, &op) {
 		return
 	}
 	if op.Type == "" || op.Schema == "" || op.Object == "" {
