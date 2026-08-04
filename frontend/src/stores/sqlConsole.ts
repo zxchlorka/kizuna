@@ -5,7 +5,7 @@ import type {
   ExplainResult,
   HistoryEntry,
 } from '@/types/api'
-import { apiFetch, fetchWithTimeout, RequestAbortedError } from '@/lib/http'
+import { apiFetch, fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
 
 export interface SqlExecutionResult {
   id: string
@@ -389,10 +389,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
 
     try {
       const res = await apiFetch(`/api/connections/${connId}/history?${params.toString()}`)
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
 
       const history = normalizeHistory(await res.json())
       set((state) => {
@@ -428,10 +425,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
 
   clearHistory: async (connId, tabId) => {
     const res = await apiFetch(`/api/connections/${connId}/history`, { method: 'DELETE' })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
 
     set((state) => {
       const tab = ensureState(state.tabs, tabId)

@@ -19,6 +19,23 @@ export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<
   return fetch(input, withClientHeader(init))
 }
 
+// Every API error response is `{"error": "...", "code": N}` (see writeError on
+// the backend). This turns a non-2xx into an Error carrying that message, and
+// falls back to the status text when the body is missing or is not JSON — which
+// is what a proxy error page or a dropped connection looks like.
+//
+// Deliberately takes a Response instead of doing the fetch itself: call sites
+// differ in which fetcher they need (apiFetch for requests that must not time
+// out, fetchWithTimeout elsewhere) and in whether they read a body at all —
+// DELETE endpoints answer 204 with no body. Only the duplicated part is shared.
+export async function throwOnApiError(res: Response): Promise<void> {
+  if (res.ok) {
+    return
+  }
+  const body = await res.json().catch(() => ({ error: res.statusText }))
+  throw new Error(body.error || res.statusText)
+}
+
 // Raised when a request is aborted through the caller-supplied `signal` (e.g. a
 // user pressing "Cancel"), as opposed to the internal timeout firing. Callers
 // can check for it to treat a deliberate cancel as a non-error instead of

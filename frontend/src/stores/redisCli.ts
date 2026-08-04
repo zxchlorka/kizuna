@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import type { ExecResult, ExecuteMultiResponse, HistoryEntry } from '@/types/api'
-import { apiFetch } from '@/lib/http'
+import { apiFetch, throwOnApiError } from '@/lib/http'
 
 export interface RedisCliEntry {
   id: string
@@ -151,10 +151,7 @@ export const useRedisCliStore = create<RedisCliStore>((set, get) => ({
 
   fetchHistory: async (connId, tabId) => {
     const res = await apiFetch(`/api/connections/${connId}/history?limit=50`)
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const history = (await res.json()) as HistoryEntry[]
     set((state) => {
       const tab = ensureState(state.tabs, tabId)

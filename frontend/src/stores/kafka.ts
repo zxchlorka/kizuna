@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { fetchWithTimeout, RequestAbortedError } from '@/lib/http'
+import { fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
 import { fieldPresence, matchField } from '@/lib/jsonPaths'
 import type { ColumnMeta, KafkaProduceRequest, KafkaProduceResult, ObjectItem } from '@/types/api'
 
@@ -387,10 +387,7 @@ async function requestMessages(
     search ? 22000 : 18000,
     signal
   )
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }))
-    throw new Error(body.error || res.statusText)
-  }
+  await throwOnApiError(res)
   return (await res.json()) as MessagesResponse
 }
 
@@ -527,10 +524,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         }))
         try {
           const res = await fetchWithTimeout(`/api/connections/${connId}/objects?path=${encodeURIComponent(topic)}`)
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({ error: res.statusText }))
-            throw new Error(body.error || res.statusText)
-          }
+          await throwOnApiError(res)
           const children = (await res.json()) as ObjectItem[]
           set((state) => ({
             tabs: {
@@ -1005,10 +999,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         },
         30000
       )
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
       return (await res.json()) as KafkaProduceResult
     },
   }
