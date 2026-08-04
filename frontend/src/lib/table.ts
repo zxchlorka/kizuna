@@ -115,6 +115,28 @@ export function buildPkWhere(columns: ColumnMeta[], row: TableRow): Record<strin
   return where
 }
 
+/**
+ * The rows a selection should copy or export, newest values first.
+ *
+ * There are two possible sources for a selected row's values: the page that is
+ * loaded right now, and the snapshot taken when the row was checked. The loaded
+ * page wins wherever it has the row -- a Refresh, or anyone else's write picked
+ * up by the next fetch, leaves the snapshot describing values the grid no longer
+ * shows, and copy/export must reproduce what is on screen.
+ *
+ * The snapshot is not redundant: it is the only record of rows checked on a page
+ * that is no longer loaded, which is what makes selection survive paging.
+ */
+export function resolveSelectedRows(
+  selected: Map<string, { row: TableRow }>,
+  loadedRow: (rowKey: string) => TableRow | undefined
+): { rowKey: string; row: TableRow }[] {
+  return Array.from(selected, ([rowKey, selection]) => ({
+    rowKey,
+    row: loadedRow(rowKey) ?? selection.row,
+  }))
+}
+
 export function buildRowIdentity(columns: ColumnMeta[], row: TableRow): RowIdentity | null {
   const where = buildPkWhere(columns, row)
   if (!where) {

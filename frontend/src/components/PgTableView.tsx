@@ -37,6 +37,7 @@ import {
   filtersEqual,
   filtersToState,
   normalizeFilters,
+  resolveSelectedRows,
   VALUELESS_FILTER_OPS,
 } from '@/lib/table'
 import { useDataStore } from '@/stores/data'
@@ -715,10 +716,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   )
   // Insertion order, i.e. the order the rows were checked in. Every checked row
   // is here regardless of which page it was checked on, so this list always has
-  // exactly `selectedRows.size` entries -- the number the menu shows.
+  // exactly `selectedRows.size` entries -- the number the menu shows. Values come
+  // from the loaded page where it has the row, so a Refresh cannot leave the
+  // clipboard describing what the grid stopped showing -- see resolveSelectedRows.
   const selectedRowEntries = useMemo(
-    () => Array.from(selectedRows, ([rowKey, selected]) => ({ rowKey, row: selected.row })),
-    [selectedRows]
+    () => resolveSelectedRows(selectedRows, (rowKey) => rowEntryByKey.get(rowKey)?.row),
+    [rowEntryByKey, selectedRows]
   )
 
   const copyText = useCallback(
