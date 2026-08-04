@@ -267,17 +267,29 @@ export function KafkaMessageBrowser({
           <ListTree className="h-3.5 w-3.5" />
           Choose field
         </Button>
-        <select
-          value={opInput}
-          onChange={(event) => setOpInput(event.target.value as KafkaMatchOp)}
-          aria-label="Match operator"
-          title="equals — compare the value. has field / no field — look for the field itself, at any depth."
-          className="h-8 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none focus:border-orange-500/50"
-        >
-          <option value="eq">equals</option>
-          <option value="exists">has field</option>
-          <option value="missing">no field</option>
-        </select>
+        {/* Same Select as the Partition control one row up, rather than a bare
+            <select>: the native one renders in the OS palette, so it was the
+            only light-on-white popup in a dark toolbar. */}
+        <Select value={opInput} onValueChange={(value) => setOpInput(value as KafkaMatchOp)}>
+          <SelectTrigger
+            className="h-8 w-32 font-mono text-xs"
+            aria-label="Match operator"
+            title="equals — compare the value. has field / no field — look for the field itself, at any depth."
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="eq" className="font-mono text-xs">
+              equals
+            </SelectItem>
+            <SelectItem value="exists" className="font-mono text-xs">
+              has field
+            </SelectItem>
+            <SelectItem value="missing" className="font-mono text-xs">
+              no field
+            </SelectItem>
+          </SelectContent>
+        </Select>
         <input
           value={opInput === 'eq' ? valueInput : ''}
           onChange={(event) => setValueInput(event.target.value)}
