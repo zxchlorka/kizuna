@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react'
 import type { CompletionItem } from '@/types/api'
-import { apiFetch } from '@/lib/http'
+import { apiFetch, throwOnApiError } from '@/lib/http'
 
 type CompletionContext = 'table' | 'column' | 'function' | 'keyword' | 'command' | 'key'
 
@@ -29,10 +29,7 @@ export function useAutocomplete(connId: string) {
     const res = await apiFetch(`/api/connections/${connIdRef.current}/completions?${params.toString()}`, {
       signal,
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     return (await res.json()) as CompletionItem[]
   }, [])
 }
