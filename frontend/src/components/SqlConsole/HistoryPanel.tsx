@@ -7,6 +7,8 @@ import type { HistoryEntry as HistoryEntryType } from '@/types/api'
 interface HistoryPanelProps {
   open: boolean
   loading: boolean
+  /** A failed history read, shown here rather than as a SQL failure. */
+  error: string | null
   search: string
   items: HistoryEntryType[]
   onSearchChange: (value: string) => void
@@ -19,6 +21,7 @@ interface HistoryPanelProps {
 export function HistoryPanel({
   open,
   loading,
+  error,
   search,
   items,
   onSearchChange,
@@ -59,6 +62,12 @@ export function HistoryPanel({
             Clear history
           </Button>
         </div>
+
+        {error && (
+          <div className="border-b border-destructive/30 bg-destructive/10 px-3 py-2 text-[11px] text-destructive">
+            Could not refresh history: {error}
+          </div>
+        )}
 
         <div className="flex-1 overflow-auto p-3">
           {loading ? (
