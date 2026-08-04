@@ -19,7 +19,7 @@ func New(apiRouter chi.Router, frontendFS fs.FS, addr string) *http.Server {
 
 	// Serve frontend static files with SPA fallback
 	if frontendFS != nil {
-		fileServer := http.FileServer(http.FS(frontendFS))
+		fileServer := http.FileServerFS(frontendFS)
 		mux.NotFound(func(w http.ResponseWriter, r *http.Request) {
 			// Don't serve index.html for API routes
 			if strings.HasPrefix(r.URL.Path, "/api/") {
@@ -27,22 +27,14 @@ func New(apiRouter chi.Router, frontendFS fs.FS, addr string) *http.Server {
 				return
 			}
 
-			// Try to serve the static file
-			path := strings.TrimPrefix(r.URL.Path, "/")
-			if path == "" {
-				path = "index.html"
-			}
-
-			// Check if file exists
-			f, err := frontendFS.Open(path)
-			if err == nil {
-				f.Close()
-				fileServer.ServeHTTP(w, r)
+			// Anything that is not a real file is a client-side route (and "/"
+			// is never a file), so hand back index.html and let the router in
+			// the page resolve it.
+			if _, err := fs.Stat(frontendFS, strings.TrimPrefix(r.URL.Path, "/")); err != nil {
+				http.ServeFileFS(w, r, frontendFS, "index.html")
 				return
 			}
 
-			// SPA fallback: serve index.html for non-file routes
-			r.URL.Path = "/"
 			fileServer.ServeHTTP(w, r)
 		})
 	} else {
