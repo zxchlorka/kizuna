@@ -23,6 +23,7 @@ import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
@@ -32,6 +33,7 @@ import {
   linkSourceLabel,
   linkSummary,
   linkTargetLabel,
+  linkTouchesObject,
 } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
@@ -130,7 +132,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const pushToast = useToastStore((state) => state.push)
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
+  const connections = useConnectionStore((state) => state.connections)
   const openLinkTarget = useOpenLinkTarget()
+
+  // Both ends of a link are named, because the far end is usually a different
+  // connection and the summary is otherwise ambiguous between servers.
+  const connectionName = useCallback(
+    (id: string) => connections.find((connection) => connection.id === id)?.name ?? id,
+    [connections]
+  )
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [linkMenu, setLinkMenu] = useState<
@@ -185,12 +195,28 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     [links, connId, object]
   )
 
-  // Everything else wired up on this connection. Without it a table with no
-  // links of its own showed "No links for this table" and nothing more, which
-  // reads as "this connection has none" rather than "none apply here".
+  // Links pointing AT this table that cannot be walked backwards (a Redis
+  // value_field/string_value source cannot be rebuilt from the value). They are
+  // about this table, so they are listed here rather than swept into the
+  // "elsewhere" group -- just not clickable.
+  const inboundOnlyLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'postgres' &&
+          link.table === object &&
+          !canReverse(link)
+      ),
+    [links, connId, object]
+  )
+
+  // Everything else wired up on this connection. Membership is decided by what
+  // the link mentions, never by whether it happens to be navigable -- see
+  // linkTouchesObject.
   const otherConnectionLinks = useMemo(
-    () => connectionLinks(links, connId, [...tableLinks, ...reverseLinks]),
-    [links, connId, tableLinks, reverseLinks]
+    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'postgres'))),
+    [links, connId, object]
   )
   // The dialog answers "everything on this connection", so it lists them all.
   const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
@@ -250,13 +276,23 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       // value to follow them with.
       return allConnectionLinks.map((link) => ({
         id: link.id,
-        label: linkSummary(link),
+        label: linkSummary(link, connectionName),
         disabled: true,
         onPick: () => undefined,
       }))
     }
     return []
-  }, [pickerGroup, linkMenu, columns, tableLinks, reverseLinks, allConnectionLinks, openLinkTarget, openLinkSource])
+  }, [
+    pickerGroup,
+    linkMenu,
+    columns,
+    tableLinks,
+    reverseLinks,
+    allConnectionLinks,
+    connectionName,
+    openLinkTarget,
+    openLinkSource,
+  ])
   const columnNames = useMemo(() => columns.map((c) => c.name), [columns])
   const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
@@ -1164,6 +1200,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               {`Show all (${reverseLinks.length})…`}
             </FloatingMenuItem>
           )}
+          {/* These point at this table but cannot be walked back to their
+              source, so they are shown, not followed. */}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuSeparator />}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuLabel>Points here · not reversible</FloatingMenuLabel>}
+          {inboundOnlyLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => (
+            <FloatingMenuItem key={`in-${link.id}`} disabled>
+              {linkSummary(link, connectionName)}
+            </FloatingMenuItem>
+          ))}
           {/* What else this connection is wired to. Reference only -- these
               belong to other tables, so this row has no value to follow them
               with -- but without them a table with no links of its own looked
@@ -1172,7 +1217,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
           {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link: LinkRecord) => (
             <FloatingMenuItem key={`conn-${link.id}`} disabled>
-              {linkSummary(link)}
+              {linkSummary(link, connectionName)}
             </FloatingMenuItem>
           ))}
           {allConnectionLinks.length > 0 && (

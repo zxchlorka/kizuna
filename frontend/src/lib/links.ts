@@ -187,6 +187,39 @@ export function selectionRedisLinks(
  * `exclude` drops links a menu is already showing as actionable, so the group
  * adds information rather than repeating the list above it.
  */
+/**
+ * Whether a link mentions the open object at either end.
+ *
+ * Deliberately separate from canReverse, which asks whether the link can be
+ * FOLLOWED backwards. Conflating the two put a link pointing straight at the
+ * open table under "Elsewhere on this connection" whenever it happened not to
+ * be reversible -- next to a "No links for this table" line describing the same
+ * table. Belonging decides what the group excludes; navigability only decides
+ * whether the item is clickable.
+ */
+export function linkTouchesObject(
+  link: LinkRecord,
+  connId: string,
+  object: string,
+  kind: 'postgres' | 'redis' | 'kafka'
+): boolean {
+  const matchesScope = (scope: string) =>
+    kind === 'redis' ? redisKeyMatchesPattern(scope, object) : scope === object
+
+  const isSource = link.source_conn_id === connId && link.source_kind === kind && matchesScope(link.source_scope)
+  if (isSource) {
+    return true
+  }
+
+  if (link.target_conn_id !== connId || link.target_kind !== kind) {
+    return false
+  }
+  if (kind === 'redis') {
+    return matchesScope(link.key_pattern ?? '')
+  }
+  return kind === 'kafka' ? link.target_topic === object : link.table === object
+}
+
 export function connectionLinks(
   links: LinkRecord[],
   connId: string,
@@ -199,14 +232,28 @@ export function connectionLinks(
   )
 }
 
-// linkSummary renders a readable one-line description of a link for the Settings list.
-export function linkSummary(link: LinkRecord): string {
+/**
+ * A readable one-line description of a link.
+ *
+ * `connectionName` is what makes the line identifying rather than merely
+ * descriptive: a link's two ends often live on different connections, and
+ * without their names two links between same-named tables on different servers
+ * render as the same string. Lists that show links the reader cannot click into
+ * -- the Settings list, the "on this connection" dialog -- have nothing else to
+ * tell them apart, so they pass it.
+ */
+export function linkSummary(link: LinkRecord, connectionName?: (connId: string) => string): string {
+  const on = (connId: string) => {
+    const name = connectionName?.(connId)
+    return name ? `${name} · ` : ''
+  }
+
   const srcDetail = link.source_extract
     ? ` [${link.source_extract}${link.source_field ? ` ${link.source_field}` : ''}]`
     : link.source_field
     ? ` ${link.source_field}`
     : ''
-  const source = `${link.source_kind}:${link.source_scope}${srcDetail}`
+  const source = `${on(link.source_conn_id)}${link.source_kind}:${link.source_scope}${srcDetail}`
   let target: string
   if (link.target_kind === 'kafka') {
     target = `kafka:${link.target_topic} (${link.target_field})`
@@ -215,5 +262,5 @@ export function linkSummary(link: LinkRecord): string {
   } else {
     target = `postgres:${link.table}.${link.column}`
   }
-  return `${source} → ${target}`
+  return `${source} → ${on(link.target_conn_id)}${target}`
 }
