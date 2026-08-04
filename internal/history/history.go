@@ -24,6 +24,22 @@ func NewStore(configPath string) *Store {
 }
 
 func (s *Store) Append(connectionID string, entry connector.HistoryEntry) error {
+	return s.AppendMany(connectionID, []connector.HistoryEntry{entry})
+}
+
+// AppendMany records a whole batch as one load-modify-save, so a concurrent
+// List never observes a batch half-written.
+//
+// That is not a micro-optimization: the SQL console reads history immediately
+// after cancelling a batch, because the aborted response took the per-statement
+// outcome with it and history is the only surviving record. Appending statement
+// by statement gave that read a window in which the batch was partly there, and
+// "partly there" is indistinguishable from "finished" to the reader.
+func (s *Store) AppendMany(connectionID string, batch []connector.HistoryEntry) error {
+	if len(batch) == 0 {
+		return nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -32,7 +48,7 @@ func (s *Store) Append(connectionID string, entry connector.HistoryEntry) error 
 		return err
 	}
 
-	entries = append(entries, entry)
+	entries = append(entries, batch...)
 	if len(entries) > maxEntriesPerConnection {
 		entries = entries[len(entries)-maxEntriesPerConnection:]
 	}
