@@ -13,6 +13,7 @@ import { Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta, FilterExpr, TableRow } from '@/types/api'
 import type { ColumnFilterState } from '@/types/table'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { ColumnHeader } from '@/components/DataTable/ColumnHeader'
 import { EditableCell } from '@/components/DataTable/EditableCell'
 import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
@@ -322,18 +323,30 @@ export function DataTable({
 
                           return (
                             <div className="flex items-center gap-0.5">
-                              <select
+                              {/* Wider than the old native control because the
+                                  chevron now sits inside the box; '!null' is the
+                                  longest label it has to hold. */}
+                              <Select
                                 value={state.op}
-                                onChange={(e) => onFilterChange(columnId, { ...state, op: e.target.value as FilterExpr['op'] })}
-                                className="h-6 w-[52px] shrink-0 rounded border border-border bg-background px-1 text-[11px] text-foreground outline-none ring-ring/20 focus:ring-2"
-                                title="Filter operator"
+                                onValueChange={(value) =>
+                                  onFilterChange(columnId, { ...state, op: value as FilterExpr['op'] })
+                                }
                               >
-                                {ops.map((op) => (
-                                  <option key={op.value} value={op.value}>
-                                    {op.label}
-                                  </option>
-                                ))}
-                              </select>
+                                <SelectTrigger
+                                  className="h-6 w-16 shrink-0 rounded border px-1 text-[11px]"
+                                  title="Filter operator"
+                                  aria-label="Filter operator"
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {ops.map((op) => (
+                                    <SelectItem key={op.value} value={op.value} className="text-[11px]">
+                                      {op.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
                               {!isNullOp && (
                                 <input
                                   type="text"
