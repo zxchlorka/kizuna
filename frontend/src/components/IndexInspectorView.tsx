@@ -58,8 +58,8 @@ export function IndexInspectorView({ connId, object, tabId }: IndexInspectorView
 
   const handleCopyDefinition = async () => {
     if (!info?.definition) return
-    const result = await writeClipboardText(info.definition)
-    if (result.ok) {
+    const copied = await writeClipboardText(info.definition)
+    if (copied) {
       pushToast({
         tone: 'success',
         title: 'Definition copied',

@@ -98,8 +98,8 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
   }, [activeExecuteResult])
 
   const copyText = async (text: string, successMessage: string) => {
-    const result = await writeClipboardText(text)
-    if (result.ok) {
+    const copied = await writeClipboardText(text)
+    if (copied) {
       pushToast({ tone: 'success', title: 'Copied', message: successMessage })
     } else {
       pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
