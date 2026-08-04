@@ -48,10 +48,7 @@ go run ./cmd/kizuna
 Подключайте три типа источников в одном мастере: **PostgreSQL**, **Redis** и **Kafka**. Redis поддерживает standalone, Cluster и Sentinel; для Kafka доступны несколько брокеров, SASL и TLS с пользовательским CA bundle.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/connections-types.webp" type="image/webp">
     <img src=".github/assets/connections-types.png" width="960" alt="Мастер нового подключения с выбором PostgreSQL, Redis и Kafka">
-  </picture>
 </p>
 
 ## PostgreSQL — от схемы до запроса
@@ -97,10 +94,7 @@ go run ./cmd/kizuna
 Производитель умеет отправлять одно сообщение, набор JSON-объектов в режиме **Multi** или пакет, развёрнутый из шаблона в режиме **Loop**. Перед отправкой Kizuna показывает точный preview каждого сообщения: выражения `{{i}}`, шаг и количество можно проверить до записи в Kafka.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/kafka-produce.webp" type="image/webp">
     <img src=".github/assets/kafka-produce.png" width="960" alt="Kafka producer переключается между режимами Multi и Loop и показывает предварительный просмотр пакета сообщений">
-  </picture>
 </p>
 
 <p align="center">
@@ -116,10 +110,7 @@ go run ./cmd/kizuna
 **Дальше это работает само.** Правый клик по любому сообщению этого топика — и в меню уже висит `Redis: profile:1008`. Оттуда тем же движением в `public.orders`, отфильтрованные по тому же `user_id`. Фильтр, breadcrumb и обратные переходы Kizuna строит сама — ни одного скопированного значения.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
     <img src=".github/assets/cross-source-links.png" width="960" alt="Создание связи из Kafka-сообщения и переход по ней в Redis-профиль и заказы PostgreSQL">
-  </picture>
 </p>
 
 <p align="center">

@@ -38,7 +38,6 @@ interface TabData {
   schemaError: string | null
   dataError: string | null
   mutationError: string | null
-  objectInfoError: string | null
   meta: Record<string, unknown> | null
   opts: DataOpts
   draftUpdates: Record<string, DraftUpdate>
@@ -89,7 +88,6 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       schemaError: null,
       dataError: null,
       mutationError: null,
-      objectInfoError: null,
       meta: null,
       opts: { ...DEFAULT_OPTS },
       draftUpdates: {},
@@ -331,7 +329,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
               ...tab,
               objectInfoRequestId: nextRequestId,
               objectInfoLoading: true,
-              objectInfoError: null,
             },
           },
         }
@@ -359,7 +356,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
                 ...tab,
                 objectInfo: info,
                 objectInfoLoading: false,
-                objectInfoError: null,
               },
             },
           }
@@ -377,7 +373,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
                 ...tab,
                 objectInfo: null,
                 objectInfoLoading: false,
-                objectInfoError: (e as Error).message,
               },
             },
           }

@@ -118,7 +118,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const pushToast = useToastStore((state) => state.push)
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
-  const linksFor = useLinksStore((state) => state.linksFor)
   const openLinkTarget = useOpenLinkTarget()
 
   const [sorting, setSorting] = useState<SortingState>([])
@@ -152,8 +151,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [fetchLinks])
 
   const tableLinks = useMemo(
-    () => linksFor(connId, object).filter((link) => link.source_kind === 'postgres'),
-    [linksFor, links, connId, object]
+    () =>
+      links.filter(
+        (link) =>
+          link.source_conn_id === connId && link.source_scope === object && link.source_kind === 'postgres'
+      ),
+    [links, connId, object]
   )
 
   const openLinkSource = useOpenLinkSource()

@@ -1,4 +1,4 @@
-import type { ColumnMeta, ObjectType, RedisObjectType, TableRow } from '@/types/api'
+import type { ObjectType, RedisObjectType } from '@/types/api'
 
 const REDIS_TYPE_LABELS: Record<string, string> = {
   redis_string: 'String',
@@ -74,35 +74,6 @@ export function getRedisTTLStyle(ttlSeconds?: number | null): string {
     return 'border-amber-500/20 bg-amber-500/10 text-amber-600 dark:text-amber-400'
   }
   return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
-}
-
-export function createRedisColumn(
-  name: string,
-  dataType: string,
-  editable: boolean,
-  nullable = false
-): ColumnMeta {
-  return {
-    name,
-    data_type: dataType,
-    nullable,
-    default: null,
-    is_pk: false,
-    is_fk: false,
-    fk_table: '',
-    fk_column: '',
-    editable,
-  }
-}
-
-export function getRedisRowKey(row: TableRow, preferredFields: string[], fallbackIndex: number): string {
-  for (const field of preferredFields) {
-    const value = row[field]
-    if (value !== null && value !== undefined && String(value).trim() !== '') {
-      return String(value)
-    }
-  }
-  return `redis-row:${fallbackIndex}`
 }
 
 export function tryParseJson(value: string): { isJson: boolean; text: string; parsed?: unknown } {
