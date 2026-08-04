@@ -12,9 +12,8 @@ import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
-import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
-import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
@@ -945,18 +944,28 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onNavigate={handleNavigateReferencedBy}
       />
 
-      <DeleteRowsDialog
+      <ConfirmDialog
         open={showDeleteDialog}
-        object={object}
-        selectedCount={selectedRows.size}
-        saving={isSaving}
+        title="Delete selected rows?"
+        description={
+          <>
+            This action cannot be undone. {selectedRows.size} {selectedRows.size === 1 ? 'row' : 'rows'} will be
+            deleted from <span className="font-mono">{object}</span>.
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        busy={isSaving}
         onOpenChange={setShowDeleteDialog}
-        onConfirm={confirmImmediateDelete}
+        onConfirm={() => void confirmImmediateDelete()}
       />
 
-      <SaveChangesDialog
+      <ConfirmDialog
         open={showSaveDialog}
-        saving={isSaving}
+        title="Apply pending changes?"
+        description="Changes will be written to the database in a single bulk transaction."
+        confirmLabel="Apply changes"
+        busy={isSaving}
         onOpenChange={setShowSaveDialog}
         onConfirm={handleSaveAll}
       />

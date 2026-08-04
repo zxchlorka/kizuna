@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronUp, Loader2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { EmptyState } from '@/components/EmptyState'
-import { AnalyzeWarningDialog } from '@/components/SqlConsole/AnalyzeWarningDialog'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { HistoryPanel } from '@/components/SqlConsole/HistoryPanel'
 import { SqlEditor, type SqlEditorHandle } from '@/components/SqlConsole/SqlEditor'
 import { SqlResultsArea } from '@/components/SqlConsole/SqlResultsArea'
@@ -283,9 +283,12 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
           }}
         />
 
-        <AnalyzeWarningDialog
+        <ConfirmDialog
           open={analyzeDialogOpen}
-          statement={pendingAnalyzeStatement}
+          title="Run EXPLAIN ANALYZE?"
+          description="This mode executes the query for real. For INSERT, UPDATE, DELETE, or DDL statements it can change data. For heavy SELECT queries it can take time and load the database."
+          preview={{ label: 'Query Preview', content: pendingAnalyzeStatement.trim() }}
+          confirmLabel="Run Analyze"
           onOpenChange={(open) => {
             setAnalyzeDialogOpen(open)
             if (!open) {
