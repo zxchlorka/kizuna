@@ -1,7 +1,6 @@
 package handlers
 
 import (
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -52,8 +51,7 @@ func (h *LinksHandler) List(w http.ResponseWriter, r *http.Request) {
 
 func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var req linkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.validate(req); err != nil {
@@ -90,8 +88,7 @@ func (h *LinksHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *LinksHandler) Update(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	var req linkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body")
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 	if err := h.validate(req); err != nil {
