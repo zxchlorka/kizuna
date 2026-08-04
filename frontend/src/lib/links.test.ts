@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  connectionLinks,
   extractMessageField,
   isPerElementExtract,
   keyLevelRedisLinks,
@@ -126,5 +127,31 @@ describe('memberRedisLinks and keyLevelRedisLinks', () => {
 
   it('key-level links exclude every per-element mode', () => {
     expect(keyLevelRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).toEqual(['k'])
+  })
+})
+
+// A key, table or topic with no links of its own used to show an empty menu,
+// which looks the same as a connection with nothing configured. This group is
+// what tells those two apart.
+describe('connectionLinks', () => {
+  const outgoing = link({ id: 'out', source_conn_id: 'redis-1', target_conn_id: 'kafka-1', target_kind: 'kafka' })
+  const incoming = link({ id: 'in', source_conn_id: 'kafka-1', source_kind: 'kafka', target_conn_id: 'redis-1' })
+  const elsewhere = link({ id: 'other', source_conn_id: 'pg-9', source_kind: 'postgres', target_conn_id: 'kafka-1', target_kind: 'kafka' })
+  const all = [outgoing, incoming, elsewhere]
+
+  it('includes links in both directions, since either end is "on this connection"', () => {
+    expect(connectionLinks(all, 'redis-1').map((l) => l.id)).toEqual(['out', 'in'])
+  })
+
+  it('leaves out links that never touch the connection', () => {
+    expect(connectionLinks(all, 'redis-1').map((l) => l.id)).not.toContain('other')
+  })
+
+  it('drops what the menu already lists above it, so the group adds information', () => {
+    expect(connectionLinks(all, 'redis-1', [outgoing]).map((l) => l.id)).toEqual(['in'])
+  })
+
+  it('is empty for a connection with nothing wired up', () => {
+    expect(connectionLinks(all, 'redis-unused')).toEqual([])
   })
 })

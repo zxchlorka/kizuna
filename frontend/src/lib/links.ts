@@ -175,6 +175,30 @@ export function selectionRedisLinks(
   )
 }
 
+/**
+ * Every link this connection takes part in, as source or as target.
+ *
+ * The other filters here answer "what can I click from the thing on screen",
+ * which is why a key, table or topic with no links of its own showed an empty
+ * menu -- indistinguishable from a connection that has none configured at all.
+ * This answers the other question, "what is wired up on this connection",
+ * so the menu can say so instead of going blank.
+ *
+ * `exclude` drops links a menu is already showing as actionable, so the group
+ * adds information rather than repeating the list above it.
+ */
+export function connectionLinks(
+  links: LinkRecord[],
+  connId: string,
+  exclude: LinkRecord[] = []
+): LinkRecord[] {
+  const shown = new Set(exclude.map((link) => link.id))
+  return links.filter(
+    (link) =>
+      !shown.has(link.id) && (link.source_conn_id === connId || link.target_conn_id === connId)
+  )
+}
+
 // linkSummary renders a readable one-line description of a link for the Settings list.
 export function linkSummary(link: LinkRecord): string {
   const srcDetail = link.source_extract

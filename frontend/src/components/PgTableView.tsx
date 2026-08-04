@@ -11,6 +11,12 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
+import {
+  LINK_MENU_CAP,
+  LINK_PREVIEW_CAP,
+  LinkPickerDialog,
+  type LinkPickerItem,
+} from '@/components/links/LinkPickerDialog'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
 import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
@@ -19,7 +25,14 @@ import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { useLinksStore } from '@/stores/links'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
-import { canReverse, extractPgColumn, linkSourceLabel, linkTargetLabel } from '@/lib/links'
+import {
+  canReverse,
+  connectionLinks,
+  extractPgColumn,
+  linkSourceLabel,
+  linkSummary,
+  linkTargetLabel,
+} from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import {
@@ -124,6 +137,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     { x: number; y: number; row: TableRow; column?: string; value?: unknown } | null
   >(null)
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
+  const [pickerGroup, setPickerGroup] = useState<'table' | 'reverse' | 'connection' | null>(null)
   // rowKey -> the row's PK predicate AND the row itself.
   //
   // Selection survives paging on purpose (Delete selected has always acted on
@@ -171,6 +185,17 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     [links, connId, object]
   )
 
+  // Everything else wired up on this connection. Without it a table with no
+  // links of its own showed "No links for this table" and nothing more, which
+  // reads as "this connection has none" rather than "none apply here".
+  const otherConnectionLinks = useMemo(
+    () => connectionLinks(links, connId, [...tableLinks, ...reverseLinks]),
+    [links, connId, tableLinks, reverseLinks]
+  )
+  // The dialog answers "everything on this connection", so it lists them all.
+  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
+
+
   useEffect(() => {
     void (async () => {
       await fetchData(connId, object, tabId)
@@ -189,6 +214,49 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [clearDrafts, connId, fetchData, fetchSchema, object, tabId])
 
   const columns = tabData?.columns ?? EMPTY_COLUMNS
+
+  const pickerItems = useMemo<LinkPickerItem[]>(() => {
+    const row = linkMenu?.row
+    if (pickerGroup === 'table' && row) {
+      return tableLinks.map((link) => {
+        const value = extractPgColumn(columns, row, link.source_field ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkTarget(link, value)
+            setLinkMenu(null)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'reverse' && row) {
+      return reverseLinks.map((link) => {
+        const value = extractPgColumn(columns, row, link.column ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkSource(link, value)
+            setLinkMenu(null)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'connection') {
+      // Reference only: these belong to other tables, so this row holds no
+      // value to follow them with.
+      return allConnectionLinks.map((link) => ({
+        id: link.id,
+        label: linkSummary(link),
+        disabled: true,
+        onPick: () => undefined,
+      }))
+    }
+    return []
+  }, [pickerGroup, linkMenu, columns, tableLinks, reverseLinks, allConnectionLinks, openLinkTarget, openLinkSource])
   const columnNames = useMemo(() => columns.map((c) => c.name), [columns])
   const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
@@ -1054,7 +1122,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           <FloatingMenuSeparator />
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
           {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
-          {tableLinks.map((link: LinkRecord) => {
+          {tableLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => {
             const value = extractPgColumn(columns, linkMenu.row, link.source_field ?? '')
             return (
               <FloatingMenuItem
@@ -1069,9 +1137,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               </FloatingMenuItem>
             )
           })}
+          {tableLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('table')}>
+              {`Show all (${tableLinks.length})…`}
+            </FloatingMenuItem>
+          )}
           {reverseLinks.length > 0 && <FloatingMenuSeparator />}
           {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
-          {reverseLinks.map((link: LinkRecord) => {
+          {reverseLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => {
             const value = extractPgColumn(columns, linkMenu.row, link.column ?? '')
             return (
               <FloatingMenuItem
@@ -1086,6 +1159,27 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               </FloatingMenuItem>
             )
           })}
+          {reverseLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('reverse')}>
+              {`Show all (${reverseLinks.length})…`}
+            </FloatingMenuItem>
+          )}
+          {/* What else this connection is wired to. Reference only -- these
+              belong to other tables, so this row has no value to follow them
+              with -- but without them a table with no links of its own looked
+              like a connection with none. */}
+          {otherConnectionLinks.length > 0 && <FloatingMenuSeparator />}
+          {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
+          {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link: LinkRecord) => (
+            <FloatingMenuItem key={`conn-${link.id}`} disabled>
+              {linkSummary(link)}
+            </FloatingMenuItem>
+          ))}
+          {allConnectionLinks.length > 0 && (
+            <FloatingMenuItem onClick={() => setPickerGroup('connection')}>
+              {`Show all ${allConnectionLinks.length} on this connection…`}
+            </FloatingMenuItem>
+          )}
           <FloatingMenuSeparator />
           <FloatingMenuItem
             onClick={() => {
@@ -1097,6 +1191,21 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           </FloatingMenuItem>
         </FloatingMenu>
       )}
+
+      <LinkPickerDialog
+        open={pickerGroup !== null}
+        onOpenChange={(next) => {
+          if (!next) setPickerGroup(null)
+        }}
+        title={
+          pickerGroup === 'reverse'
+            ? 'Back to source'
+            : pickerGroup === 'connection'
+            ? 'Links on this connection'
+            : 'Open linked record'
+        }
+        items={pickerItems}
+      />
 
       <CreateLinkDialog
         open={createLinkOpen}
