@@ -30,8 +30,8 @@ export function KafkaMessageDetail({ message, onExpand, tall }: KafkaMessageDeta
   const pushToast = useToastStore((state) => state.push)
 
   const copyToClipboard = async (payload: string, what: string) => {
-    const result = await writeClipboardText(payload)
-    if (result.ok) {
+    const copied = await writeClipboardText(payload)
+    if (copied) {
       pushToast({ tone: 'success', title: `${what} copied`, message: `${message.partition}:${message.offset}` })
     } else {
       pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })

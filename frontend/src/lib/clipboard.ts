@@ -1,85 +1,31 @@
 /**
- * Single shared entry point for "copy this text to the clipboard." Before this,
- * IndexInspectorView.tsx and KafkaMessageDetail.tsx each called
- * navigator.clipboard.writeText directly with their own try/catch, and neither
- * handled the case where the Clipboard API doesn't exist at all.
+ * Single shared entry point for "copy this text to the clipboard", so that a
+ * failure always surfaces to the user instead of being a silent no-op. Before
+ * this, callers each did their own try/catch and none handled the Clipboard API
+ * being absent entirely.
  *
- * navigator.clipboard is only exposed in a secure context (HTTPS, or
- * http://localhost). Kizuna's default bind is loopback, which is a secure
- * context, so this normally never matters. But KIZUNA_BIND=0.0.0.0 lets
- * someone open the app over plain http:// at a LAN address (see
- * docker-compose.yml's comment on that flag) — there, `navigator.clipboard` is
- * `undefined`, not a rejecting promise, so a bare `navigator.clipboard.writeText`
- * throws a TypeError before any network/permission concern even comes up.
- *
- * This falls back to the legacy `document.execCommand('copy')` path, which has
- * no secure-context requirement (it predates the Clipboard API and is still
- * broadly supported despite being deprecated). Only if that ALSO fails does the
- * caller get an honest "copy is unavailable" result to show the user — never a
- * silent no-op.
+ * navigator.clipboard is exposed only in a secure context — HTTPS or
+ * http://localhost. Both supported ways of running Kizuna are secure contexts:
+ * the default bind is loopback, and the documented way to serve it further is
+ * behind a TLS-terminating proxy (see docker-compose.yml). Outside them — an
+ * operator setting KIZUNA_BIND=0.0.0.0 and browsing a plain-http LAN address —
+ * `navigator.clipboard` is `undefined` rather than a rejecting promise, so it
+ * is checked for rather than called blind, and the caller reports
+ * clipboardFailureMessage() instead of appearing to have copied.
  */
-
-export type ClipboardWriteResult =
-  | { ok: true; method: 'clipboard-api' | 'exec-command' }
-  | { ok: false; reason: 'unavailable' }
-
-function hasClipboardApi(): boolean {
-  return (
-    typeof navigator !== 'undefined' &&
-    typeof navigator.clipboard !== 'undefined' &&
-    typeof navigator.clipboard.writeText === 'function'
-  )
-}
-
-function legacyCopy(text: string): boolean {
-  if (typeof document === 'undefined' || typeof document.execCommand !== 'function') {
+export async function writeClipboardText(text: string): Promise<boolean> {
+  if (typeof navigator === 'undefined' || typeof navigator.clipboard?.writeText !== 'function') {
     return false
   }
 
-  const textarea = document.createElement('textarea')
-  textarea.value = text
-  // Keep it out of the flow and off-screen rather than hidden: execCommand
-  // requires the element to be focusable/selectable, which display:none or
-  // visibility:hidden would prevent in some browsers.
-  textarea.setAttribute('readonly', '')
-  textarea.style.position = 'fixed'
-  textarea.style.top = '0'
-  textarea.style.left = '-9999px'
-  document.body.appendChild(textarea)
-
-  const previousFocus = document.activeElement as HTMLElement | null
-  textarea.focus()
-  textarea.select()
-
-  let ok = false
   try {
-    ok = document.execCommand('copy')
+    await navigator.clipboard.writeText(text)
+    return true
   } catch {
-    ok = false
+    // Permission denied, or the call rejected for another reason — seen in
+    // practice when the document is not focused.
+    return false
   }
-
-  document.body.removeChild(textarea)
-  previousFocus?.focus?.()
-  return ok
-}
-
-export async function writeClipboardText(text: string): Promise<ClipboardWriteResult> {
-  if (hasClipboardApi()) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return { ok: true, method: 'clipboard-api' }
-    } catch {
-      // Permission denied, or the call rejected for some other reason (seen in
-      // practice when the document isn't focused). Fall through to the legacy
-      // path rather than giving up.
-    }
-  }
-
-  if (legacyCopy(text)) {
-    return { ok: true, method: 'exec-command' }
-  }
-
-  return { ok: false, reason: 'unavailable' }
 }
 
 /** Human-readable message for a failed writeClipboardText — an honest reason,
