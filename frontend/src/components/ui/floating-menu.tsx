@@ -27,11 +27,11 @@ export function FloatingMenu({ x, y, onClose, children }: FloatingMenuProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [onClose])
 
-  // Right-clicking near an edge would otherwise render the menu off-screen:
-  // it is placed at the cursor and grows right and down, and `overflow-hidden`
-  // means the part that does not fit is simply cut off rather than scrollable.
-  // Measured after layout because the width depends on the content -- link
-  // labels carry connection names, so it varies per menu.
+  // Right-clicking near an edge would otherwise render the menu off-screen: it
+  // is placed at the cursor and grows right and down. Measured after layout
+  // because the size depends on the content -- link labels carry connection
+  // names, so it varies per menu. Height is capped by maxHeight below, so a
+  // menu taller than the window lands at VIEWPORT_MARGIN and scrolls.
   useLayoutEffect(() => {
     const menu = menuRef.current
     if (!menu) {
@@ -50,8 +50,15 @@ export function FloatingMenu({ x, y, onClose, children }: FloatingMenuProps) {
         ref={menuRef}
         // max-w держит меню в узде независимо от данных: значение линка может
         // быть в килобайты длиной, и без этого меню растягивается на весь экран.
-        className="absolute min-w-56 max-w-[36rem] overflow-hidden rounded-sm border border-border bg-popover py-1 text-popover-foreground shadow-md"
-        style={{ left: position.left, top: position.top }}
+        className="absolute min-w-56 max-w-[36rem] overflow-x-hidden overflow-y-auto rounded-sm border border-border bg-popover py-1 text-popover-foreground shadow-md"
+        // maxHeight парный к max-w: меню с несколькими группами (PG, Kafka) бывает
+        // выше окна, и без него нижние пункты недостижимы -- клампинг позиции
+        // упирает меню в верхний край, а низ уходит за экран без прокрутки.
+        style={{
+          left: position.left,
+          top: position.top,
+          maxHeight: `calc(100vh - ${VIEWPORT_MARGIN * 2}px)`,
+        }}
         onClick={(event) => event.stopPropagation()}
       >
         {children}
