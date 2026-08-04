@@ -699,7 +699,11 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         these belong to other keys, so there is no value here to
                         follow them with -- but without them a key with no links
                         of its own looked like a connection with none. */}
-                    {otherConnectionLinks.length > 0 && <DropdownMenuSeparator />}
+                    {/* The separator belongs to the whole connection block, not
+                        just its preview: when every link on the connection is
+                        already listed above, the preview is empty but "Show all"
+                        still needs to stand apart. */}
+                    {allConnectionLinks.length > 0 && <DropdownMenuSeparator />}
                     {otherConnectionLinks.length > 0 && (
                       <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                         Elsewhere on this connection
