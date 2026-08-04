@@ -307,6 +307,53 @@ describe('Search all — ceiling on accumulated matches', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2)
   })
 
+  // Landing exactly on the ceiling is ambiguous on its own: it is a truncated
+  // result only if there was more to read. With the log exhausted the result is
+  // complete, and calling it truncated also hides the "reached end/beginning"
+  // marker in the browser, so the reader cannot tell a full answer from a cut one.
+  it('does not call an exactly-full result truncated when the log is exhausted', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: blockOfMatches(0, MAX_SCAN_MATCHES),
+          total: MAX_SCAN_MATCHES,
+          has_more: false,
+          meta: { scanning: false, scanned: 9000, matched: MAX_SCAN_MATCHES, has_older: false, next_before_offsets: {} },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact', 'a.b', 'x')
+
+    const tab = useKafkaStore.getState().tabs['tab-exact']
+    expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
+    expect(tab.hasMore).toBe(false)
+    expect(tab.scanLimitReached).toBe(false)
+  })
+
+  it('still flags the ceiling on an exactly-full page that has more to come', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: blockOfMatches(0, MAX_SCAN_MATCHES),
+          total: MAX_SCAN_MATCHES,
+          has_more: true,
+          meta: { scanning: true, scanned: 9000, matched: MAX_SCAN_MATCHES, has_older: true, next_before_offsets: { '0': 1 } },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact-more', 'a.b', 'x')
+
+    const tab = useKafkaStore.getState().tabs['tab-exact-more']
+    expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
+    expect(tab.scanLimitReached).toBe(true)
+  })
+
   it('a fresh search clears the ceiling flag', async () => {
     useKafkaStore.setState({
       tabs: {
