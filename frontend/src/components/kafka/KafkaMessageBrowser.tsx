@@ -81,10 +81,13 @@ interface KafkaMessageBrowserProps {
   onCreateLink: (message: KafkaMessageRow) => void
   reverseLinks: LinkRecord[]
   onOpenReverse: (link: LinkRecord, value: string) => void
+  // Point at this topic but cannot be walked back to their source.
+  inboundOnlyLinks: LinkRecord[]
   // Links elsewhere on this connection: the preview set (what the menu does not
   // already list) and the full set the dialog shows.
   otherConnectionLinks: LinkRecord[]
   allConnectionLinks: LinkRecord[]
+  connectionName: (connId: string) => string
 }
 
 const allPartitions = '__all__'
@@ -138,8 +141,10 @@ export function KafkaMessageBrowser({
   onCreateLink,
   reverseLinks,
   onOpenReverse,
+  inboundOnlyLinks,
   otherConnectionLinks,
   allConnectionLinks,
+  connectionName,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
@@ -211,11 +216,11 @@ export function KafkaMessageBrowser({
     // value to follow them with.
     return allConnectionLinks.map((link) => ({
       id: link.id,
-      label: linkSummary(link),
+      label: linkSummary(link, connectionName),
       disabled: true,
       onPick: () => undefined,
     }))
-  }, [linkPicker, links, reverseLinks, allConnectionLinks, onOpenLink, onOpenReverse])
+  }, [linkPicker, links, reverseLinks, allConnectionLinks, connectionName, onOpenLink, onOpenReverse])
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
     event.preventDefault()
@@ -655,6 +660,15 @@ export function KafkaMessageBrowser({
               {`Show all (${reverseLinks.length})…`}
             </FloatingMenuItem>
           )}
+          {/* Point at this topic but cannot be walked back to their source, so
+              they are shown, not followed. */}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuSeparator />}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuLabel>Points here · not reversible</FloatingMenuLabel>}
+          {inboundOnlyLinks.slice(0, LINK_MENU_CAP).map((link) => (
+            <FloatingMenuItem key={`in-${link.id}`} disabled>
+              {linkSummary(link, connectionName)}
+            </FloatingMenuItem>
+          ))}
           {/* What else this connection is wired to. Reference only -- these
               belong to other topics, so this message has no value to follow
               them with -- but without them a topic with no links of its own
@@ -663,7 +677,7 @@ export function KafkaMessageBrowser({
           {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
           {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
             <FloatingMenuItem key={`conn-${link.id}`} disabled>
-              {linkSummary(link)}
+              {linkSummary(link, connectionName)}
             </FloatingMenuItem>
           ))}
           {allConnectionLinks.length > 0 && (

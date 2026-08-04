@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Binary, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -53,6 +53,7 @@ import {
   linkSourceLabel,
   linkSummary,
   linkTargetLabel,
+  linkTouchesObject,
   memberRedisLinks,
   redisKeyMatchesPattern,
   selectionRedisLinks,
@@ -85,7 +86,14 @@ function metaCard(label: string, value: string, accentClass: string) {
 }
 
 export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: RedisKeyViewProps) {
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connections = useConnectionStore((state) => state.connections)
+  const connection = connections.find((item) => item.id === connId)
+  // Both ends of a link are named: the far end is usually a different
+  // connection, and the summary is otherwise ambiguous between servers.
+  const connectionName = useCallback(
+    (id: string) => connections.find((item) => item.id === id)?.name ?? id,
+    [connections]
+  )
   const tabData = useDataStore((state) => state.tabs[tabId])
   const fetchData = useDataStore((state) => state.fetchData)
   const mutate = useDataStore((state) => state.mutate)
@@ -201,9 +209,25 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // Everything else wired up on this connection. Without it a key that simply
   // has no links of its own showed a menu with nothing but "+ Create link…",
   // which reads as "this connection has none" rather than "none apply here".
+  // Membership is decided by what the link mentions, never by whether it is
+  // navigable -- see linkTouchesObject. Using reverseLinks (already narrowed by
+  // canReverse) put links pointing straight at this key under "elsewhere".
   const otherConnectionLinks = useMemo(
-    () => connectionLinks(links, connId, [...keyLinks, ...reverseLinks, ...perElementLinks]),
-    [links, connId, keyLinks, reverseLinks, perElementLinks]
+    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'redis'))),
+    [links, connId, object]
+  )
+
+  // Point at this key but cannot be walked back to their source: shown, not followed.
+  const inboundOnlyLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'redis' &&
+          redisKeyMatchesPattern(link.key_pattern ?? '', object) &&
+          !canReverse(link)
+      ),
+    [links, connId, object]
   )
   // The dialog answers "everything on this connection", so it lists the whole
   // set -- including the links the menu already showed as actionable.
@@ -254,7 +278,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       // there is no value here to follow them with.
       return allConnectionLinks.map((link) => ({
         id: link.id,
-        label: linkSummary(link),
+        label: linkSummary(link, connectionName),
         disabled: true,
         onPick: () => undefined,
       }))
@@ -291,6 +315,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     reverseLinks,
     perElementLinks,
     allConnectionLinks,
+    connectionName,
     memberLinks,
     elementSelectionLinks,
     memberMenu,
@@ -655,6 +680,21 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         {`Show all (${perElementLinks.length})…`}
                       </DropdownMenuItem>
                     )}
+                    {/* Point at this key but cannot be walked back to their
+                        source, so they are shown, not followed. */}
+                    {inboundOnlyLinks.length > 0 && <DropdownMenuSeparator />}
+                    {inboundOnlyLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Points here · not reversible
+                      </div>
+                    )}
+                    {inboundOnlyLinks.slice(0, LINK_MENU_CAP).map((link) => (
+                      <DropdownMenuItem key={`in-${link.id}`} disabled className="font-mono text-xs">
+                        <span className="block min-w-0 max-w-[32rem] truncate">
+                          {linkSummary(link, connectionName)}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
                     {/* What else this connection is wired to. Reference only --
                         these belong to other keys, so there is no value here to
                         follow them with -- but without them a key with no links
@@ -667,7 +707,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     )}
                     {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
                       <DropdownMenuItem key={`conn-${link.id}`} disabled className="font-mono text-xs">
-                        <span className="block min-w-0 max-w-[32rem] truncate">{linkSummary(link)}</span>
+                        <span className="block min-w-0 max-w-[32rem] truncate">
+                          {linkSummary(link, connectionName)}
+                        </span>
                       </DropdownMenuItem>
                     ))}
                     {allConnectionLinks.length > 0 && (

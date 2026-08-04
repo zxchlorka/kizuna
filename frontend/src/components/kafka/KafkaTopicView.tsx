@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Layers, Lock, MessagesSquare, RefreshCw, Send, Users } from 'lucide-react'
 import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
@@ -9,7 +9,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
-import { canReverse, connectionLinks } from '@/lib/links'
+import { canReverse, connectionLinks, linkTouchesObject } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useKafkaStore } from '@/stores/kafka'
@@ -55,6 +55,13 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const clearSearch = useKafkaStore((state) => state.clearSearch)
   const fetchLinks = useLinksStore((state) => state.fetch)
   const links = useLinksStore((state) => state.links)
+  const connections = useConnectionStore((state) => state.connections)
+  // Both ends of a link are named: the far end is usually a different
+  // connection, and the summary is otherwise ambiguous between servers.
+  const connectionName = useCallback(
+    (id: string) => connections.find((item) => item.id === id)?.name ?? id,
+    [connections]
+  )
   const openLinkTarget = useOpenLinkTarget()
   const openLinkSource = useOpenLinkSource()
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
@@ -121,9 +128,25 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   // Everything else wired up on this connection. Without it a topic with no
   // links of its own showed "No links for this topic" and nothing more, which
   // reads as "this connection has none" rather than "none apply here".
+  // Membership is decided by what the link mentions, never by whether it is
+  // navigable -- see linkTouchesObject. Using reverseLinks (already narrowed by
+  // canReverse) put links pointing straight at this topic under "elsewhere".
   const otherConnectionLinks = useMemo(
-    () => connectionLinks(links, connId, [...topicLinks, ...reverseLinks]),
-    [links, connId, topicLinks, reverseLinks]
+    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, topic, 'kafka'))),
+    [links, connId, topic]
+  )
+
+  // Point at this topic but cannot be walked back to their source.
+  const inboundOnlyLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'kafka' &&
+          link.target_topic === topic &&
+          !canReverse(link)
+      ),
+    [links, connId, topic]
   )
   const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
 
@@ -262,8 +285,10 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onCreateLink={handleCreateLink}
             reverseLinks={reverseLinks}
             onOpenReverse={(link, value) => openLinkSource(link, value)}
+            inboundOnlyLinks={inboundOnlyLinks}
             otherConnectionLinks={otherConnectionLinks}
             allConnectionLinks={allConnectionLinks}
+            connectionName={connectionName}
           />
         )}
 
