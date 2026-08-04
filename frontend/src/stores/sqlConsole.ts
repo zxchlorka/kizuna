@@ -98,6 +98,25 @@ function normalizeHistory(items: HistoryEntry[]): HistoryEntry[] {
   return items ?? []
 }
 
+// A cancelled run's history is written by the server AFTER the client's abort
+// has already resolved: the request context is only cancelled once the
+// disconnect reaches the server, and the handler still has to unwind the query
+// (for Postgres, a cancel round-trip of its own) before it appends anything. A
+// single immediate GET races that write and normally wins the race it wants to
+// lose -- leaving the panel showing the list from before the run, which is
+// exactly the entries the user was just told to go and read.
+//
+// Nothing tells the client when that write lands, so wait for it to show rather
+// than assume it has: re-read until the newest entry changes. Bounded, because a
+// run cancelled before its first statement finished legitimately writes nothing,
+// and that has to end as a stale-free no-op rather than a spin.
+const HISTORY_SETTLE_ATTEMPTS = 5
+const HISTORY_SETTLE_DELAY_MS = 150
+
+function newestHistoryID(tabs: Record<string, SqlTabState>, tabId: string): string | null {
+  return ensureState(tabs, tabId).history[0]?.id ?? null
+}
+
 function explainLabel(result: ExplainResult, fallback: 'EXPLAIN' | 'ANALYZE'): string {
   return result.mode === 'analyze' ? 'ANALYZE' : fallback
 }
@@ -567,9 +586,19 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         // historyOpen effect in SqlConsole.tsx), so the one case left to handle
         // is a panel that is ALREADY open — it would otherwise keep showing the
         // list from before this run, missing the very statements the user was
-        // just told to go and check.
+        // just told to go and check. See HISTORY_SETTLE_ATTEMPTS for why this
+        // reads more than once.
         if (ensureState(get().tabs, tabId).historyOpen) {
-          await get().fetchHistory(connId, tabId)
+          const before = newestHistoryID(get().tabs, tabId)
+          for (let attempt = 0; attempt < HISTORY_SETTLE_ATTEMPTS; attempt += 1) {
+            if (attempt > 0) {
+              await new Promise((resolve) => setTimeout(resolve, HISTORY_SETTLE_DELAY_MS))
+            }
+            await get().fetchHistory(connId, tabId)
+            if (newestHistoryID(get().tabs, tabId) !== before) {
+              break
+            }
+          }
         }
         return
       }
