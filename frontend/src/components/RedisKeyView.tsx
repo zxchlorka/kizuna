@@ -37,8 +37,7 @@ import {
   FloatingMenuLabel,
   FloatingMenuSeparator,
 } from '@/components/ui/floating-menu'
-import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
   canReverse,
   captureFromKey,
