@@ -14,11 +14,10 @@ const (
 // KafkaConfig stores Kafka-specific connection settings. Username and password
 // live on the parent ConnectionConfig (password is encrypted there).
 type KafkaConfig struct {
-	Brokers           []string `json:"brokers"`
-	SASLMechanism     string   `json:"sasl_mechanism,omitempty"` // "" (no auth) | PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
-	TLSEnabled        bool     `json:"tls_enabled,omitempty"`
-	TLSCAPEM          string   `json:"tls_ca_pem,omitempty"`
-	SchemaRegistryURL string   `json:"schema_registry_url,omitempty"` // reserved for a future slice
+	Brokers       []string `json:"brokers"`
+	SASLMechanism string   `json:"sasl_mechanism,omitempty"` // "" (no auth) | PLAIN | SCRAM-SHA-256 | SCRAM-SHA-512
+	TLSEnabled    bool     `json:"tls_enabled,omitempty"`
+	TLSCAPEM      string   `json:"tls_ca_pem,omitempty"`
 }
 
 // Clone returns a deep copy of the Kafka config.

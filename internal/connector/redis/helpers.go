@@ -214,14 +214,6 @@ func redisDataResult(
 	}
 }
 
-func redisColumns(names ...string) []connector.ColumnMeta {
-	cols := make([]connector.ColumnMeta, 0, len(names))
-	for _, name := range names {
-		cols = append(cols, connector.ColumnMeta{Name: name, DataType: "text", Editable: true})
-	}
-	return cols
-}
-
 func redisNamespaceRoot(key, separator string) (string, bool) {
 	if separator == "" {
 		return "", false
@@ -277,25 +269,9 @@ func redisMeta(keyType string, ttlSeconds int64) map[string]any {
 	}
 }
 
-func redisStringPtr(value string) *string {
-	v := value
-	return &v
-}
-
 func redisTTLPointer(ttl int64) *int64 {
 	v := ttl
 	return &v
-}
-
-func redisSortedKeys[K comparable](m map[K]any) []K {
-	keys := make([]K, 0, len(m))
-	for key := range m {
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return fmt.Sprint(keys[i]) < fmt.Sprint(keys[j])
-	})
-	return keys
 }
 
 func redisStringValue(v any) string {
@@ -378,17 +354,6 @@ func redisFloat64Value(v any) (float64, error) {
 		return strconv.ParseFloat(strings.TrimSpace(t), 64)
 	default:
 		return strconv.ParseFloat(strings.TrimSpace(fmt.Sprint(v)), 64)
-	}
-}
-
-func redisBoolValue(v any) (bool, error) {
-	switch t := v.(type) {
-	case bool:
-		return t, nil
-	case string:
-		return strconv.ParseBool(strings.TrimSpace(t))
-	default:
-		return strconv.ParseBool(strings.TrimSpace(fmt.Sprint(v)))
 	}
 }
 
@@ -560,14 +525,6 @@ func redisRenameFromData(data map[string]any) (string, bool) {
 func redisCreateType(data map[string]any) string {
 	createType := strings.ToLower(strings.TrimSpace(redisStringValue(data["type"])))
 	return strings.TrimPrefix(createType, "redis_")
-}
-
-func redisStringSlice(values []any) []string {
-	items := make([]string, 0, len(values))
-	for _, value := range values {
-		items = append(items, redisStringValue(value))
-	}
-	return items
 }
 
 func redisFilterValue(filters []connector.FilterExpr, name string) string {
