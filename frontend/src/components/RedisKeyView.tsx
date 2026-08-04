@@ -30,7 +30,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
-import { LINK_MENU_CAP, LinkPickerDialog, type LinkPickerItem } from '@/components/links/LinkPickerDialog'
+import {
+  LINK_MENU_CAP,
+  LINK_PREVIEW_CAP,
+  LinkPickerDialog,
+  type LinkPickerItem,
+} from '@/components/links/LinkPickerDialog'
 import {
   FloatingMenu,
   FloatingMenuItem,
@@ -41,6 +46,7 @@ import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
   canReverse,
   captureFromKey,
+  connectionLinks,
   extractRedisValue,
   isPerElementExtract,
   keyLevelRedisLinks,
@@ -99,9 +105,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // Непусто, когда диалог открыт из меню элемента: предзаполняет режим selection
   // и поле, по которому кликнули.
   const [createFromElement, setCreateFromElement] = useState<{ field?: string } | null>(null)
-  const [pickerGroup, setPickerGroup] = useState<'key' | 'reverse' | 'perElement' | 'member' | 'selection' | null>(
-    null
-  )
+  const [pickerGroup, setPickerGroup] = useState<
+    'key' | 'reverse' | 'perElement' | 'connection' | 'member' | 'selection' | null
+  >(null)
 
   useEffect(() => {
     void fetchData(connId, object, tabId)
@@ -192,6 +198,17 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     [links, connId, object]
   )
 
+  // Everything else wired up on this connection. Without it a key that simply
+  // has no links of its own showed a menu with nothing but "+ Create link…",
+  // which reads as "this connection has none" rather than "none apply here".
+  const otherConnectionLinks = useMemo(
+    () => connectionLinks(links, connId, [...keyLinks, ...reverseLinks, ...perElementLinks]),
+    [links, connId, keyLinks, reverseLinks, perElementLinks]
+  )
+  // The dialog answers "everything on this connection", so it lists the whole
+  // set -- including the links the menu already showed as actionable.
+  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
+
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
 
@@ -232,6 +249,16 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         onPick: () => undefined,
       }))
     }
+    if (pickerGroup === 'connection') {
+      // Reference only: these describe wiring elsewhere on the connection, so
+      // there is no value here to follow them with.
+      return allConnectionLinks.map((link) => ({
+        id: link.id,
+        label: linkSummary(link),
+        disabled: true,
+        onPick: () => undefined,
+      }))
+    }
     if (pickerGroup === 'member' && memberMenu) {
       const member = memberMenu.member
       return memberLinks.map((link) => ({
@@ -263,6 +290,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     keyLinks,
     reverseLinks,
     perElementLinks,
+    allConnectionLinks,
     memberLinks,
     elementSelectionLinks,
     memberMenu,
@@ -627,7 +655,29 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         {`Show all (${perElementLinks.length})…`}
                       </DropdownMenuItem>
                     )}
-                    {(keyLinks.length > 0 || perElementLinks.length > 0) && <DropdownMenuSeparator />}
+                    {/* What else this connection is wired to. Reference only --
+                        these belong to other keys, so there is no value here to
+                        follow them with -- but without them a key with no links
+                        of its own looked like a connection with none. */}
+                    {otherConnectionLinks.length > 0 && <DropdownMenuSeparator />}
+                    {otherConnectionLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Elsewhere on this connection
+                      </div>
+                    )}
+                    {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
+                      <DropdownMenuItem key={`conn-${link.id}`} disabled className="font-mono text-xs">
+                        <span className="block min-w-0 max-w-[32rem] truncate">{linkSummary(link)}</span>
+                      </DropdownMenuItem>
+                    ))}
+                    {allConnectionLinks.length > 0 && (
+                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('connection')}>
+                        {`Show all ${allConnectionLinks.length} on this connection…`}
+                      </DropdownMenuItem>
+                    )}
+                    {(keyLinks.length > 0 || perElementLinks.length > 0 || allConnectionLinks.length > 0) && (
+                      <DropdownMenuSeparator />
+                    )}
                     <DropdownMenuItem className="font-mono text-xs" onClick={() => setCreateLinkOpen(true)}>
                       + Create link…
                     </DropdownMenuItem>
@@ -786,6 +836,8 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             ? 'Back to source'
             : pickerGroup === 'perElement'
             ? 'Per-element links (right-click a value)'
+            : pickerGroup === 'connection'
+            ? `Links on ${connection?.name ?? connId}`
             : pickerGroup === 'selection'
             ? `Open from "${memberMenu?.token ?? ''}"`
             : pickerGroup === 'member'

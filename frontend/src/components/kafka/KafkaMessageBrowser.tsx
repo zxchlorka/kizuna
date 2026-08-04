@@ -6,12 +6,18 @@ import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
 import { KafkaSeekControl } from '@/components/kafka/KafkaSeekControl'
 import { EmptyState } from '@/components/EmptyState'
+import {
+  LINK_MENU_CAP,
+  LINK_PREVIEW_CAP,
+  LinkPickerDialog,
+  type LinkPickerItem,
+} from '@/components/links/LinkPickerDialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
-import { extractMessageField, linkSourceLabel, linkTargetLabel } from '@/lib/links'
+import { extractMessageField, linkSourceLabel, linkSummary, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import {
   filterLoadedMessages,
@@ -75,6 +81,10 @@ interface KafkaMessageBrowserProps {
   onCreateLink: (message: KafkaMessageRow) => void
   reverseLinks: LinkRecord[]
   onOpenReverse: (link: LinkRecord, value: string) => void
+  // Links elsewhere on this connection: the preview set (what the menu does not
+  // already list) and the full set the dialog shows.
+  otherConnectionLinks: LinkRecord[]
+  allConnectionLinks: LinkRecord[]
 }
 
 const allPartitions = '__all__'
@@ -128,6 +138,8 @@ export function KafkaMessageBrowser({
   onCreateLink,
   reverseLinks,
   onOpenReverse,
+  otherConnectionLinks,
+  allConnectionLinks,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
@@ -139,6 +151,12 @@ export function KafkaMessageBrowser({
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
+  // The message is captured alongside the group: opening the dialog closes the
+  // floating menu, and the topic/reverse lists resolve their values from it.
+  const [linkPicker, setLinkPicker] = useState<{
+    group: 'topic' | 'reverse' | 'connection'
+    message: KafkaMessageRow | null
+  } | null>(null)
 
   // Seed the editable inputs when a search is set programmatically (e.g. a link
   // jump populates the topic scan) so the user sees and can refine what's being
@@ -159,6 +177,45 @@ export function KafkaMessageBrowser({
     () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue, filterOp) : messages),
     [filterActive, filterField, filterValue, filterOp, messages]
   )
+
+  const linkPickerItems = useMemo<LinkPickerItem[]>(() => {
+    if (!linkPicker) return []
+    const message = linkPicker.message
+    if (linkPicker.group === 'topic' && message) {
+      return links.map((link) => {
+        const value = extractMessageField(message.value, link.source_field ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) onOpenLink(link, value)
+          },
+        }
+      })
+    }
+    if (linkPicker.group === 'reverse' && message) {
+      return reverseLinks.map((link) => {
+        const value = extractMessageField(message.value, link.target_field ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) onOpenReverse(link, value)
+          },
+        }
+      })
+    }
+    // Reference only: these belong to other topics, so this message holds no
+    // value to follow them with.
+    return allConnectionLinks.map((link) => ({
+      id: link.id,
+      label: linkSummary(link),
+      disabled: true,
+      onPick: () => undefined,
+    }))
+  }, [linkPicker, links, reverseLinks, allConnectionLinks, onOpenLink, onOpenReverse])
 
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
     event.preventDefault()
@@ -525,11 +582,26 @@ export function KafkaMessageBrowser({
         onUseField={(path) => setFieldInput(path)}
       />
 
+      <LinkPickerDialog
+        open={linkPicker !== null}
+        onOpenChange={(next) => {
+          if (!next) setLinkPicker(null)
+        }}
+        title={
+          linkPicker?.group === 'reverse'
+            ? 'Back to source'
+            : linkPicker?.group === 'connection'
+            ? 'Links on this connection'
+            : 'Open linked record'
+        }
+        items={linkPickerItems}
+      />
+
       {menu && (
         <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
           {links.length === 0 && <FloatingMenuItem disabled>No links for this topic</FloatingMenuItem>}
-          {links.map((link) => {
+          {links.slice(0, LINK_MENU_CAP).map((link) => {
             const value = extractMessageField(menu.message.value, link.source_field ?? '')
             return (
               <FloatingMenuItem
@@ -546,9 +618,19 @@ export function KafkaMessageBrowser({
               </FloatingMenuItem>
             )
           })}
+          {links.length > LINK_MENU_CAP && (
+            <FloatingMenuItem
+              onClick={() => {
+                setLinkPicker({ group: 'topic', message: menu.message })
+                setMenu(null)
+              }}
+            >
+              {`Show all (${links.length})…`}
+            </FloatingMenuItem>
+          )}
           {reverseLinks.length > 0 && <FloatingMenuSeparator />}
           {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
-          {reverseLinks.map((link) => {
+          {reverseLinks.slice(0, LINK_MENU_CAP).map((link) => {
             const value = extractMessageField(menu.message.value, link.target_field ?? '')
             return (
               <FloatingMenuItem
@@ -563,6 +645,37 @@ export function KafkaMessageBrowser({
               </FloatingMenuItem>
             )
           })}
+          {reverseLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem
+              onClick={() => {
+                setLinkPicker({ group: 'reverse', message: menu.message })
+                setMenu(null)
+              }}
+            >
+              {`Show all (${reverseLinks.length})…`}
+            </FloatingMenuItem>
+          )}
+          {/* What else this connection is wired to. Reference only -- these
+              belong to other topics, so this message has no value to follow
+              them with -- but without them a topic with no links of its own
+              looked like a connection with none. */}
+          {otherConnectionLinks.length > 0 && <FloatingMenuSeparator />}
+          {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
+          {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
+            <FloatingMenuItem key={`conn-${link.id}`} disabled>
+              {linkSummary(link)}
+            </FloatingMenuItem>
+          ))}
+          {allConnectionLinks.length > 0 && (
+            <FloatingMenuItem
+              onClick={() => {
+                setLinkPicker({ group: 'connection', message: null })
+                setMenu(null)
+              }}
+            >
+              {`Show all ${allConnectionLinks.length} on this connection…`}
+            </FloatingMenuItem>
+          )}
           <FloatingMenuSeparator />
           <FloatingMenuItem
             onClick={() => {

@@ -9,7 +9,7 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
-import { canReverse } from '@/lib/links'
+import { canReverse, connectionLinks } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useKafkaStore } from '@/stores/kafka'
@@ -117,6 +117,15 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
       ),
     [links, connId, topic]
   )
+
+  // Everything else wired up on this connection. Without it a topic with no
+  // links of its own showed "No links for this topic" and nothing more, which
+  // reads as "this connection has none" rather than "none apply here".
+  const otherConnectionLinks = useMemo(
+    () => connectionLinks(links, connId, [...topicLinks, ...reverseLinks]),
+    [links, connId, topicLinks, reverseLinks]
+  )
+  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
 
   const handleOpenLink = (link: LinkRecord, value: string) => {
     openLinkTarget(link, value)
@@ -253,6 +262,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onCreateLink={handleCreateLink}
             reverseLinks={reverseLinks}
             onOpenReverse={(link, value) => openLinkSource(link, value)}
+            otherConnectionLinks={otherConnectionLinks}
+            allConnectionLinks={allConnectionLinks}
           />
         )}
 
