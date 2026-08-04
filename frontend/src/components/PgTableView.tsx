@@ -1157,7 +1157,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           </FloatingMenuItem>
           <FloatingMenuSeparator />
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
-          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
+          {/* Scoped to this group, which lists only links whose SOURCE is this
+              table. Saying "no links for this table" claimed more than the
+              group knows, and contradicted the inbound and elsewhere groups
+              right below it. */}
+          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links from this table</FloatingMenuItem>}
           {tableLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => {
             const value = extractPgColumn(columns, linkMenu.row, link.source_field ?? '')
             return (
@@ -1213,7 +1217,11 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               belong to other tables, so this row has no value to follow them
               with -- but without them a table with no links of its own looked
               like a connection with none. */}
-          {otherConnectionLinks.length > 0 && <FloatingMenuSeparator />}
+          {/* The separator belongs to the whole connection block, not just its
+              preview: when every link on the connection is already listed above,
+              the preview is empty but "Show all" still needs to stand apart from
+              the group before it. */}
+          {allConnectionLinks.length > 0 && <FloatingMenuSeparator />}
           {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
           {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link: LinkRecord) => (
             <FloatingMenuItem key={`conn-${link.id}`} disabled>

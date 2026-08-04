@@ -605,7 +605,11 @@ export function KafkaMessageBrowser({
       {menu && (
         <FloatingMenu x={menu.x} y={menu.y} onClose={() => setMenu(null)}>
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
-          {links.length === 0 && <FloatingMenuItem disabled>No links for this topic</FloatingMenuItem>}
+          {/* Scoped to this group, which lists only links whose SOURCE is this
+              topic. Saying "no links for this topic" claimed more than the
+              group knows, and contradicted the inbound and elsewhere groups
+              right below it. */}
+          {links.length === 0 && <FloatingMenuItem disabled>No links from this topic</FloatingMenuItem>}
           {links.slice(0, LINK_MENU_CAP).map((link) => {
             const value = extractMessageField(menu.message.value, link.source_field ?? '')
             return (
@@ -673,7 +677,10 @@ export function KafkaMessageBrowser({
               belong to other topics, so this message has no value to follow
               them with -- but without them a topic with no links of its own
               looked like a connection with none. */}
-          {otherConnectionLinks.length > 0 && <FloatingMenuSeparator />}
+          {/* The separator belongs to the whole connection block, not just its
+              preview: when every link on the connection is already listed above,
+              the preview is empty but "Show all" still needs to stand apart. */}
+          {allConnectionLinks.length > 0 && <FloatingMenuSeparator />}
           {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
           {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
             <FloatingMenuItem key={`conn-${link.id}`} disabled>
