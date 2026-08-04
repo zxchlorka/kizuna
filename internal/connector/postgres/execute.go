@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/zxchlorka/kizuna/internal/connector"
@@ -314,10 +313,6 @@ func isRowReturningStatement(statement string) bool {
 
 func isSchemaChangingStatement(statement string) bool {
 	return schemaChangeStmtRE.MatchString(statement)
-}
-
-func quotedTableRef(schema string, table string) string {
-	return pgx.Identifier{schema, table}.Sanitize()
 }
 
 func rowFetchPolicyForStatement(statement string) (rowFetchPolicy, error) {

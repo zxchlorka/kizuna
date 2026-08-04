@@ -317,8 +317,7 @@ func TestRemoveConnectionCascade(t *testing.T) {
 // round trip — the original defect was that orphan links came back from disk.
 func TestRemoveConnectionCascadePersists(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
-	cfg := &AppConfig{}
-	cfg.SetPathForTest(path)
+	cfg := &AppConfig{path: path}
 	cfg.AddConnection(ConnectionConfig{ID: "redis-1", Name: "redis", Type: "redis"})
 	cfg.AddConnection(ConnectionConfig{ID: "kafka-1", Name: "kafka", Type: "kafka"})
 	cfg.AddLink(LinkConfig{ID: "l1", SourceConnID: "kafka-1", SourceKind: "kafka", TargetConnID: "redis-1", TargetKind: "redis", KeyPattern: "w:*"})

@@ -96,11 +96,6 @@ func (c *AppConfig) GetPath() string {
 	return c.path
 }
 
-// SetPathForTest sets the on-disk config path. Intended for tests.
-func (c *AppConfig) SetPathForTest(path string) {
-	c.path = path
-}
-
 func (c *AppConfig) AddConnection(conn ConnectionConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -178,10 +173,6 @@ func (c *AppConfig) GetConnections() []ConnectionConfig {
 	return result
 }
 
-func cloneLink(link LinkConfig) LinkConfig {
-	return link // LinkConfig has only value fields; a copy is a deep clone
-}
-
 // normalizeLink upgrades a v1 (kafka-only) link shape to the v2 generalized
 // fields so older config.json files keep working.
 func normalizeLink(link LinkConfig) LinkConfig {
@@ -218,7 +209,7 @@ func redisPatternMatches(pattern, key string) bool {
 func (c *AppConfig) AddLink(link LinkConfig) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.Links = append(c.Links, cloneLink(link))
+	c.Links = append(c.Links, link)
 }
 
 func (c *AppConfig) RemoveLink(id string) bool {
@@ -241,7 +232,7 @@ func (c *AppConfig) UpdateLink(id string, link LinkConfig) bool {
 	for i, existing := range c.Links {
 		if existing.ID == id {
 			link.ID = id
-			c.Links[i] = cloneLink(link)
+			c.Links[i] = link
 			return true
 		}
 	}
@@ -253,7 +244,7 @@ func (c *AppConfig) GetLinks() []LinkConfig {
 	defer c.mu.RUnlock()
 	result := make([]LinkConfig, len(c.Links))
 	for i, link := range c.Links {
-		result[i] = normalizeLink(cloneLink(link))
+		result[i] = normalizeLink(link)
 	}
 	return result
 }
@@ -263,7 +254,7 @@ func (c *AppConfig) GetLinksFor(sourceConnID, scope string) []LinkConfig {
 	defer c.mu.RUnlock()
 	result := make([]LinkConfig, 0)
 	for _, link := range c.Links {
-		normalized := normalizeLink(cloneLink(link))
+		normalized := normalizeLink(link)
 		if normalized.SourceConnID == sourceConnID && linkScopeMatches(normalized, scope) {
 			result = append(result, normalized)
 		}
