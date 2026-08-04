@@ -101,11 +101,15 @@ func (h *SQLHandler) ExecuteMulti(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Recorded as one batch, not one entry at a time: a client that cancelled
+	// this run reads history the moment its request aborts, and a half-written
+	// batch reads exactly like a finished one.
+	entries := make([]connector.HistoryEntry, 0, len(results))
 	for _, result := range results {
 		if result.Skipped || strings.TrimSpace(result.Statement) == "" {
 			continue
 		}
-		h.appendHistory(id, connector.HistoryEntry{
+		entries = append(entries, connector.HistoryEntry{
 			ID:           fmt.Sprintf("%d", time.Now().UnixNano()),
 			Command:      result.Statement,
 			DurationMs:   result.DurationMs,
@@ -116,6 +120,7 @@ func (h *SQLHandler) ExecuteMulti(w http.ResponseWriter, r *http.Request) {
 			Canceled:     result.Canceled,
 		})
 	}
+	h.appendHistoryBatch(id, entries)
 
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
@@ -278,4 +283,8 @@ func (h *SQLHandler) appendResult(connectionID string, statement string, result 
 
 func (h *SQLHandler) appendHistory(connectionID string, entry connector.HistoryEntry) {
 	_ = h.history.Append(connectionID, entry)
+}
+
+func (h *SQLHandler) appendHistoryBatch(connectionID string, entries []connector.HistoryEntry) {
+	_ = h.history.AppendMany(connectionID, entries)
 }
