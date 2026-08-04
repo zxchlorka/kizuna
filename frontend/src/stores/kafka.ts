@@ -461,6 +461,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
         // topic grows both without limit until the browser gives up. Truncating
         // keeps the page responsive and, unlike a silent stop, the UI says so.
         const capped = merged.length > MAX_SCAN_MATCHES ? merged.slice(0, MAX_SCAN_MATCHES) : merged
+        const more = readMore(data.meta, directionOf(current))
         return {
           tabs: {
             ...state.tabs,
@@ -469,8 +470,15 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
               messages: capped,
               scanned: (reset ? 0 : tab.scanned) + (data.meta?.scanned ?? 0),
               scanPartial: Boolean(data.meta?.partial_scan),
-              scanLimitReached: capped.length >= MAX_SCAN_MATCHES,
-              hasMore: readMore(data.meta, directionOf(current)),
+              // "The cap stopped us", which is not the same as "we happen to
+              // hold exactly the cap". Landing on MAX_SCAN_MATCHES with the log
+              // exhausted is a COMPLETE result: saying otherwise labels it
+              // truncated and, worse, suppresses the "reached end/beginning"
+              // the reader needs to trust it. The flag is also the deep scan's
+              // stop condition, so a full page with more still to come has to
+              // keep setting it.
+              scanLimitReached: capped.length >= MAX_SCAN_MATCHES && (merged.length > MAX_SCAN_MATCHES || more),
+              hasMore: more,
               nextCursor: readCursor(data.meta, directionOf(current)),
               scanning: false,
             },
