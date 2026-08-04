@@ -287,30 +287,17 @@ func redisStringValue(v any) string {
 	}
 }
 
+// The cases below are the types these values can actually arrive as: float64
+// for every number decoded from a request body (encoding/json never produces a
+// narrower one), string, json.Number from go-redis' RedisJSON replies, and
+// int/int64 from Go-side callers. Anything else falls through to the textual
+// parse, which is what the narrower widths would have needed anyway.
 func redisInt64Value(v any) (int64, error) {
 	switch t := v.(type) {
 	case int:
 		return int64(t), nil
-	case int8:
-		return int64(t), nil
-	case int16:
-		return int64(t), nil
-	case int32:
-		return int64(t), nil
 	case int64:
 		return t, nil
-	case uint:
-		return int64(t), nil
-	case uint8:
-		return int64(t), nil
-	case uint16:
-		return int64(t), nil
-	case uint32:
-		return int64(t), nil
-	case uint64:
-		return int64(t), nil
-	case float32:
-		return int64(t), nil
 	case float64:
 		return int64(t), nil
 	case json.Number:
@@ -324,29 +311,11 @@ func redisInt64Value(v any) (int64, error) {
 
 func redisFloat64Value(v any) (float64, error) {
 	switch t := v.(type) {
-	case float32:
-		return float64(t), nil
 	case float64:
 		return t, nil
 	case int:
 		return float64(t), nil
-	case int8:
-		return float64(t), nil
-	case int16:
-		return float64(t), nil
-	case int32:
-		return float64(t), nil
 	case int64:
-		return float64(t), nil
-	case uint:
-		return float64(t), nil
-	case uint8:
-		return float64(t), nil
-	case uint16:
-		return float64(t), nil
-	case uint32:
-		return float64(t), nil
-	case uint64:
 		return float64(t), nil
 	case json.Number:
 		return t.Float64()
