@@ -15,8 +15,10 @@ import (
 
 func newLinksTestConfig(t *testing.T) *config.AppConfig {
 	t.Helper()
-	cfg := &config.AppConfig{}
-	cfg.SetPathForTest(filepath.Join(t.TempDir(), "config.json"))
+	cfg, err := config.Load(filepath.Join(t.TempDir(), "config.json"))
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
 	cfg.Connections = []config.ConnectionConfig{
 		{ID: "kafka-1", Type: "kafka"},
 		{ID: "redis-1", Type: "redis"},

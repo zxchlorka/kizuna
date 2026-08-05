@@ -3,7 +3,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { ArrowRight, Link2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { apiFetch } from '@/lib/http'
+import { apiFetch, throwOnApiError } from '@/lib/http'
 import type { FKRef, TableRow } from '@/types/api'
 
 interface ReferencedByDialogProps {
@@ -70,10 +70,7 @@ export function ReferencedByDialog({
           const response = await apiFetch(
             `/api/connections/${connId}/objects/${encodeURIComponent(reference.table)}/data?${params.toString()}`
           )
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({ error: response.statusText }))
-            throw new Error(body.error || response.statusText)
-          }
+          await throwOnApiError(response)
 
           const result: { total?: number } = await response.json()
           return [key, { loading: false, total: result.total ?? 0, error: null }] satisfies [string, ReferenceCountState]

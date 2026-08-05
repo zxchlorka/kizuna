@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { CornerDownLeft, Eraser, Loader2, TerminalSquare } from 'lucide-react'
-import { DangerousCommandDialog } from '@/components/redis/RedisCli/DangerousCommandDialog'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { RedisCliInput, type RedisCliInputHandle } from '@/components/redis/RedisCli/RedisCliInput'
 import { RedisCliOutput } from '@/components/redis/RedisCli/RedisCliOutput'
 import { RedisCommandHelper } from '@/components/redis/RedisCli/RedisCommandHelper'
@@ -183,10 +183,16 @@ export function RedisCli({ tabId, connId }: RedisCliProps) {
         </div>
       </div>
 
-      <DangerousCommandDialog
+      <ConfirmDialog
         open={pendingDanger !== null}
-        command={pendingDanger?.command ?? ''}
-        statement={pendingDanger?.statement ?? ''}
+        title={`Run ${pendingDanger?.command ?? ''}?`}
+        description={
+          pendingDanger?.command === 'KEYS'
+            ? 'KEYS scans the entire keyspace in a single blocking call. On a large database it can freeze the Redis server for a long time. Prefer SCAN with a pattern.'
+            : 'This command can block the Redis server or destroy data. Make sure you understand its impact before running it.'
+        }
+        preview={{ label: 'Command Preview', content: (pendingDanger?.statement ?? '').trim() }}
+        confirmLabel="Run anyway"
         onOpenChange={(open) => {
           if (!open) {
             setPendingDanger(null)

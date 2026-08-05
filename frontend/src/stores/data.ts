@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { fetchWithTimeout } from '@/lib/http'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { normalizeDataRows, normalizeFilters } from '@/lib/table'
 import type {
   BulkMutateOp,
@@ -38,7 +38,6 @@ interface TabData {
   schemaError: string | null
   dataError: string | null
   mutationError: string | null
-  objectInfoError: string | null
   meta: Record<string, unknown> | null
   opts: DataOpts
   draftUpdates: Record<string, DraftUpdate>
@@ -89,7 +88,6 @@ function getOrInitTab(tabs: Record<string, TabData>, tabId: string): TabData {
       schemaError: null,
       dataError: null,
       mutationError: null,
-      objectInfoError: null,
       meta: null,
       opts: { ...DEFAULT_OPTS },
       draftUpdates: {},
@@ -168,10 +166,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     const request = (async () => {
       try {
         const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/schema`)
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: res.statusText }))
-          throw new Error(body.error || res.statusText)
-        }
+        await throwOnApiError(res)
         const data: Schema = await res.json()
         set((state) => {
           const tab = getOrInitTab(state.tabs, tabId)
@@ -258,10 +253,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     const request = (async () => {
       try {
         const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/data?${params.toString()}`)
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: res.statusText }))
-          throw new Error(body.error || res.statusText)
-        }
+        await throwOnApiError(res)
 
         const result: DataResult = await res.json()
         const normalizedRows = normalizeDataRows(result)
@@ -331,7 +323,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
               ...tab,
               objectInfoRequestId: nextRequestId,
               objectInfoLoading: true,
-              objectInfoError: null,
             },
           },
         }
@@ -342,10 +333,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
     const request = (async () => {
       try {
         const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/info`)
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: res.statusText }))
-          throw new Error(body.error || res.statusText)
-        }
+        await throwOnApiError(res)
         const info: ObjectInfo = await res.json()
         set((state) => {
           const tab = getOrInitTab(state.tabs, tabId)
@@ -359,7 +347,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
                 ...tab,
                 objectInfo: info,
                 objectInfoLoading: false,
-                objectInfoError: null,
               },
             },
           }
@@ -377,7 +364,6 @@ export const useDataStore = create<DataStore>((set, get) => ({
                 ...tab,
                 objectInfo: null,
                 objectInfoLoading: false,
-                objectInfoError: (e as Error).message,
               },
             },
           }
@@ -396,10 +382,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
   // does not touch tab state; throws if the key is missing or the request fails.
   resolveObjectType: async (connId: string, object: string) => {
     const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/info`)
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const info: ObjectInfo = await res.json()
     return info.object_type
   },
@@ -411,10 +394,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(op),
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
 
       const currentTab = get().tabs[tabId]
       if (currentTab && options?.reload !== false) {
@@ -443,10 +423,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(op),
       })
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
 
       const result: BulkMutateResult = await res.json()
       const currentTab = get().tabs[tabId]
@@ -476,10 +453,7 @@ export const useDataStore = create<DataStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(op),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
   },
 
   setOpts: (tabId: string, partialOpts: Partial<DataOpts>) => {

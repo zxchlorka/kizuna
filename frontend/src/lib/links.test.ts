@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import {
+  canReverse,
+  connectionLinks,
   extractMessageField,
   isPerElementExtract,
   keyLevelRedisLinks,
+  linkSummary,
+  linkTouchesObject,
   memberRedisLinks,
   selectionRedisLinks,
 } from '@/lib/links'
@@ -126,5 +130,113 @@ describe('memberRedisLinks and keyLevelRedisLinks', () => {
 
   it('key-level links exclude every per-element mode', () => {
     expect(keyLevelRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).toEqual(['k'])
+  })
+})
+
+// A key, table or topic with no links of its own used to show an empty menu,
+// which looks the same as a connection with nothing configured. This group is
+// what tells those two apart.
+describe('connectionLinks', () => {
+  const outgoing = link({ id: 'out', source_conn_id: 'redis-1', target_conn_id: 'kafka-1', target_kind: 'kafka' })
+  const incoming = link({ id: 'in', source_conn_id: 'kafka-1', source_kind: 'kafka', target_conn_id: 'redis-1' })
+  const elsewhere = link({ id: 'other', source_conn_id: 'pg-9', source_kind: 'postgres', target_conn_id: 'kafka-1', target_kind: 'kafka' })
+  const all = [outgoing, incoming, elsewhere]
+
+  it('includes links in both directions, since either end is "on this connection"', () => {
+    expect(connectionLinks(all, 'redis-1').map((l) => l.id)).toEqual(['out', 'in'])
+  })
+
+  it('leaves out links that never touch the connection', () => {
+    expect(connectionLinks(all, 'redis-1').map((l) => l.id)).not.toContain('other')
+  })
+
+  it('drops what the menu already lists above it, so the group adds information', () => {
+    expect(connectionLinks(all, 'redis-1', [outgoing]).map((l) => l.id)).toEqual(['in'])
+  })
+
+  it('is empty for a connection with nothing wired up', () => {
+    expect(connectionLinks(all, 'redis-unused')).toEqual([])
+  })
+})
+
+// Belonging and navigability are different questions. Conflating them put a
+// link aimed straight at the open object under "Elsewhere on this connection",
+// on screen next to a "No links for this table" line about that same table.
+describe('linkTouchesObject', () => {
+  it('matches a link whose source is the open object', () => {
+    const l = link({ source_conn_id: 'pg-1', source_kind: 'postgres', source_scope: 'public.orders' })
+    expect(linkTouchesObject(l, 'pg-1', 'public.orders', 'postgres')).toBe(true)
+  })
+
+  it('matches a link aimed AT the open object even when it cannot be reversed', () => {
+    // Redis value_field source: canReverse() is false, but the link still
+    // points at this very table.
+    const l = link({
+      source_conn_id: 'redis-1',
+      source_kind: 'redis',
+      source_extract: 'value_field',
+      target_conn_id: 'pg-1',
+      target_kind: 'postgres',
+      table: 'public.orders',
+      column: 'user_id',
+    })
+    expect(canReverse(l)).toBe(false)
+    expect(linkTouchesObject(l, 'pg-1', 'public.orders', 'postgres')).toBe(true)
+  })
+
+  it('does not match a different object on the same connection', () => {
+    const l = link({ source_conn_id: 'pg-1', source_kind: 'postgres', source_scope: 'public.users' })
+    expect(linkTouchesObject(l, 'pg-1', 'public.orders', 'postgres')).toBe(false)
+  })
+
+  it('matches Redis by key pattern at either end', () => {
+    const src = link({ source_conn_id: 'redis-1', source_kind: 'redis', source_scope: 'profile:*' })
+    const tgt = link({ target_conn_id: 'redis-1', target_kind: 'redis', key_pattern: 'c:*' })
+    expect(linkTouchesObject(src, 'redis-1', 'profile:42', 'redis')).toBe(true)
+    expect(linkTouchesObject(tgt, 'redis-1', 'c:abc', 'redis')).toBe(true)
+    expect(linkTouchesObject(tgt, 'redis-1', 'other:abc', 'redis')).toBe(false)
+  })
+
+  it('matches a Kafka topic at either end', () => {
+    const tgt = link({ target_conn_id: 'k-1', target_kind: 'kafka', target_topic: 'events_v2' })
+    expect(linkTouchesObject(tgt, 'k-1', 'events_v2', 'kafka')).toBe(true)
+    expect(linkTouchesObject(tgt, 'k-1', 'other_topic', 'kafka')).toBe(false)
+  })
+
+  it('ignores an object on a different connection', () => {
+    const l = link({ source_conn_id: 'pg-1', source_kind: 'postgres', source_scope: 'public.orders' })
+    expect(linkTouchesObject(l, 'pg-2', 'public.orders', 'postgres')).toBe(false)
+  })
+})
+
+// Two links between same-named objects on different servers render identically
+// without their connection names -- and these rows are not clickable, so the
+// label is all the reader gets.
+describe('linkSummary connection names', () => {
+  const names: Record<string, string> = { 'redis-1': 'stage redis', 'pg-1': 'prod postgres' }
+  const nameOf = (id: string) => names[id] ?? id
+
+  it('leaves the summary unnamed when no resolver is given', () => {
+    const l = link({ source_scope: 'profile:*', key_pattern: 'c:*' })
+    expect(linkSummary(l)).toBe('redis:profile:* → redis:c:*')
+  })
+
+  it('names both ends when a resolver is given', () => {
+    const l = link({
+      source_conn_id: 'redis-1',
+      source_scope: 'profile:*',
+      target_conn_id: 'pg-1',
+      target_kind: 'postgres',
+      table: 'public.orders',
+      column: 'user_id',
+    })
+    expect(linkSummary(l, nameOf)).toBe('stage redis · redis:profile:* → prod postgres · postgres:public.orders.user_id')
+  })
+
+  it('tells apart two links that are otherwise identical', () => {
+    const a = link({ id: 'a', source_conn_id: 'redis-1', source_scope: 'profile:*', target_conn_id: 'redis-1' })
+    const b = link({ id: 'b', source_conn_id: 'redis-1', source_scope: 'profile:*', target_conn_id: 'pg-1' })
+    expect(linkSummary(a)).toBe(linkSummary(b))
+    expect(linkSummary(a, nameOf)).not.toBe(linkSummary(b, nameOf))
   })
 })

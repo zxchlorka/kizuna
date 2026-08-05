@@ -39,7 +39,12 @@ export function SqlStatusBar({ activeResult, totalResults }: SqlStatusBarProps) 
   return (
     <div className="flex items-center justify-between border-t border-border bg-muted/20 px-3 py-2 text-[11px] text-muted-foreground">
       <span>{left}</span>
-      <span>{result.duration_ms}ms · Stmt {activeResult.statementIndex + 1}/{totalResults}</span>
+      <span>
+        {result.duration_ms}ms ·{' '}
+        {/* A cancelled batch has no statement position to report: its entry
+            stands for the whole run, so "Stmt 1/1" would be a made-up number. */}
+        {activeResult.batchScope ? 'Batch' : `Stmt ${activeResult.statementIndex + 1}/${totalResults}`}
+      </span>
     </div>
   )
 }

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { fetchWithTimeout } from '@/lib/http'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import type { LinkInput, LinkRecord } from '@/types/api'
 
 interface LinksStore {
@@ -19,10 +19,7 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
 
   fetch: async () => {
     const res = await fetchWithTimeout('/api/links')
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const links = (await res.json()) as LinkRecord[]
     set({ links: links ?? [], loaded: true })
   },
@@ -33,10 +30,7 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const link = (await res.json()) as LinkRecord
     set({ links: [...get().links, link] })
     return link
@@ -48,10 +42,7 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const updated = (await res.json()) as LinkRecord
     set({ links: get().links.map((link) => (link.id === id ? updated : link)) })
     return updated
@@ -59,10 +50,7 @@ export const useLinksStore = create<LinksStore>((set, get) => ({
 
   remove: async (id: string) => {
     const res = await fetchWithTimeout(`/api/links/${id}`, { method: 'DELETE' })
-    if (!res.ok && res.status !== 204) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     set({ links: get().links.filter((link) => link.id !== id) })
   },
 

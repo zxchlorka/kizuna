@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { useKafkaStore } from '@/stores/kafka'
+import { MAX_SCAN_MATCHES, useKafkaStore } from '@/stores/kafka'
 
 // These tests drive the REAL store against a mocked fetch to verify the
 // network-level acceptance criteria that a pure-function test cannot: that
@@ -195,6 +195,190 @@ describe('Cancel aborts the in-flight request', () => {
     // Matches found before the cancel survive.
     expect(tab.messages).toHaveLength(1)
     expect(tab.messagesError).toBeNull()
+  })
+
+  it('a superseded step cannot write into the search that replaced it', async () => {
+    let releaseStale: ((res: Response) => void) | undefined
+    const fetchMock = vi
+      .fn()
+      // Step 1: the original search.
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            columns: [],
+            rows: [scanRow(0, 7)],
+            total: 1,
+            has_more: false,
+            meta: { scanning: true, scanned: 40, matched: 1, has_older: true, next_before_offsets: { '0': 5 } },
+          })
+        )
+      )
+      // Step 2: hangs, and stays hanging past the cancel. Resolving it by hand
+      // below is how the test reproduces a response that lands only after the
+      // user has already started a different search — the ordering the identity
+      // guard exists for.
+      .mockImplementationOnce(() => new Promise<Response>((resolve) => (releaseStale = resolve)))
+      // Step 3: the replacement search.
+      .mockImplementationOnce(() =>
+        Promise.resolve(
+          jsonResponse({
+            columns: [],
+            rows: [scanRow(1, 99)],
+            total: 1,
+            has_more: false,
+            meta: { scanning: true, scanned: 10, matched: 1, has_older: false, next_before_offsets: {} },
+          })
+        )
+      )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', 'a.b', 'x')
+    const stale = useKafkaStore.getState().scanMore('c1', 'topic', 'tab-stale')
+    await Promise.resolve()
+
+    useKafkaStore.getState().cancelScan('tab-stale')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', 'a.b', 'y')
+
+    const afterReplacement = useKafkaStore.getState().tabs['tab-stale']
+    expect(afterReplacement.messages).toHaveLength(1)
+    expect(afterReplacement.scanned).toBe(10)
+
+    // The abandoned step finally answers. Its rows belong to a search the user
+    // has already left, so none of them may appear, and it must not touch the
+    // spinner or counters of the search now on screen.
+    releaseStale?.(
+      jsonResponse({
+        columns: [],
+        rows: [scanRow(2, 123)],
+        total: 1,
+        has_more: true,
+        meta: { scanning: true, scanned: 999, matched: 1, has_older: true, next_before_offsets: { '2': 1 } },
+      })
+    )
+    await stale
+
+    const tab = useKafkaStore.getState().tabs['tab-stale']
+    expect(tab.messages).toHaveLength(1)
+    expect(tab.messages[0].offset).toBe(99)
+    expect(tab.scanned).toBe(10)
+    expect(tab.scanning).toBe(false)
+  })
+})
+
+describe('Search all — ceiling on accumulated matches', () => {
+  // Each step returns a fresh block of matches and always claims there is more,
+  // which is what a broad predicate on a big topic looks like. Without a ceiling
+  // this loop only ends when the log does.
+  function blockOfMatches(startOffset: number, count: number) {
+    return Array.from({ length: count }, (_, i) => scanRow(0, startOffset + i))
+  }
+
+  it('stops Search all at MAX_SCAN_MATCHES instead of growing without bound', async () => {
+    let nextOffset = 0
+    let cursor = 0
+    const fetchMock = vi.fn(() => {
+      const rows = blockOfMatches(nextOffset, 3000)
+      nextOffset += 3000
+      cursor += 1
+      return Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows,
+          total: rows.length,
+          has_more: true,
+          meta: { scanning: true, scanned: 5000, matched: rows.length, has_older: true, next_before_offsets: { '0': cursor } },
+        })
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cap', 'a.b', 'x')
+    expect(useKafkaStore.getState().tabs['tab-cap'].messages).toHaveLength(3000)
+    expect(useKafkaStore.getState().tabs['tab-cap'].scanLimitReached).toBe(false)
+
+    await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-cap')
+
+    const tab = useKafkaStore.getState().tabs['tab-cap']
+    expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
+    expect(tab.scanLimitReached).toBe(true)
+    expect(tab.deepScanning).toBe(false)
+    // One step for the search, one more before the ceiling stopped the loop —
+    // the log still reports has_older, so only the ceiling can end this.
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  // Landing exactly on the ceiling is ambiguous on its own: it is a truncated
+  // result only if there was more to read. With the log exhausted the result is
+  // complete, and calling it truncated also hides the "reached end/beginning"
+  // marker in the browser, so the reader cannot tell a full answer from a cut one.
+  it('does not call an exactly-full result truncated when the log is exhausted', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: blockOfMatches(0, MAX_SCAN_MATCHES),
+          total: MAX_SCAN_MATCHES,
+          has_more: false,
+          meta: { scanning: false, scanned: 9000, matched: MAX_SCAN_MATCHES, has_older: false, next_before_offsets: {} },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact', 'a.b', 'x')
+
+    const tab = useKafkaStore.getState().tabs['tab-exact']
+    expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
+    expect(tab.hasMore).toBe(false)
+    expect(tab.scanLimitReached).toBe(false)
+  })
+
+  it('still flags the ceiling on an exactly-full page that has more to come', async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: blockOfMatches(0, MAX_SCAN_MATCHES),
+          total: MAX_SCAN_MATCHES,
+          has_more: true,
+          meta: { scanning: true, scanned: 9000, matched: MAX_SCAN_MATCHES, has_older: true, next_before_offsets: { '0': 1 } },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact-more', 'a.b', 'x')
+
+    const tab = useKafkaStore.getState().tabs['tab-exact-more']
+    expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
+    expect(tab.scanLimitReached).toBe(true)
+  })
+
+  it('a fresh search clears the ceiling flag', async () => {
+    useKafkaStore.setState({
+      tabs: {
+        'tab-reset': {
+          ...useKafkaStore.getState().tabs['tab-reset'],
+          scanLimitReached: true,
+        } as never,
+      },
+    })
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [scanRow(0, 1)],
+          total: 1,
+          has_more: false,
+          meta: { scanning: true, scanned: 10, matched: 1, has_older: false, next_before_offsets: {} },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-reset', 'a.b', 'x')
+
+    expect(useKafkaStore.getState().tabs['tab-reset'].scanLimitReached).toBe(false)
   })
 })
 

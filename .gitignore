@@ -21,7 +21,7 @@ memory
 *.sum.bak
 
 # Frontend deps & build cache
-frontend/node_modules/
+node_modules/
 frontend/dist/
 
 # MCP / QA test artifacts

@@ -5,7 +5,7 @@ import type {
   ExplainResult,
   HistoryEntry,
 } from '@/types/api'
-import { apiFetch, fetchWithTimeout, RequestAbortedError } from '@/lib/http'
+import { apiFetch, fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
 
 export interface SqlExecutionResult {
   id: string
@@ -14,6 +14,12 @@ export interface SqlExecutionResult {
   statementIndex: number
   statement: string
   result: ExecResult
+  // Set on the synthetic entry that stands in for a WHOLE cancelled batch, where
+  // no per-statement results came back at all (see canceledResult). Everything
+  // else describes exactly one statement, and its statementIndex is a real
+  // position in the batch — for this one it is not, so the UI must not present it
+  // as "statement N".
+  batchScope?: true
 }
 
 export interface SqlExplainExecutionResult {
@@ -38,6 +44,11 @@ interface SqlTabState {
   historyOpen: boolean
   history: HistoryEntry[]
   historyLoading: boolean
+  // Kept apart from `error`, which means "the SQL run failed" and drives the
+  // console's failure state. A history read is a side panel refreshing itself;
+  // when it fails it must not repaint a successful -- or deliberately
+  // cancelled -- run as a failure.
+  historyError: string | null
   historySearch: string
   historyCursor: number
   historyDraft: string
@@ -75,6 +86,7 @@ const defaultTabState = (): SqlTabState => ({
   historyOpen: false,
   history: [],
   historyLoading: false,
+  historyError: null,
   historySearch: '',
   historyCursor: -1,
   historyDraft: '',
@@ -90,6 +102,42 @@ function newResultId(prefix: string, statementIndex: number): string {
 
 function normalizeHistory(items: HistoryEntry[]): HistoryEntry[] {
   return items ?? []
+}
+
+// A cancelled run's history is written by the server AFTER the client's abort
+// has already resolved: the request context is only cancelled once the
+// disconnect reaches the server, and the handler still has to unwind the query
+// (for Postgres, a cancel round-trip of its own) before it appends anything. A
+// single immediate GET races that write and normally wins the race it wants to
+// lose -- leaving the panel showing the list from before the run, which is
+// exactly the entries the user was just told to go and read.
+//
+// Nothing tells the client when that write lands, so wait for it to show rather
+// than assume it has: re-read until the newest entry changes. Bounded, because a
+// run cancelled before its first statement finished legitimately writes nothing,
+// and that has to end as a stale-free no-op rather than a spin.
+const HISTORY_SETTLE_ATTEMPTS = 5
+const HISTORY_SETTLE_DELAY_MS = 150
+
+// "Our run landed" is an entry that was not in the list before AND whose command
+// is one this run submitted. Both halves are load-bearing: history is per
+// CONNECTION, so a second console tab on the same connection writes into the
+// same list, and merely watching for "the newest entry changed" let that other
+// tab's statement end our wait before ours had been written.
+//
+// ponytail: two identical statements running concurrently on one connection can
+// still satisfy this. Closing that needs the server to hand back a run id (or a
+// real cancel endpoint that returns the results instead of the client aborting
+// blind) -- worth doing when cancel stops being a bare HTTP abort.
+function runLanded(
+  tabs: Record<string, SqlTabState>,
+  tabId: string,
+  knownIDs: Set<string>,
+  ourStatements: Set<string>
+): boolean {
+  return ensureState(tabs, tabId).history.some(
+    (entry) => !knownIDs.has(entry.id) && ourStatements.has(entry.command.trim())
+  )
 }
 
 function explainLabel(result: ExplainResult, fallback: 'EXPLAIN' | 'ANALYZE'): string {
@@ -122,13 +170,33 @@ function isCurrentRun(tabId: string, controller: AbortController): boolean {
 // watched run for seconds reads as a bug in a tool meant for diagnosing slow
 // queries. This is wall-clock including request overhead, not server execution
 // time — approximate, but the only number available.
-function canceledResult(statement: string, label: string, startedAt: number): SqlResultItem {
+//
+// Cancel aborts the HTTP request itself, which is what stops the query server
+// side (the handler's context dies with the connection). The cost is that the
+// response never arrives — and for a batch that response is the only place the
+// per-statement outcome lives, because ExecuteBatch runs statements
+// autocommitted and reports which ones committed, which one was cancelled and
+// which never ran (internal/connector/postgres/execute.go).
+//
+// So a cancelled batch cannot be described statement by statement here. It gets
+// ONE entry that says so honestly, instead of a fake "statement 1" that claims
+// the first statement is the whole story. The handler still writes each executed
+// statement to history before it returns, so the real record does exist — the
+// run path re-fetches it after a cancel and the panel points the user there.
+//
+// `label` is the caller's, because a cancelled EXPLAIN/ANALYZE is labelled by
+// what it was rather than by position. Only the run path passes more than one
+// statement, and only that case is a batch.
+function canceledResult(statements: string[], label: string, startedAt: number): SqlResultItem {
+  const isBatch = statements.length > 1
+  const statement = isBatch ? '' : (statements[0] ?? '')
   return {
     id: newResultId('stmt', 0),
     kind: 'execute',
     label,
     statementIndex: 0,
     statement,
+    ...(isBatch ? { batchScope: true as const } : {}),
     result: {
       columns: [],
       rows: [],
@@ -363,10 +431,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
 
     try {
       const res = await apiFetch(`/api/connections/${connId}/history?${params.toString()}`)
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
 
       const history = normalizeHistory(await res.json())
       set((state) => {
@@ -378,12 +443,15 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
               ...tab,
               history,
               historyLoading: false,
-              error: null,
+              historyError: null,
             },
           },
         }
       })
     } catch (error) {
+      // Only the panel's own error. `tab.error` belongs to the SQL run and is
+      // deliberately left alone: a history refresh that fails after a cancel
+      // used to repaint that cancel as a failed statement.
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return {
@@ -392,7 +460,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             [tabId]: {
               ...tab,
               historyLoading: false,
-              error: (error as Error).message,
+              historyError: (error as Error).message,
             },
           },
         }
@@ -402,10 +470,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
 
   clearHistory: async (connId, tabId) => {
     const res = await apiFetch(`/api/connections/${connId}/history`, { method: 'DELETE' })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
 
     set((state) => {
       const tab = ensureState(state.tabs, tabId)
@@ -525,7 +590,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         // Deliberate Cancel/Stop, not a failure: leave `error` unset so the
         // console doesn't render a "failed" state, and mark the synthetic
         // result canceled instead of erroring it.
-        const result = canceledResult(trimmedStatements[0], trimmedStatements.length > 1 ? 'Batch' : 'Stmt 1', startedAt)
+        const result = canceledResult(trimmedStatements, trimmedStatements.length > 1 ? 'Batch' : 'Stmt 1', startedAt)
         set((state) => {
           const tab = ensureState(state.tabs, tabId)
           return {
@@ -541,6 +606,27 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             },
           }
         })
+        // History is the only surviving record of what a cancelled batch
+        // actually ran: the response carrying the per-statement outcome went
+        // away with the aborted request. Opening the panel fetches it (see the
+        // historyOpen effect in SqlConsole.tsx), so the one case left to handle
+        // is a panel that is ALREADY open — it would otherwise keep showing the
+        // list from before this run, missing the very statements the user was
+        // just told to go and check. See HISTORY_SETTLE_ATTEMPTS for why this
+        // reads more than once.
+        if (ensureState(get().tabs, tabId).historyOpen) {
+          const knownIDs = new Set(ensureState(get().tabs, tabId).history.map((entry) => entry.id))
+          const ourStatements = new Set(trimmedStatements)
+          for (let attempt = 0; attempt < HISTORY_SETTLE_ATTEMPTS; attempt += 1) {
+            if (attempt > 0) {
+              await new Promise((resolve) => setTimeout(resolve, HISTORY_SETTLE_DELAY_MS))
+            }
+            await get().fetchHistory(connId, tabId)
+            if (runLanded(get().tabs, tabId, knownIDs, ourStatements)) {
+              break
+            }
+          }
+        }
         return
       }
 
@@ -668,7 +754,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
 
       if (error instanceof RequestAbortedError) {
-        const result = canceledResult(trimmed, 'EXPLAIN', startedAt)
+        const result = canceledResult([trimmed], 'EXPLAIN', startedAt)
         set((state) => {
           const tab = ensureState(state.tabs, tabId)
           return {
@@ -811,7 +897,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
 
       if (error instanceof RequestAbortedError) {
-        const result = canceledResult(trimmed, 'ANALYZE', startedAt)
+        const result = canceledResult([trimmed], 'ANALYZE', startedAt)
         set((state) => {
           const tab = ensureState(state.tabs, tabId)
           return {

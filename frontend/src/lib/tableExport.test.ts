@@ -134,6 +134,54 @@ describe('CSV-injection guard', () => {
     // a NULL — see the NULL vs empty string tests above.
     expect(buildCSV(cols, [['']])).toBe('v\r\n""')
   })
+
+  it('sees through leading whitespace, which spreadsheets strip before parsing a formula', () => {
+    const cols = [{ name: 'v', type: 'text' }]
+    // A tab is not one of CSV's quoting triggers, so the field stays bare —
+    // what matters is the `'` in front of it.
+    expect(buildCSV(cols, [['\t=1+1']])).toBe("v\r\n'\t=1+1")
+    expect(buildCSV(cols, [[' =1+1']])).toBe("v\r\n' =1+1")
+    // A CR does force quoting, and the guard still applies underneath it.
+    expect(buildCSV(cols, [['\r=1+1']])).toBe("v\r\n\"'\r=1+1\"")
+  })
+
+  it('guards TSV before flattening, so a leading tab cannot smuggle a formula past the check', () => {
+    const cols = [{ name: 'v', type: 'text' }]
+    // The tab still collapses to a space (grid safety), but the value is
+    // already prefixed by then.
+    expect(buildTSV(cols, [['\t=1+1']])).toBe("v\n' =1+1")
+  })
+
+  it('does not prefix a benign value that merely starts with whitespace', () => {
+    const cols = [{ name: 'v', type: 'text' }]
+    expect(buildCSV(cols, [['\tfoo']])).toBe('v\r\n\tfoo')
+    expect(buildTSV(cols, [['\tfoo']])).toBe('v\n foo')
+  })
+
+  it('still skips a numeric column when the trigger is behind whitespace', () => {
+    const cols = [{ name: 'v', type: 'int4' }]
+    expect(buildCSV(cols, [[' -5']])).toBe('v\r\n -5')
+  })
+})
+
+describe('JSON export — column names that collide with Object.prototype', () => {
+  it('keeps a column literally named __proto__ (SELECT 1 AS "__proto__")', () => {
+    // On a plain {} this assignment hits the inherited __proto__ setter and
+    // creates no own property, so the column silently disappeared from the
+    // export while every other format still had it.
+    const parsed = JSON.parse(buildJSON([{ name: '__proto__' }, { name: 'id' }], [['evil', 7]])) as Array<
+      Record<string, unknown>
+    >
+    expect(Object.keys(parsed[0])).toEqual(['__proto__', 'id'])
+    expect(parsed[0].id).toBe(7)
+  })
+
+  it('keeps other inherited names as ordinary columns', () => {
+    const parsed = JSON.parse(buildJSON([{ name: 'constructor' }, { name: 'toString' }], [['a', 'b']])) as Array<
+      Record<string, unknown>
+    >
+    expect(parsed[0]).toEqual({ constructor: 'a', toString: 'b' })
+  })
 })
 
 describe('types — jsonb, arrays, bytea-as-base64, timestamps', () => {

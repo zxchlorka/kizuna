@@ -1,6 +1,5 @@
 export type ConnectionType = 'postgres' | 'redis' | 'kafka'
 export type RedisMode = 'standalone' | 'cluster' | 'sentinel'
-export type KafkaSASLMechanism = '' | 'PLAIN' | 'SCRAM-SHA-256' | 'SCRAM-SHA-512'
 
 export interface KafkaConfig {
   brokers: string[]
@@ -220,14 +219,6 @@ export interface SqlCatalog {
   truncated?: boolean
 }
 
-export interface ExecuteRequest {
-  statement: string
-}
-
-export interface ExecuteMultiRequest {
-  statements: string[]
-}
-
 export interface ExecuteMultiResponse {
   results: ExecResult[]
 }
@@ -292,11 +283,6 @@ export interface MutateOp {
   data?: Record<string, unknown>
 }
 
-export interface MutateResult {
-  rows_affected: number
-  row?: unknown[]
-}
-
 export interface BulkMutateOp {
   schema: string
   object: string
@@ -335,13 +321,6 @@ export interface DDLOp {
   schema: string
   object: string
   params: Record<string, unknown>
-}
-
-export interface DDLResult {
-  ok: boolean
-  type: DDLType
-  schema: string
-  object: string
 }
 
 export type LinkKind = 'kafka' | 'redis' | 'postgres'

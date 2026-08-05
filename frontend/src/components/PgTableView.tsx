@@ -11,17 +11,30 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
+import {
+  LINK_MENU_CAP,
+  LINK_PREVIEW_CAP,
+  LinkPickerDialog,
+  type LinkPickerItem,
+} from '@/components/links/LinkPickerDialog'
 import { AddRowDialog } from '@/components/PgTableView/AddRowDialog'
-import { DeleteRowsDialog } from '@/components/PgTableView/DeleteRowsDialog'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import { PaginationBar } from '@/components/PgTableView/PaginationBar'
-import { SaveChangesDialog } from '@/components/PgTableView/SaveChangesDialog'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
-import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
-import { canReverse, extractPgColumn, linkSourceLabel, linkTargetLabel } from '@/lib/links'
+import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
+import {
+  canReverse,
+  connectionLinks,
+  extractPgColumn,
+  linkSourceLabel,
+  linkSummary,
+  linkTargetLabel,
+  linkTouchesObject,
+} from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import {
@@ -33,12 +46,13 @@ import {
   timestampForFilename,
   type ExportColumn,
 } from '@/lib/tableExport'
-import { buildBulkMutatePayload, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
+import { buildBulkMutatePayload, draftCellValue, type DraftDeleteState, type DraftUpdateState } from '@/lib/table-drafts'
 import {
   buildRowIdentity,
   filtersEqual,
   filtersToState,
   normalizeFilters,
+  resolveSelectedRows,
   VALUELESS_FILTER_OPS,
 } from '@/lib/table'
 import { useDataStore } from '@/stores/data'
@@ -62,6 +76,13 @@ const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
 const EMPTY_DRAFT_DELETES: Record<string, DraftDeleteState> = {}
 const EMPTY_INSERTS: Record<string, unknown>[] = []
 type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | null
+
+// One checked row: how to address it in a mutation, and what it contained when
+// it was checked. See the selectedRows state for why both halves are kept.
+interface SelectedRow {
+  where: Record<string, unknown>
+  row: TableRow
+}
 
 function parseObjectName(object: string): { schema: string; table: string } {
   const [schema, table] = object.includes('.') ? object.split('.', 2) : ['public', object]
@@ -111,15 +132,31 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const pushToast = useToastStore((state) => state.push)
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
-  const linksFor = useLinksStore((state) => state.linksFor)
+  const connections = useConnectionStore((state) => state.connections)
   const openLinkTarget = useOpenLinkTarget()
+
+  // Both ends of a link are named, because the far end is usually a different
+  // connection and the summary is otherwise ambiguous between servers.
+  const connectionName = useCallback(
+    (id: string) => connections.find((connection) => connection.id === id)?.name ?? id,
+    [connections]
+  )
 
   const [sorting, setSorting] = useState<SortingState>([])
   const [linkMenu, setLinkMenu] = useState<
     { x: number; y: number; row: TableRow; column?: string; value?: unknown } | null
   >(null)
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
-  const [selectedRows, setSelectedRows] = useState<Map<string, Record<string, unknown>>>(new Map())
+  const [pickerGroup, setPickerGroup] = useState<'table' | 'reverse' | 'connection' | null>(null)
+  // rowKey -> the row's PK predicate AND the row itself.
+  //
+  // Selection survives paging on purpose (Delete selected has always acted on
+  // every selected row, wherever it was selected), and `where` alone is enough
+  // to delete. Copy/export need the row's actual values, which only exist for
+  // the page they were read from -- so the row is captured at selection time.
+  // Deriving them later by intersecting with the current page instead is what
+  // made "Copy selected (12)" put 3 rows, or none, on the clipboard.
+  const [selectedRows, setSelectedRows] = useState<Map<string, SelectedRow>>(new Map())
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -137,8 +174,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [fetchLinks])
 
   const tableLinks = useMemo(
-    () => linksFor(connId, object).filter((link) => link.source_kind === 'postgres'),
-    [linksFor, links, connId, object]
+    () =>
+      links.filter(
+        (link) =>
+          link.source_conn_id === connId && link.source_scope === object && link.source_kind === 'postgres'
+      ),
+    [links, connId, object]
   )
 
   const openLinkSource = useOpenLinkSource()
@@ -153,6 +194,33 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       ),
     [links, connId, object]
   )
+
+  // Links pointing AT this table that cannot be walked backwards (a Redis
+  // value_field/string_value source cannot be rebuilt from the value). They are
+  // about this table, so they are listed here rather than swept into the
+  // "elsewhere" group -- just not clickable.
+  const inboundOnlyLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'postgres' &&
+          link.table === object &&
+          !canReverse(link)
+      ),
+    [links, connId, object]
+  )
+
+  // Everything else wired up on this connection. Membership is decided by what
+  // the link mentions, never by whether it happens to be navigable -- see
+  // linkTouchesObject.
+  const otherConnectionLinks = useMemo(
+    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'postgres'))),
+    [links, connId, object]
+  )
+  // The dialog answers "everything on this connection", so it lists them all.
+  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
+
 
   useEffect(() => {
     void (async () => {
@@ -172,6 +240,59 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [clearDrafts, connId, fetchData, fetchSchema, object, tabId])
 
   const columns = tabData?.columns ?? EMPTY_COLUMNS
+
+  const pickerItems = useMemo<LinkPickerItem[]>(() => {
+    const row = linkMenu?.row
+    if (pickerGroup === 'table' && row) {
+      return tableLinks.map((link) => {
+        const value = extractPgColumn(columns, row, link.source_field ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkTargetLabel(link, null)} (field missing)` : linkTargetLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkTarget(link, value)
+            setLinkMenu(null)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'reverse' && row) {
+      return reverseLinks.map((link) => {
+        const value = extractPgColumn(columns, row, link.column ?? '')
+        return {
+          id: link.id,
+          label: value === null ? `${linkSourceLabel(link, null)} (no value)` : linkSourceLabel(link, value),
+          disabled: value === null,
+          onPick: () => {
+            if (value !== null) openLinkSource(link, value)
+            setLinkMenu(null)
+          },
+        }
+      })
+    }
+    if (pickerGroup === 'connection') {
+      // Reference only: these belong to other tables, so this row holds no
+      // value to follow them with.
+      return allConnectionLinks.map((link) => ({
+        id: link.id,
+        label: linkSummary(link, connectionName),
+        disabled: true,
+        onPick: () => undefined,
+      }))
+    }
+    return []
+  }, [
+    pickerGroup,
+    linkMenu,
+    columns,
+    tableLinks,
+    reverseLinks,
+    allConnectionLinks,
+    connectionName,
+    openLinkTarget,
+    openLinkSource,
+  ])
   const columnNames = useMemo(() => columns.map((c) => c.name), [columns])
   const referencedBy = tabData?.referencedBy ?? EMPTY_REFERENCED_BY
   const rows = tabData?.rows ?? EMPTY_ROWS
@@ -215,11 +336,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     return out
   }, [rowIdentityEntries])
 
-  const rowIdentityByKey = useMemo(() => {
-    const out = new Map<string, RowIdentity>()
+  // Keyed by rowKey and carrying the whole entry, not just the identity: row
+  // selection needs the row's values as well as its PK predicate (see
+  // selectedRows), and a second parallel map would be one more thing to keep in
+  // step with this one.
+  const rowEntryByKey = useMemo(() => {
+    const out = new Map<string, (typeof rowIdentityEntries)[number] & { identity: RowIdentity }>()
     rowIdentityEntries.forEach((entry) => {
       if (entry.identity) {
-        out.set(entry.rowKey, entry.identity)
+        out.set(entry.rowKey, { ...entry, identity: entry.identity })
       }
     })
     return out
@@ -385,13 +510,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   }, [refresh])
 
   const getDraftValue = useCallback(
-    (rowKey: string, columnName: string, fallback: unknown) => {
-      const rowDraft = draftUpdates[rowKey]
-      if (!rowDraft || !(columnName in rowDraft.data)) {
-        return fallback
-      }
-      return rowDraft.data[columnName]
-    },
+    (rowKey: string, columnName: string, fallback: unknown) =>
+      draftCellValue(draftUpdates, rowKey, columnName, fallback),
     [draftUpdates]
   )
 
@@ -403,33 +523,33 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   const handleCellChange = useCallback(
     (rowKey: string, columnName: string, value: unknown) => {
       if (!editMode || !hasPrimaryKey) return
-      const identity = rowIdentityByKey.get(rowKey)
+      const identity = rowEntryByKey.get(rowKey)?.identity
       if (!identity) {
         setLocalError('Cannot edit this row: primary key value is missing.')
         return
       }
       setDraftCell(tabId, rowKey, identity.where, columnName, value)
     },
-    [editMode, hasPrimaryKey, rowIdentityByKey, setDraftCell, tabId]
+    [editMode, hasPrimaryKey, rowEntryByKey, setDraftCell, tabId]
   )
 
   const handleToggleRow = useCallback(
     (rowKey: string, checked: boolean) => {
       if (!hasPrimaryKey) return
-      const identity = rowIdentityByKey.get(rowKey)
-      if (!identity) return
+      const entry = rowEntryByKey.get(rowKey)
+      if (!entry?.identity) return
 
       setSelectedRows((prev) => {
         const next = new Map(prev)
         if (checked) {
-          next.set(rowKey, identity.where)
+          next.set(rowKey, { where: entry.identity.where, row: entry.row })
         } else {
           next.delete(rowKey)
         }
         return next
       })
     },
-    [hasPrimaryKey, rowIdentityByKey]
+    [hasPrimaryKey, rowEntryByKey]
   )
 
   const handleToggleAll = useCallback(
@@ -438,10 +558,10 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       setSelectedRows((prev) => {
         const next = new Map(prev)
         rowKeys.forEach((rowKey) => {
-          const identity = rowIdentityByKey.get(rowKey)
-          if (!identity) return
+          const entry = rowEntryByKey.get(rowKey)
+          if (!entry?.identity) return
           if (checked) {
-            next.set(rowKey, identity.where)
+            next.set(rowKey, { where: entry.identity.where, row: entry.row })
           } else {
             next.delete(rowKey)
           }
@@ -449,7 +569,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         return next
       })
     },
-    [hasPrimaryKey, rowIdentityByKey]
+    [hasPrimaryKey, rowEntryByKey]
   )
 
   const handleDeleteSelected = useCallback(() => {
@@ -459,8 +579,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
       return
     }
     if (editMode) {
-      selectedRows.forEach((where, rowKey) => {
-        toggleDraftDelete(tabId, rowKey, where, true)
+      selectedRows.forEach((selected, rowKey) => {
+        toggleDraftDelete(tabId, rowKey, selected.where, true)
       })
       setSelectedRows(new Map())
       return
@@ -477,14 +597,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     setIsSaving(true)
     setLocalError(null)
     try {
-      for (const where of selectedRows.values()) {
+      for (const selected of selectedRows.values()) {
         await mutate(
           connId,
           {
             type: 'delete',
             schema: schemaName,
             object: tableName,
-            where,
+            where: selected.where,
           },
           tabId,
           { reload: false }
@@ -687,16 +807,31 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     () => columns.map((column) => ({ name: column.name, type: column.data_type })),
     [columns]
   )
-  const toExportRow = useCallback((row: TableRow) => columns.map((column) => row[column.name]), [columns])
-  const selectedRowObjects = useMemo(
-    () => rowIdentityEntries.filter((entry) => selectedRows.has(entry.rowKey)).map((entry) => entry.row),
-    [rowIdentityEntries, selectedRows]
+  // Copy/export reproduce what the grid is SHOWING, which in edit mode means the
+  // unsaved draft rather than the value it replaced -- the same rule EditableCell
+  // renders by. rowKey is passed explicitly for selected rows, whose row objects
+  // may come from a page that is no longer loaded and so are not in rowKeyByRow.
+  const toExportRow = useCallback(
+    (row: TableRow, rowKey?: string) => {
+      const key = rowKey ?? rowKeyByRow.get(row)
+      return columns.map((column) => draftCellValue(draftUpdates, key, column.name, row[column.name]))
+    },
+    [columns, draftUpdates, rowKeyByRow]
+  )
+  // Insertion order, i.e. the order the rows were checked in. Every checked row
+  // is here regardless of which page it was checked on, so this list always has
+  // exactly `selectedRows.size` entries -- the number the menu shows. Values come
+  // from the loaded page where it has the row, so a Refresh cannot leave the
+  // clipboard describing what the grid stopped showing -- see resolveSelectedRows.
+  const selectedRowEntries = useMemo(
+    () => resolveSelectedRows(selectedRows, (rowKey) => rowEntryByKey.get(rowKey)?.row),
+    [rowEntryByKey, selectedRows]
   )
 
   const copyText = useCallback(
     async (text: string, successMessage: string) => {
-      const result = await writeClipboardText(text)
-      if (result.ok) {
+      const copied = await writeClipboardText(text)
+      if (copied) {
         pushToast({ tone: 'success', title: 'Copied', message: successMessage })
       } else {
         pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
@@ -725,17 +860,19 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
 
   const handleCopy = useCallback(
     (format: 'tsv' | 'json', scope: 'all' | 'selected') => {
-      const sourceRows = scope === 'all' ? rows : selectedRowObjects
-      const exportRows = sourceRows.map(toExportRow)
+      const exportRows =
+        scope === 'all'
+          ? rows.map((row) => toExportRow(row))
+          : selectedRowEntries.map((entry) => toExportRow(entry.row, entry.rowKey))
       const text = format === 'tsv' ? buildTSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
       void copyText(text, `${exportRows.length} row${exportRows.length === 1 ? '' : 's'} copied to clipboard.`)
     },
-    [copyText, exportColumns, rows, selectedRowObjects, toExportRow]
+    [copyText, exportColumns, rows, selectedRowEntries, toExportRow]
   )
 
   const handleExport = useCallback(
     (format: 'csv' | 'json') => {
-      const exportRows = rows.map(toExportRow)
+      const exportRows = rows.map((row) => toExportRow(row))
       const stamp = timestampForFilename()
       const content = format === 'csv' ? buildCSV(exportColumns, exportRows) : buildJSON(exportColumns, exportRows)
       const mime = format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json;charset=utf-8'
@@ -913,18 +1050,28 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onNavigate={handleNavigateReferencedBy}
       />
 
-      <DeleteRowsDialog
+      <ConfirmDialog
         open={showDeleteDialog}
-        object={object}
-        selectedCount={selectedRows.size}
-        saving={isSaving}
+        title="Delete selected rows?"
+        description={
+          <>
+            This action cannot be undone. {selectedRows.size} {selectedRows.size === 1 ? 'row' : 'rows'} will be
+            deleted from <span className="font-mono">{object}</span>.
+          </>
+        }
+        confirmLabel="Delete"
+        destructive
+        busy={isSaving}
         onOpenChange={setShowDeleteDialog}
-        onConfirm={confirmImmediateDelete}
+        onConfirm={() => void confirmImmediateDelete()}
       />
 
-      <SaveChangesDialog
+      <ConfirmDialog
         open={showSaveDialog}
-        saving={isSaving}
+        title="Apply pending changes?"
+        description="Changes will be written to the database in a single bulk transaction."
+        confirmLabel="Apply changes"
+        busy={isSaving}
         onOpenChange={setShowSaveDialog}
         onConfirm={handleSaveAll}
       />
@@ -1010,8 +1157,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           </FloatingMenuItem>
           <FloatingMenuSeparator />
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
-          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links for this table</FloatingMenuItem>}
-          {tableLinks.map((link: LinkRecord) => {
+          {/* Scoped to this group, which lists only links whose SOURCE is this
+              table. Saying "no links for this table" claimed more than the
+              group knows, and contradicted the inbound and elsewhere groups
+              right below it. */}
+          {tableLinks.length === 0 && <FloatingMenuItem disabled>No links from this table</FloatingMenuItem>}
+          {tableLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => {
             const value = extractPgColumn(columns, linkMenu.row, link.source_field ?? '')
             return (
               <FloatingMenuItem
@@ -1026,9 +1177,14 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               </FloatingMenuItem>
             )
           })}
+          {tableLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('table')}>
+              {`Show all (${tableLinks.length})…`}
+            </FloatingMenuItem>
+          )}
           {reverseLinks.length > 0 && <FloatingMenuSeparator />}
           {reverseLinks.length > 0 && <FloatingMenuLabel>Back to source</FloatingMenuLabel>}
-          {reverseLinks.map((link: LinkRecord) => {
+          {reverseLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => {
             const value = extractPgColumn(columns, linkMenu.row, link.column ?? '')
             return (
               <FloatingMenuItem
@@ -1043,6 +1199,40 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               </FloatingMenuItem>
             )
           })}
+          {reverseLinks.length > LINK_MENU_CAP && (
+            <FloatingMenuItem onClick={() => setPickerGroup('reverse')}>
+              {`Show all (${reverseLinks.length})…`}
+            </FloatingMenuItem>
+          )}
+          {/* These point at this table but cannot be walked back to their
+              source, so they are shown, not followed. */}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuSeparator />}
+          {inboundOnlyLinks.length > 0 && <FloatingMenuLabel>Points here · not reversible</FloatingMenuLabel>}
+          {inboundOnlyLinks.slice(0, LINK_MENU_CAP).map((link: LinkRecord) => (
+            <FloatingMenuItem key={`in-${link.id}`} disabled>
+              {linkSummary(link, connectionName)}
+            </FloatingMenuItem>
+          ))}
+          {/* What else this connection is wired to. Reference only -- these
+              belong to other tables, so this row has no value to follow them
+              with -- but without them a table with no links of its own looked
+              like a connection with none. */}
+          {/* The separator belongs to the whole connection block, not just its
+              preview: when every link on the connection is already listed above,
+              the preview is empty but "Show all" still needs to stand apart from
+              the group before it. */}
+          {allConnectionLinks.length > 0 && <FloatingMenuSeparator />}
+          {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
+          {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link: LinkRecord) => (
+            <FloatingMenuItem key={`conn-${link.id}`} disabled>
+              {linkSummary(link, connectionName)}
+            </FloatingMenuItem>
+          ))}
+          {allConnectionLinks.length > 0 && (
+            <FloatingMenuItem onClick={() => setPickerGroup('connection')}>
+              {`Show all ${allConnectionLinks.length} on this connection…`}
+            </FloatingMenuItem>
+          )}
           <FloatingMenuSeparator />
           <FloatingMenuItem
             onClick={() => {
@@ -1054,6 +1244,21 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
           </FloatingMenuItem>
         </FloatingMenu>
       )}
+
+      <LinkPickerDialog
+        open={pickerGroup !== null}
+        onOpenChange={(next) => {
+          if (!next) setPickerGroup(null)
+        }}
+        title={
+          pickerGroup === 'reverse'
+            ? 'Back to source'
+            : pickerGroup === 'connection'
+            ? 'Links on this connection'
+            : 'Open linked record'
+        }
+        items={pickerItems}
+      />
 
       <CreateLinkDialog
         open={createLinkOpen}
