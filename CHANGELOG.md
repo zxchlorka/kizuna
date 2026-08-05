@@ -3,6 +3,73 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.5.2 — 2026-08-05
+
+### Cross-source links
+
+- Link menus show what is wired up on the whole connection, not only what
+  applies to the open key, table or topic — a couple of entries inline, the full
+  list in a dialog. A key with no links of its own no longer looks like a
+  connection with none.
+- Both ends of a link are named by their connection, so two links between
+  same-named tables on different servers are no longer the same line of text.
+- A link that points at what is open but cannot be walked back to its source is
+  listed as exactly that, instead of being filed under "elsewhere" beside a
+  "no links" line about the same object.
+- Long menus stay inside the window and scroll instead of running off the edge.
+
+### SQL console
+
+- History is trustworthy after a cancel: a batch is written in one go rather
+  than statement by statement, and the console waits for its own run to appear
+  instead of reading before the server has finished writing.
+- A history refresh that fails no longer repaints a deliberate cancel as a
+  failed statement; the panel reports its own error.
+- A cancelled batch is reported as a cancelled batch instead of being blamed on
+  its first statement.
+
+### Kafka
+
+- A search that fills the match limit exactly, with the log exhausted, is
+  reported as a complete result rather than a truncated one.
+- Search results are bounded, and a scan step that has been superseded by a
+  newer search can no longer write its rows into it.
+- The client-side field filter walks JSON paths the same way the backend scan
+  does, so "Filter loaded" and "Search topic" agree on what matches.
+
+### Redis
+
+- The value under the cursor for a selection link is read from the value cell
+  rather than the whole row, so clicking a field name, index or score no longer
+  offers a link built from the wrong text.
+
+### Copy and export
+
+- Copying a selection after a refresh copies what the grid is showing, not the
+  values captured when the rows were ticked.
+- Copy and export act on every selected row, including rows selected on a page
+  that is no longer loaded, and reproduce unsaved edits rather than the stored
+  values behind them.
+- A column named `__proto__` survives the JSON export, and the CSV formula guard
+  is no longer bypassed by leading whitespace.
+
+### Workspace
+
+- A restored tab that was opened by following a foreign key comes back with its
+  filters applied, not just with its label saying so.
+
+### Interface
+
+- The last two native dropdowns — the Kafka match operator and the table filter
+  operator — render in the app's own palette instead of the operating system's.
+
+### Under the hood
+
+- Roughly 700 lines of unreachable code, duplicated error handling and
+  near-identical dialogs removed, along with three unused dependencies. Repeated
+  API error unwrapping, request body decoding and confirmation dialogs each
+  became one shared piece.
+
 ## v0.5.1 — 2026-08-03
 
 ### Security
