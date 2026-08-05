@@ -7,7 +7,7 @@ import { SqlResultTab } from '@/components/SqlConsole/SqlResultTab'
 import { TableExportMenu } from '@/components/TableExportMenu'
 import { TableCheckbox } from '@/components/DataTable/TableCheckbox'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
-import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
+import { useOpenLinkTarget } from '@/hooks/useOpenLink'
 import type { SqlResultItem } from '@/stores/sqlConsole'
 import { cn } from '@/lib/utils'
 import { linkTargetLabel } from '@/lib/links'
@@ -98,8 +98,8 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
   }, [activeExecuteResult])
 
   const copyText = async (text: string, successMessage: string) => {
-    const result = await writeClipboardText(text)
-    if (result.ok) {
+    const copied = await writeClipboardText(text)
+    if (copied) {
       pushToast({ tone: 'success', title: 'Copied', message: successMessage })
     } else {
       pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
@@ -188,12 +188,25 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
           <div className="m-3 rounded-sm border border-border bg-muted/20 p-4">
             <div className="flex items-center gap-2 font-mono text-sm text-muted-foreground">
               <Ban className="h-4 w-4" />
-              Statement {activeResult.statementIndex + 1} canceled
+              {activeResult.batchScope ? 'Batch canceled' : `Statement ${activeResult.statementIndex + 1} canceled`}
             </div>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Stopped before it returned a result. If it had already committed on the server at the moment of
-              cancel, that write persists — check History to confirm what ran.
-            </p>
+            {activeResult.batchScope ? (
+              // Statements in a batch run autocommitted, one after another, so a
+              // cancel part-way through leaves the earlier ones applied. Saying
+              // "statement 1 was canceled" here — which is what this used to
+              // say — pointed at the one statement that had almost certainly
+              // finished, and hid the rest.
+              <p className="mt-2 text-xs text-muted-foreground">
+                Statements in a batch are committed one by one, so any that finished before the cancel have already
+                been applied. The per-statement record did not survive the cancel — open History to see exactly which
+                statements ran.
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Stopped before it returned a result. If it had already committed on the server at the moment of
+                cancel, that write persists — check History to confirm what ran.
+              </p>
+            )}
           </div>
         ) : activeResult.result.skipped ? (
           <div className="m-3 rounded-sm border border-border bg-muted/20 p-4">

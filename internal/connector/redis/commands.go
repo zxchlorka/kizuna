@@ -1,9 +1,6 @@
 package redis
 
-import (
-	"sort"
-	"strings"
-)
+import "sort"
 
 type redisCommandSpec struct {
 	Name        string
@@ -183,8 +180,3 @@ var redisCommandNames = func() []string {
 	sort.Strings(names)
 	return names
 }()
-
-func lookupRedisCommand(name string) (redisCommandSpec, bool) {
-	command, ok := redisCommandIndex[strings.ToUpper(strings.TrimSpace(name))]
-	return command, ok
-}

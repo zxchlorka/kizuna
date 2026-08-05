@@ -74,6 +74,244 @@ describe('runStatements — cancel', () => {
     expect(result0.result.error).toBeUndefined()
   })
 
+  it('reports a cancelled batch as a batch, not as its first statement', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const statements = ["insert into t values ('one')", 'select pg_sleep(30)', "insert into t values ('three')"]
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-batch', statements)
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-batch')
+    await pending
+
+    const result = asExecute(useSqlConsoleStore.getState().tabs['tab-batch'].results[0])
+    expect(result.result.canceled).toBe(true)
+    expect(result.label).toBe('Batch')
+    // The entry stands for the whole run, so it must not carry (and the UI must
+    // not print) the first statement as if that were the one cancelled: by then
+    // it had almost certainly committed.
+    expect(result.batchScope).toBe(true)
+    expect(result.statement).toBe('')
+    expect(result.result.statement).toBe('')
+  })
+
+  it('still names the single cancelled statement when the run was not a batch', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-single', ['select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-single')
+    await pending
+
+    const result = asExecute(useSqlConsoleStore.getState().tabs['tab-single'].results[0])
+    expect(result.label).toBe('Stmt 1')
+    expect(result.batchScope).toBeUndefined()
+    expect(result.statement).toBe('select pg_sleep(30)')
+  })
+
+  it('refreshes an open History panel after a cancel, since it holds the only record of what ran', async () => {
+    const historyCalls: string[] = []
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.includes('/history')) {
+        historyCalls.push(url)
+        return Promise.resolve(jsonResponse([]))
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-hist')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-hist', true)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-hist', ['insert into t values (1)', 'select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-hist')
+    await pending
+
+    expect(historyCalls.length).toBeGreaterThanOrEqual(1)
+    expect(useSqlConsoleStore.getState().tabs['tab-hist'].error).toBeNull()
+  })
+
+  // The panel refreshing itself is not the run. This asserted `error` was null
+  // while the mock answered 200, so it proved nothing about a failing refresh --
+  // and a failing one did set tab.error, repainting the cancel as a failed
+  // statement.
+  it('keeps a cancel a cancel when the History refresh itself fails', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/history')) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ error: 'history unavailable', code: 503 }), {
+            status: 503,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-hist-fail')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-hist-fail', true)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-hist-fail', ['select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-hist-fail')
+    await pending
+
+    const tab = useSqlConsoleStore.getState().tabs['tab-hist-fail']
+    // The run stays a cancel...
+    expect(tab.error).toBeNull()
+    expect(asExecute(tab.results[0]).result.canceled).toBe(true)
+    // ...and the panel's own failure is still reported, not swallowed.
+    expect(tab.historyError).toBe('history unavailable')
+  })
+
+  // The server appends the cancelled batch's history only after it has unwound
+  // the query, which happens after the client's abort has already resolved. The
+  // first read therefore tends to return the pre-run list; settling for that is
+  // what left the panel showing stale entries with nothing scheduled to correct it.
+  it('keeps reading History until the cancelled run actually lands', async () => {
+    const entry = (id: string) => ({
+      id,
+      command: 'insert into t values (1)',
+      duration_ms: 1,
+      rows_returned: 0,
+      rows_affected: 1,
+      executed_at: '2026-08-04T10:00:00Z',
+    })
+    let historyCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/history')) {
+        historyCalls += 1
+        // The server has not written the cancelled batch yet on the first read.
+        return Promise.resolve(jsonResponse(historyCalls < 3 ? [entry('old')] : [entry('new'), entry('old')]))
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-race')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-race', true)
+    useSqlConsoleStore.setState((state) => ({
+      tabs: { ...state.tabs, 'tab-race': { ...state.tabs['tab-race'], history: [entry('old')] } },
+    }))
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-race', ['insert into t values (1)', 'select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-race')
+    await pending
+
+    const tab = useSqlConsoleStore.getState().tabs['tab-race']
+    expect(tab.history[0]?.id).toBe('new')
+    expect(historyCalls).toBe(3)
+  })
+
+  // History is per CONNECTION, so a second console tab on the same connection
+  // appends to the same list. Treating any change as "our run landed" let that
+  // other tab's statement end the wait before ours had been written.
+  it('does not mistake another tab\'s statement for the cancelled run', async () => {
+    const entry = (id: string, command: string) => ({
+      id,
+      command,
+      duration_ms: 1,
+      rows_returned: 0,
+      rows_affected: 0,
+      executed_at: '2026-08-04T10:00:00Z',
+    })
+    let historyCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/history')) {
+        historyCalls += 1
+        // A different tab's statement shows up first; ours only afterwards.
+        return Promise.resolve(
+          jsonResponse(
+            historyCalls < 3
+              ? [entry('other', 'select 1 from other_tab'), entry('old', 'select 0')]
+              : [entry('ours', 'insert into t values (1)'), entry('other', 'select 1 from other_tab'), entry('old', 'select 0')]
+          )
+        )
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-other')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-other', true)
+    useSqlConsoleStore.setState((state) => ({
+      tabs: { ...state.tabs, 'tab-other': { ...state.tabs['tab-other'], history: [entry('old', 'select 0')] } },
+    }))
+
+    const pending = useSqlConsoleStore
+      .getState()
+      .runStatements('c1', 'tab-other', ['insert into t values (1)', 'select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-other')
+    await pending
+
+    // It kept reading past the foreign entry until its own statement appeared.
+    expect(historyCalls).toBe(3)
+    expect(useSqlConsoleStore.getState().tabs['tab-other'].history[0]?.id).toBe('ours')
+  })
+
+  it('gives up rereading History when a cancelled run wrote nothing at all', async () => {
+    let historyCalls = 0
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes('/history')) {
+        historyCalls += 1
+        return Promise.resolve(jsonResponse([]))
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    useSqlConsoleStore.getState().ensureTab('tab-nohist')
+    useSqlConsoleStore.getState().setHistoryOpen('tab-nohist', true)
+
+    const pending = useSqlConsoleStore.getState().runStatements('c1', 'tab-nohist', ['select pg_sleep(30)'])
+    await Promise.resolve()
+    await Promise.resolve()
+
+    useSqlConsoleStore.getState().cancelRun('tab-nohist')
+    await pending
+
+    // Bounded: it stops on its own rather than spinning on a run that will
+    // never appear.
+    expect(historyCalls).toBe(5)
+    expect(useSqlConsoleStore.getState().tabs['tab-nohist'].running).toBe(false)
+  })
+
   it('cancelRun on one tab does not touch another tab running concurrently', async () => {
     const pendingSignals = new Map<string, AbortSignal>()
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {

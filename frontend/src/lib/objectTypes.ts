@@ -46,7 +46,3 @@ export function getObjectTypeLabel(type: ObjectType | string | undefined): strin
       return type ?? 'object'
   }
 }
-
-export function getRedisObjectTypeDisplay(type: RedisObjectType): string {
-  return getObjectTypeLabel(type)
-}

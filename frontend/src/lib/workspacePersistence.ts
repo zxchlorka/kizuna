@@ -1,5 +1,7 @@
+import { useDataStore } from '@/stores/data'
 import { useSqlConsoleStore } from '@/stores/sqlConsole'
 import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
+import type { FilterExpr } from '@/types/api'
 
 /**
  * Persists "what was I looking at": open tabs of all three kinds, the SQL
@@ -8,6 +10,11 @@ import { useWorkspaceStore, type WorkspaceTab } from '@/stores/workspace'
  * history, table contents -- those can go stale, and showing yesterday's rows
  * as if they were current is worse than an empty pane (user's call, see the
  * task brief).
+ *
+ * A filter is on the "what was I looking at" side of that line, not the data
+ * side: it describes the question, not the answer. It rides along inside the tab
+ * (initialFilters) and is pushed back into the data store on restore -- see
+ * restoreObjectTabFilters for why that second step is not optional.
  *
  * Storage is localStorage, not the backend config: this is per-browser UI
  * state, not something that belongs in config.json (see connectionHealth.ts
@@ -47,6 +54,23 @@ function isStringRecord(value: unknown): value is Record<string, string> {
   return isPlainObject(value) && Object.values(value).every((item) => typeof item === 'string')
 }
 
+// initialFilters is dereferenced on restore (it seeds the data store, see
+// restoreWorkspace), so unlike the purely decorative fields it has to be checked
+// structurally: a hand-edited snapshot carrying `initialFilters: "x"` would
+// otherwise reach the data store and the query builder as a non-array.
+function isFilterExprArray(value: unknown): value is FilterExpr[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        isPlainObject(item) &&
+        typeof item.column === 'string' &&
+        typeof item.op === 'string' &&
+        typeof item.value === 'string'
+    )
+  )
+}
+
 // Structural check of one tab against the WorkspaceTab union. Only the fields
 // that get dereferenced during hydration are checked -- an unknown objectType
 // string renders as an unsupported view, it does not crash.
@@ -63,7 +87,11 @@ function isWorkspaceTab(value: unknown): value is WorkspaceTab {
     case 'redis-cli':
       return true
     case 'object':
-      return typeof value.object === 'string' && typeof value.objectType === 'string'
+      return (
+        typeof value.object === 'string' &&
+        typeof value.objectType === 'string' &&
+        (value.initialFilters === undefined || isFilterExprArray(value.initialFilters))
+      )
     default:
       return false
   }
@@ -172,6 +200,33 @@ function flushPersist(): void {
 let wired = false
 
 /**
+ * Re-seeds the data store with the filters a restored tab was opened with.
+ *
+ * A filtered tab (opened by following an FK, see openTabWithFilter) keeps its
+ * filters in TWO places: `initialFilters` on the workspace tab, which is what
+ * this module persists, and the data store's per-tab opts, which drive the
+ * actual query and are deliberately NOT persisted along with the rows. Restoring
+ * only the first half left the tab still labelled "(filtered)" while PgTableView
+ * fetched with the store's default `filters: []` -- the whole table, presented as
+ * a filtered view of it.
+ *
+ * Seeding here rather than in the view keeps the two writes that openTabWithFilter
+ * already does side by side, and it has to happen before the view's mount effect
+ * fires its first fetch. It also repairs tab de-duplication: openTabWithFilter
+ * compares against the data store's filters first, so a restored tab with empty
+ * opts never matched itself and following the same FK again opened a second
+ * identical "(filtered)" tab.
+ */
+function restoreObjectTabFilters(tabs: WorkspaceTab[]): void {
+  const dataStore = useDataStore.getState()
+  tabs.forEach((tab) => {
+    if (tab.kind === 'object' && tab.initialFilters && tab.initialFilters.length > 0) {
+      dataStore.setOpts(tab.id, { filters: tab.initialFilters, offset: 0 })
+    }
+  })
+}
+
+/**
  * Call once at app startup, before the workspace is first rendered. Restores
  * the previous session's tabs and SQL drafts synchronously (so there is no
  * "tabs appear a moment after the empty state" flash), and wires up debounced
@@ -194,6 +249,7 @@ export function restoreWorkspace(): void {
       openConnectionIds: persisted.openConnectionIds,
     })
     useSqlConsoleStore.getState().restoreEditorValues(persisted.sqlDrafts)
+    restoreObjectTabFilters(persisted.tabs)
   }
 
   if (wired) {

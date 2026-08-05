@@ -1,4 +1,4 @@
-import type { ColumnMeta, ObjectType, RedisObjectType, TableRow } from '@/types/api'
+import type { ObjectType, RedisObjectType } from '@/types/api'
 
 const REDIS_TYPE_LABELS: Record<string, string> = {
   redis_string: 'String',
@@ -76,35 +76,6 @@ export function getRedisTTLStyle(ttlSeconds?: number | null): string {
   return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
 }
 
-export function createRedisColumn(
-  name: string,
-  dataType: string,
-  editable: boolean,
-  nullable = false
-): ColumnMeta {
-  return {
-    name,
-    data_type: dataType,
-    nullable,
-    default: null,
-    is_pk: false,
-    is_fk: false,
-    fk_table: '',
-    fk_column: '',
-    editable,
-  }
-}
-
-export function getRedisRowKey(row: TableRow, preferredFields: string[], fallbackIndex: number): string {
-  for (const field of preferredFields) {
-    const value = row[field]
-    if (value !== null && value !== undefined && String(value).trim() !== '') {
-      return String(value)
-    }
-  }
-  return `redis-row:${fallbackIndex}`
-}
-
 export function tryParseJson(value: string): { isJson: boolean; text: string; parsed?: unknown } {
   const trimmed = value.trim()
   if (trimmed === '') {
@@ -146,6 +117,27 @@ export function toNumberOrNull(value: string): number | null {
   }
   const parsed = Number(value)
   return Number.isFinite(parsed) ? parsed : null
+}
+
+// Контекстное меню элемента висит на всей строке — и должно: по ПКМ в любом
+// месте строки открывается меню с её member и применимыми линками. А вот
+// «фрагмент под курсором» (valueAtPoint) обязан браться ТОЛЬКО из ячейки со
+// значением. Раньше контейнером для хиттеста была вся <tr>, поэтому ПКМ по имени
+// поля хэша, по индексу списка или по score давал token из этой колонки, и пункт
+// «Open from "…"» уходил открывать линк по имени поля вместо значения.
+//
+// Ячейка со значением помечается этим атрибутом, обработчик резолвит её от цели
+// клика. Константа одна на пометку и на поиск, чтобы они не разъехались.
+export const REDIS_VALUE_CELL_ATTR = 'data-redis-value-cell'
+
+export const redisValueCellProps = { [REDIS_VALUE_CELL_ATTR]: '' }
+
+// Ячейка со значением, внутри которой кликнули, либо null, если кликнули мимо
+// неё. null означает «фрагмента под курсором нет» — именно null, а не «искать по
+// всей строке»: valueAtPoint без контейнера снимает проверку принадлежности и
+// вернул бы ровно тот чужой токен, от которого мы уходим.
+export function redisValueCellAt(target: EventTarget | null): Element | null {
+  return target instanceof Element ? target.closest(`[${REDIS_VALUE_CELL_ATTR}]`) : null
 }
 
 export function normalizeRedisObjectType(type: ObjectType | string | undefined): RedisObjectType | 'namespace' | 'unsupported' {

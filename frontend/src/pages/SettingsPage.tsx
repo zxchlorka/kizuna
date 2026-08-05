@@ -24,6 +24,10 @@ export default function SettingsPage() {
   const fetchLinks = useLinksStore((state) => state.fetch)
   const removeLink = useLinksStore((state) => state.remove)
   const fetchConnections = useConnectionStore((state) => state.fetch)
+  const connections = useConnectionStore((state) => state.connections)
+  // This list spans every connection, so naming both ends is what makes two
+  // otherwise identical-looking links tellable apart.
+  const connectionName = (id: string) => connections.find((item) => item.id === id)?.name ?? id
   const pushToast = useToastStore((state) => state.push)
   const [editing, setEditing] = useState<LinkRecord | null>(null)
 
@@ -95,7 +99,7 @@ export default function SettingsPage() {
                   key={link.id}
                   className="flex items-center justify-between gap-3 rounded-sm border border-border bg-background px-3 py-2"
                 >
-                  <div className="min-w-0 truncate font-mono text-xs text-foreground">{linkSummary(link)}</div>
+                  <div className="min-w-0 truncate font-mono text-xs text-foreground">{linkSummary(link, connectionName)}</div>
                   <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"

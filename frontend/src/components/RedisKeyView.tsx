@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Binary, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
@@ -18,6 +18,7 @@ import {
   getRedisTypePillClass,
   getRedisTTLStyle,
   normalizeRedisObjectType,
+  redisValueCellAt,
   stringifyRedisValue,
 } from '@/components/redis/redisUtils'
 import { Button } from '@/components/ui/button'
@@ -29,24 +30,30 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
-import { LINK_MENU_CAP, LinkPickerDialog, type LinkPickerItem } from '@/components/links/LinkPickerDialog'
+import {
+  LINK_MENU_CAP,
+  LINK_PREVIEW_CAP,
+  LinkPickerDialog,
+  type LinkPickerItem,
+} from '@/components/links/LinkPickerDialog'
 import {
   FloatingMenu,
   FloatingMenuItem,
   FloatingMenuLabel,
   FloatingMenuSeparator,
 } from '@/components/ui/floating-menu'
-import { useOpenLinkTarget } from '@/hooks/useOpenLinkTarget'
-import { useOpenLinkSource } from '@/hooks/useOpenLinkSource'
+import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
   canReverse,
   captureFromKey,
+  connectionLinks,
   extractRedisValue,
   isPerElementExtract,
   keyLevelRedisLinks,
   linkSourceLabel,
   linkSummary,
   linkTargetLabel,
+  linkTouchesObject,
   memberRedisLinks,
   redisKeyMatchesPattern,
   selectionRedisLinks,
@@ -79,7 +86,14 @@ function metaCard(label: string, value: string, accentClass: string) {
 }
 
 export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: RedisKeyViewProps) {
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connections = useConnectionStore((state) => state.connections)
+  const connection = connections.find((item) => item.id === connId)
+  // Both ends of a link are named: the far end is usually a different
+  // connection, and the summary is otherwise ambiguous between servers.
+  const connectionName = useCallback(
+    (id: string) => connections.find((item) => item.id === id)?.name ?? id,
+    [connections]
+  )
   const tabData = useDataStore((state) => state.tabs[tabId])
   const fetchData = useDataStore((state) => state.fetchData)
   const mutate = useDataStore((state) => state.mutate)
@@ -99,9 +113,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // Непусто, когда диалог открыт из меню элемента: предзаполняет режим selection
   // и поле, по которому кликнули.
   const [createFromElement, setCreateFromElement] = useState<{ field?: string } | null>(null)
-  const [pickerGroup, setPickerGroup] = useState<'key' | 'reverse' | 'perElement' | 'member' | 'selection' | null>(
-    null
-  )
+  const [pickerGroup, setPickerGroup] = useState<
+    'key' | 'reverse' | 'perElement' | 'connection' | 'member' | 'selection' | null
+  >(null)
 
   useEffect(() => {
     void fetchData(connId, object, tabId)
@@ -147,6 +161,12 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   const handleElementContextMenu = (value: string, event: MouseEvent, field?: string) => {
     event.preventDefault()
+    // Хиттест ограничен ячейкой со значением, а не всей строкой (см.
+    // redisValueCellAt): меню по-прежнему открывается по ПКМ в любом месте
+    // строки и знает её member, но «фрагмент под курсором» берётся только из
+    // значения. Клик мимо неё — по имени поля, индексу, score, кнопке — даёт
+    // null, и пункт «Open from …» остаётся выключенным.
+    const valueCell = redisValueCellAt(event.target)
     setMemberMenu({
       x: event.clientX,
       y: event.clientY,
@@ -154,7 +174,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       field,
       // Значение фрагмента считается в момент клика: позже выделение может
       // слететь от самого открытия меню.
-      token: valueAtPoint(event.clientX, event.clientY, event.currentTarget),
+      token: valueCell ? valueAtPoint(event.clientX, event.clientY, valueCell) : null,
     })
   }
 
@@ -185,6 +205,33 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       ),
     [links, connId, object]
   )
+
+  // Everything else wired up on this connection. Without it a key that simply
+  // has no links of its own showed a menu with nothing but "+ Create link…",
+  // which reads as "this connection has none" rather than "none apply here".
+  // Membership is decided by what the link mentions, never by whether it is
+  // navigable -- see linkTouchesObject. Using reverseLinks (already narrowed by
+  // canReverse) put links pointing straight at this key under "elsewhere".
+  const otherConnectionLinks = useMemo(
+    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'redis'))),
+    [links, connId, object]
+  )
+
+  // Point at this key but cannot be walked back to their source: shown, not followed.
+  const inboundOnlyLinks = useMemo(
+    () =>
+      links.filter(
+        (link) =>
+          link.target_conn_id === connId &&
+          link.target_kind === 'redis' &&
+          redisKeyMatchesPattern(link.key_pattern ?? '', object) &&
+          !canReverse(link)
+      ),
+    [links, connId, object]
+  )
+  // The dialog answers "everything on this connection", so it lists the whole
+  // set -- including the links the menu already showed as actionable.
+  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
 
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
@@ -226,6 +273,16 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         onPick: () => undefined,
       }))
     }
+    if (pickerGroup === 'connection') {
+      // Reference only: these describe wiring elsewhere on the connection, so
+      // there is no value here to follow them with.
+      return allConnectionLinks.map((link) => ({
+        id: link.id,
+        label: linkSummary(link, connectionName),
+        disabled: true,
+        onPick: () => undefined,
+      }))
+    }
     if (pickerGroup === 'member' && memberMenu) {
       const member = memberMenu.member
       return memberLinks.map((link) => ({
@@ -257,6 +314,8 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     keyLinks,
     reverseLinks,
     perElementLinks,
+    allConnectionLinks,
+    connectionName,
     memberLinks,
     elementSelectionLinks,
     memberMenu,
@@ -621,7 +680,50 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         {`Show all (${perElementLinks.length})…`}
                       </DropdownMenuItem>
                     )}
-                    {(keyLinks.length > 0 || perElementLinks.length > 0) && <DropdownMenuSeparator />}
+                    {/* Point at this key but cannot be walked back to their
+                        source, so they are shown, not followed. */}
+                    {inboundOnlyLinks.length > 0 && <DropdownMenuSeparator />}
+                    {inboundOnlyLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Points here · not reversible
+                      </div>
+                    )}
+                    {inboundOnlyLinks.slice(0, LINK_MENU_CAP).map((link) => (
+                      <DropdownMenuItem key={`in-${link.id}`} disabled className="font-mono text-xs">
+                        <span className="block min-w-0 max-w-[32rem] truncate">
+                          {linkSummary(link, connectionName)}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                    {/* What else this connection is wired to. Reference only --
+                        these belong to other keys, so there is no value here to
+                        follow them with -- but without them a key with no links
+                        of its own looked like a connection with none. */}
+                    {/* The separator belongs to the whole connection block, not
+                        just its preview: when every link on the connection is
+                        already listed above, the preview is empty but "Show all"
+                        still needs to stand apart. */}
+                    {allConnectionLinks.length > 0 && <DropdownMenuSeparator />}
+                    {otherConnectionLinks.length > 0 && (
+                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        Elsewhere on this connection
+                      </div>
+                    )}
+                    {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
+                      <DropdownMenuItem key={`conn-${link.id}`} disabled className="font-mono text-xs">
+                        <span className="block min-w-0 max-w-[32rem] truncate">
+                          {linkSummary(link, connectionName)}
+                        </span>
+                      </DropdownMenuItem>
+                    ))}
+                    {allConnectionLinks.length > 0 && (
+                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('connection')}>
+                        {`Show all ${allConnectionLinks.length} on this connection…`}
+                      </DropdownMenuItem>
+                    )}
+                    {(keyLinks.length > 0 || perElementLinks.length > 0 || allConnectionLinks.length > 0) && (
+                      <DropdownMenuSeparator />
+                    )}
                     <DropdownMenuItem className="font-mono text-xs" onClick={() => setCreateLinkOpen(true)}>
                       + Create link…
                     </DropdownMenuItem>
@@ -780,6 +882,8 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             ? 'Back to source'
             : pickerGroup === 'perElement'
             ? 'Per-element links (right-click a value)'
+            : pickerGroup === 'connection'
+            ? `Links on ${connection?.name ?? connId}`
             : pickerGroup === 'selection'
             ? `Open from "${memberMenu?.token ?? ''}"`
             : pickerGroup === 'member'

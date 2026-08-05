@@ -87,8 +87,7 @@ func (h *DataHandler) Mutate(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var op connector.MutateOp
-	if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeJSON(w, r, &op) {
 		return
 	}
 
@@ -121,8 +120,7 @@ func (h *DataHandler) MutateBulk(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var op connector.BulkMutateOp
-	if err := json.NewDecoder(r.Body).Decode(&op); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeJSON(w, r, &op) {
 		return
 	}
 
@@ -150,8 +148,7 @@ func (h *DataHandler) CreateKey(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var req CreateKeyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 
@@ -195,8 +192,7 @@ func (h *DataHandler) Produce(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
 	var req connector.KafkaProduceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+	if !decodeJSON(w, r, &req) {
 		return
 	}
 

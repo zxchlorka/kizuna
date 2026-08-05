@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import { fetchWithTimeout } from '@/lib/http'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import type { Connection, ConnectionInput, TestResult } from '@/types/api'
 
 interface ConnectionStore {
@@ -36,10 +36,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       set({ loading: true, error: null })
       try {
         const res = await fetchWithTimeout('/api/connections')
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({ error: res.statusText }))
-          throw new Error(body.error || res.statusText)
-        }
+        await throwOnApiError(res)
         const connections: Connection[] = await res.json()
         set({ connections, loading: false, loadedOnce: true })
       } catch (e) {
@@ -58,10 +55,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const connection: Connection = await res.json()
     set({ connections: [...get().connections, connection] })
     return connection
@@ -73,10 +67,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const connection: Connection = await res.json()
     set({ connections: get().connections.map((c) => (c.id === id ? connection : c)) })
     return connection
@@ -88,10 +79,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ visible_schemas: visibleSchemas }),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
 
     const body: { id: string; visible_schemas: string[] | null } = await res.json()
     const current = get().connections.find((connection) => connection.id === body.id)
@@ -109,19 +97,13 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
 
   remove: async (id: string) => {
     const res = await fetchWithTimeout(`/api/connections/${id}`, { method: 'DELETE' })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     set({ connections: get().connections.filter((c) => c.id !== id) })
   },
 
   test: async (id: string) => {
     const res = await fetchWithTimeout(`/api/connections/${id}/test`, { method: 'POST' })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const result: TestResult = await res.json()
     return result
   },
@@ -132,10 +114,7 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(input),
     })
-    if (!res.ok) {
-      const body = await res.json().catch(() => ({ error: res.statusText }))
-      throw new Error(body.error || res.statusText)
-    }
+    await throwOnApiError(res)
     const result: TestResult = await res.json()
     return result
   },

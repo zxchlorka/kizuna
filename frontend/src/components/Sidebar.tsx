@@ -11,7 +11,7 @@ import { SchemaFilterDialog } from '@/components/Sidebar/SchemaFilterDialog'
 import { TreeDatabaseSwitcher } from '@/components/Sidebar/TreeDatabaseSwitcher'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { fetchWithTimeout } from '@/lib/http'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { cn } from '@/lib/utils'
 import { ObjectTree } from '@/components/ObjectTree'
 import { useConnectionStore } from '@/stores/connections'
@@ -146,10 +146,7 @@ export function Sidebar({ connId }: SidebarProps) {
         }),
       })
 
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(body.error || res.statusText)
-      }
+      await throwOnApiError(res)
 
       await refreshTree(connId)
       openTab(connId, payload.key, payload.type)

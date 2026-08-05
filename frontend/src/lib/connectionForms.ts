@@ -321,11 +321,3 @@ export function validateConnectionForm(form: ConnectionFormValues, allowBlankPas
 
   return null
 }
-
-export function splitTags(tagsText: string): string[] {
-  return normalizeTags(tagsText)
-}
-
-export function splitAddresses(addressesText: string): string[] {
-  return normalizeAddresses(addressesText)
-}

@@ -5,6 +5,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 // LINK_MENU_CAP пунктов, остальное уходит в эту модалку.
 export const LINK_MENU_CAP = 5
 
+// The "what else is on this connection" group is reference material, not the
+// thing you opened the menu for, so it gets a glance rather than a list. The
+// full set is one click away in the dialog.
+export const LINK_PREVIEW_CAP = 2
+
 export interface LinkPickerItem {
   id: string
   label: string

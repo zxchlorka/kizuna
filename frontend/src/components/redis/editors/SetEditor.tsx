@@ -2,6 +2,7 @@ import { useMemo, useState, type MouseEvent } from 'react'
 import { Plus, Search, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { redisValueCellProps } from '@/components/redis/redisUtils'
 import type { TableRow } from '@/types/api'
 
 interface SetEditorProps {
@@ -57,7 +58,9 @@ export function SetEditor({ rows, saving, readOnly = false, onInsert, onDelete, 
               className="flex items-center gap-2 rounded-sm border border-border bg-background px-3 py-2"
               onContextMenu={onElementContextMenu ? (event) => onElementContextMenu(member, event) : undefined}
             >
-              <div className="min-w-0 flex-1 font-mono text-xs text-foreground">{member}</div>
+              <div {...redisValueCellProps} className="min-w-0 flex-1 font-mono text-xs text-foreground">
+                {member}
+              </div>
               {!readOnly && (
                 <Button type="button" size="icon" variant="outline" className="h-7 w-7 text-destructive" onClick={() => void onDelete(member)} disabled={saving}>
                   <Trash2 className="h-3.5 w-3.5" />

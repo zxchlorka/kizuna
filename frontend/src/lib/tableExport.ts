@@ -83,7 +83,18 @@ function neutralizeFormulaInjection(text: string, columnType: string | undefined
   if (columnType && getPostgresTypeCategory(columnType) === 'numeric') {
     return text
   }
-  return FORMULA_TRIGGER_CHARS.has(text[0]) ? `'${text}` : text
+  // Leading whitespace is not protection: spreadsheet apps strip it before
+  // deciding whether a cell is a formula, so `\t=1+1` and ` =1+1` evaluate
+  // exactly like `=1+1`. Hence the trigger is looked for at the first
+  // NON-whitespace character, not at index 0.
+  //
+  // OWASP's canonical list also names TAB (0x09) and CR (0x0D) as trigger
+  // characters in their own right. They are deliberately not in the set
+  // above: taking them literally would prefix a benign `\tfoo`, corrupting
+  // real data, while the leading-whitespace rule already covers every case
+  // where a tab or CR actually precedes a formula.
+  const trigger = text.trimStart()[0]
+  return trigger !== undefined && FORMULA_TRIGGER_CHARS.has(trigger) ? `'${text}` : text
 }
 
 // TSV has no standard quoting/escaping mechanism that spreadsheet paste
@@ -92,9 +103,14 @@ function neutralizeFormulaInjection(text: string, columnType: string | undefined
 // when pasted — worse than losing the original whitespace, since misaligned
 // data can be silently wrong in a way that's not obviously an artifact.
 // Both are flattened to a single space.
+//
+// The injection guard runs BEFORE the flattening, not after: flattening first
+// would rewrite a leading `\t` into a space and hand the guard a value whose
+// original shape is already gone. Order matters here, so the two steps are not
+// interchangeable.
 function tsvFieldText(value: unknown, columnType: string | undefined): string {
-  const text = cellText(value).replace(/\r\n|\r|\n/g, ' ').replace(/\t/g, ' ')
-  return neutralizeFormulaInjection(text, columnType)
+  const guarded = neutralizeFormulaInjection(cellText(value), columnType)
+  return guarded.replace(/\r\n|\r|\n/g, ' ').replace(/\t/g, ' ')
 }
 
 function csvFieldText(value: unknown, columnType: string | undefined): string {
@@ -164,7 +180,13 @@ export function buildCSV(columns: ExportColumn[], rows: unknown[][]): string {
 export function buildJSON(columns: ExportColumn[], rows: unknown[][]): string {
   const names = dedupeColumnNames(columns)
   const objects = rows.map((row) => {
-    const obj: Record<string, unknown> = {}
+    // Null-prototype: on a `{}` literal, `obj['__proto__'] = value` hits the
+    // inherited __proto__ setter instead of creating an own property, so a
+    // column genuinely named `__proto__` (SELECT 1 AS "__proto__") vanished
+    // from the export entirely. With no prototype there is no setter to hit
+    // and every column name is just a key. JSON.stringify treats a
+    // null-prototype object exactly like a plain one.
+    const obj: Record<string, unknown> = Object.create(null)
     names.forEach((name, i) => {
       // Native JSON has a real null and a real empty string — no marker text
       // needed here, unlike TSV/CSV.

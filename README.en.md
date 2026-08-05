@@ -48,10 +48,7 @@ The frontend is embedded in one Go binary; the app listens on port `9090`.
 Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and **Kafka**. Redis supports standalone, Cluster, and Sentinel; Kafka supports multiple brokers, SASL, and TLS with a custom CA bundle.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/connections-types.webp" type="image/webp">
     <img src=".github/assets/connections-types.png" width="960" alt="New connection wizard choosing PostgreSQL, Redis, and Kafka">
-  </picture>
 </p>
 
 ## PostgreSQL — from schema to query
@@ -97,10 +94,7 @@ Browse topics, partitions, consumer groups, and JSON messages in one view. Messa
 The producer can send one message, a batch of comma-separated JSON objects in **Multi** mode, or a template-expanded batch in **Loop** mode. Before publishing, Kizuna previews every exact message, so you can validate `{{i}}` expressions, step, and count before writing to Kafka.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/kafka-produce.webp" type="image/webp">
     <img src=".github/assets/kafka-produce.png" width="960" alt="Kafka producer switches between Multi and Loop modes and previews the expanded message batch">
-  </picture>
 </p>
 
 <p align="center">
@@ -120,10 +114,7 @@ The clip below shows exactly that: the menu is empty, then the jump appears in i
 Links work both ways: an open record shows where to go next and where you came from.
 
 <p align="center">
-  <picture>
-    <source srcset=".github/assets/cross-source-links.webp" type="image/webp">
     <img src=".github/assets/cross-source-links.png" width="960" alt="Creating a link from a Kafka message, then following it into a Redis profile and PostgreSQL orders">
-  </picture>
 </p>
 
 <p align="center">
