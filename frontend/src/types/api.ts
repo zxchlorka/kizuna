@@ -345,3 +345,14 @@ export interface LinkRecord {
 }
 
 export type LinkInput = Omit<LinkRecord, 'id'>
+
+// GET /api/connections/:id/info. Extra is connector-specific: everything past
+// the four common fields is whatever that source reports about itself, so it is
+// read defensively rather than typed per connector.
+export interface ConnectionInfo {
+  version: string
+  database: string
+  host: string
+  port: string
+  extra?: Record<string, unknown>
+}

@@ -85,6 +85,7 @@ function isWorkspaceTab(value: unknown): value is WorkspaceTab {
   switch (value.kind) {
     case 'sql':
     case 'redis-cli':
+    case 'overview':
       return true
     case 'object':
       return (
