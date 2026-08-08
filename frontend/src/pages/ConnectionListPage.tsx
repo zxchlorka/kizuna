@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Plus, Sun, Moon, Settings } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -57,6 +57,11 @@ export default function ConnectionListPage() {
   // every time this component renders for an unrelated reason.
   const connectionIds = useMemo(() => connections.map((connection) => connection.id), [connections])
 
+  // Spent once per mount, not on every run of the effect below: the connection
+  // list changes identity whenever it is refetched, and those must not re-test
+  // every datasource.
+  const forcedThisMount = useRef(false)
+
   // Pruning is gated on the fetch having actually succeeded, not merely having
   // finished: the store sets loadedOnce on its error path too (see
   // stores/connections.ts), leaving connections at []. Without this, one
@@ -64,12 +69,20 @@ export default function ConnectionListPage() {
   // persists, drop it from localStorage as well. The store refuses an empty list
   // on its own, so this is the second half of the same guard, placed here
   // because only the caller knows whether the list is trustworthy.
+  //
+  // Opening this screen — a reload, or coming back from a database — is the user
+  // asking whether these are up right now, so the first pass forces past the
+  // TTL. Reusing the cached answer there made a reload look ignored: the status
+  // could not change however many times it was pressed, and only the per-card
+  // test button did anything.
   useEffect(() => {
     if (!loadedOnce || error || connectionIds.length === 0) {
       return
     }
     pruneHealth(connectionIds)
-    void refreshStaleHealth(connectionIds)
+    const force = !forcedThisMount.current
+    forcedThisMount.current = true
+    void refreshStaleHealth(connectionIds, { force })
   }, [connectionIds, error, loadedOnce, pruneHealth, refreshStaleHealth])
 
   // Health only re-checks itself while this screen is open and its tab is in the
