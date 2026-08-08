@@ -89,10 +89,12 @@ interface WorkspaceStore {
   visibleSchemasByConnection: Record<string, string[] | null>
   availableSchemasByConnection: Record<string, string[]>
   selectedNodeByConnection: Record<string, string>
+  keyPatternByConnection: Record<string, string>
   treeConnByPage: Record<string, string>
 
   fetchTree: (connId: string, path?: string, opts?: { refresh?: boolean }) => Promise<void>
   setSelectedNode: (connId: string, node: string) => Promise<void>
+  setKeyPattern: (connId: string, pattern: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (connId: string, schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
@@ -150,13 +152,18 @@ function isRedisConnection(connId: string): boolean {
   return useConnectionStore.getState().connections.find((connection) => connection.id === connId)?.type === 'redis'
 }
 
-function buildObjectsQuery(connId: string, path: string, opts: { paged: boolean; cursor?: string; node?: string }): string {
+function buildObjectsQuery(
+  connId: string,
+  path: string,
+  opts: { paged: boolean; cursor?: string; node?: string; match?: string }
+): string {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
   if (opts.paged) {
     params.set('paged', '1')
     if (opts.cursor) params.set('cursor', opts.cursor)
     if (opts.node) params.set('node', opts.node)
+    if (opts.match) params.set('match', opts.match)
   }
   const query = params.toString()
   return `/api/connections/${connId}/objects${query ? `?${query}` : ''}`
@@ -252,6 +259,7 @@ function purgeTabsWhere(state: WorkspaceStore, isConnDead: (connId: string) => b
     treeErrorsByConnection: dropDeadKeys(state.treeErrorsByConnection),
     treeRefreshingByConnection: dropDeadKeys(state.treeRefreshingByConnection),
     selectedNodeByConnection: dropDeadKeys(state.selectedNodeByConnection),
+    keyPatternByConnection: dropDeadKeys(state.keyPatternByConnection),
     availableSchemasByConnection: dropDeadKeys(state.availableSchemasByConnection),
     visibleSchemasByConnection: dropDeadKeys(state.visibleSchemasByConnection),
     treeConnByPage: nextTreeConnByPage,
@@ -281,6 +289,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   visibleSchemasByConnection: {},
   availableSchemasByConnection: {},
   selectedNodeByConnection: {},
+  keyPatternByConnection: {},
   treeConnByPage: {},
 
   fetchTree: async (connId: string, path?: string, opts?: { refresh?: boolean }) => {
@@ -319,7 +328,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       const paged = isRedisConnection(connId)
       try {
         const node = get().selectedNodeByConnection[connId]
-        const res = await fetchWithTimeout(buildObjectsQuery(connId, normalizedPath, { paged, node }))
+        const match = get().keyPatternByConnection[connId]
+        const res = await fetchWithTimeout(buildObjectsQuery(connId, normalizedPath, { paged, node, match }))
         if (!res.ok) {
           const body = await res.json().catch(() => ({ error: res.statusText }))
           throw new Error(body.error || 'Failed to fetch objects')
@@ -407,6 +417,20 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         ...state.selectedNodeByConnection,
         [connId]: node,
       },
+    }))
+    await get().refreshTree(connId)
+  },
+
+  // The key filter is per connection rather than per tree node: it narrows every
+  // level at once, so changing it re-reads the whole tree the way switching
+  // cluster node does. Re-applying the same pattern is a no-op so that a
+  // debounced input settling on its current value costs no SCAN.
+  setKeyPattern: async (connId: string, pattern: string) => {
+    if ((get().keyPatternByConnection[connId] ?? '') === pattern) {
+      return
+    }
+    set((state) => ({
+      keyPatternByConnection: { ...state.keyPatternByConnection, [connId]: pattern },
     }))
     await get().refreshTree(connId)
   },

@@ -41,7 +41,7 @@ func (c *RedisConnector) ListObjects(ctx context.Context, path string) ([]connec
 	deadline := time.Now().Add(legacyTimeBudget)
 
 	for {
-		page, err := c.scanKeysPage(ctx, path, cursor, "")
+		page, err := c.scanKeysPage(ctx, path, cursor, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -77,7 +77,7 @@ func (c *RedisConnector) ListObjects(ctx context.Context, path string) ([]connec
 // ListObjectsPage implements connector.PagedObjectLister: it returns one
 // budgeted slice of the keyspace plus a cursor to continue from.
 func (c *RedisConnector) ListObjectsPage(ctx context.Context, opts connector.ObjectPageOpts) (*connector.ObjectPage, error) {
-	page, err := c.scanKeysPage(ctx, opts.Path, opts.Cursor, opts.Node)
+	page, err := c.scanKeysPage(ctx, opts.Path, opts.Cursor, opts.Node, opts.Match)
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +126,30 @@ func (b *scanBudget) spent(collected int) bool {
 	return collected >= b.maxKeys || b.scans >= b.maxScans || time.Now().After(b.deadline)
 }
 
-func (c *RedisConnector) scanKeysPage(ctx context.Context, path, cursorToken, node string) (*redisKeyPage, error) {
-	pattern := "*"
-	if path != "" {
-		pattern = path + c.redis.separator + "*"
+// treeScanPattern combines the namespace the tree is showing with the user's
+// filter into one SCAN MATCH glob. The filter is scoped to the open path, so
+// narrowing inside a namespace searches that namespace instead of restarting at
+// the root.
+//
+// A filter with no glob metacharacter is treated as "contains" rather than as
+// an exact key: typing `profile` matching nothing at all would read as a broken
+// filter, and a user who wants an exact key has the key lookup for that.
+func treeScanPattern(path, separator, match string) string {
+	glob := "*"
+	if match != "" {
+		glob = match
+		if !strings.ContainsAny(match, "*?[") {
+			glob = "*" + match + "*"
+		}
 	}
+	if path == "" {
+		return glob
+	}
+	return path + separator + glob
+}
+
+func (c *RedisConnector) scanKeysPage(ctx context.Context, path, cursorToken, node, match string) (*redisKeyPage, error) {
+	pattern := treeScanPattern(path, c.redis.separator, match)
 
 	if c.redis.mode == config.RedisModeCluster {
 		if node != "" {
