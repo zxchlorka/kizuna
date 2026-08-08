@@ -50,7 +50,18 @@ export interface RedisCliTab {
   label: string
 }
 
-export type WorkspaceTab = ObjectTab | SqlTab | RedisCliTab
+// Server-wide telemetry rather than one object: memory, limits and key counts
+// belong to the connection, so the tab carries no object name. One per
+// connection — a second Overview of the same server would show the same thing.
+export interface OverviewTab {
+  kind: 'overview'
+  id: string
+  connId: string
+  anchorConnId?: string
+  label: string
+}
+
+export type WorkspaceTab = ObjectTab | SqlTab | RedisCliTab | OverviewTab
 
 // Page a tab belongs to: its anchor when it targets a sibling database,
 // otherwise its own connection.
@@ -113,6 +124,7 @@ interface WorkspaceStore {
   goBackFromTab: (tabId: string) => void
   openSqlTab: (connId: string) => void
   openRedisCliTab: (connId: string) => void
+  openOverviewTab: (connId: string) => void
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   openConnection: (connId: string) => void
@@ -762,6 +774,18 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       connId,
       label: sequence === 1 ? 'Redis CLI' : `Redis CLI ${sequence}`,
     }
+    set({ tabs: [...tabs, tab], activeTabId: id })
+  },
+
+  openOverviewTab: (connId: string) => {
+    const { tabs } = get()
+    const id = `${connId}:overview`
+    if (tabs.some((tab) => tab.id === id)) {
+      set({ activeTabId: id })
+      return
+    }
+
+    const tab: OverviewTab = { kind: 'overview', id, connId, label: 'Overview' }
     set({ tabs: [...tabs, tab], activeTabId: id })
   },
 

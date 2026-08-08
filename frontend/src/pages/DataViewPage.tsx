@@ -13,6 +13,7 @@ import { IndexInspectorView } from '@/components/IndexInspectorView'
 import { PgTableView } from '@/components/PgTableView'
 import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
 import { RedisCli } from '@/components/redis/RedisCli/RedisCli'
+import { RedisOverview } from '@/components/redis/RedisOverview'
 import { KafkaTopicView } from '@/components/kafka/KafkaTopicView'
 import { isRedisObjectType } from '@/lib/objectTypes'
 import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
@@ -132,6 +133,8 @@ export default function DataViewPage() {
                 <SqlConsole tabId={activeTab.id} connId={activeTab.connId} />
               ) : activeTab.kind === 'redis-cli' ? (
                 <RedisCli tabId={activeTab.id} connId={activeTab.connId} />
+              ) : activeTab.kind === 'overview' ? (
+                <RedisOverview connId={activeTab.connId} />
               ) : activeTab.objectType === 'index' ? (
                 <IndexInspectorView
                   connId={activeTab.connId}

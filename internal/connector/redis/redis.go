@@ -203,10 +203,25 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 		"master_name": c.redis.masterName,
 	}
 
-	for _, key := range []string{"redis_version", "uptime_in_seconds", "connected_clients", "role"} {
+	for _, key := range []string{
+		"redis_version", "uptime_in_seconds", "connected_clients", "role",
+		// Memory. maxmemory is 0 when no limit is configured, which the UI
+		// reports as "no limit" rather than as a zero-byte ceiling.
+		"used_memory", "used_memory_human", "used_memory_rss", "used_memory_peak",
+		"maxmemory", "maxmemory_human", "maxmemory_policy", "mem_fragmentation_ratio",
+	} {
 		if value, ok := parsed[key]; ok {
 			extra[key] = value
 		}
+	}
+
+	// Reported separately from INFO keyspace, which only ever describes the node
+	// that answered: in cluster mode that is a fraction of the keyspace, and a
+	// silently low total is worse than none at all.
+	if total, err := c.totalKeys(ctx); err != nil {
+		slog.Warn("failed to count redis keys", "error", err)
+	} else {
+		extra["total_keys"] = total
 	}
 
 	if c.topology != nil {
@@ -230,6 +245,47 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 		Port:     port,
 		Extra:    extra,
 	}, nil
+}
+
+// redisDBSizer is the DBSIZE half of a per-node client. It is probed for rather
+// than required, so the cluster fakes in the tests — which only need SCAN — stay
+// as they are.
+type redisDBSizer interface {
+	DBSize(ctx context.Context) *goredis.IntCmd
+}
+
+// totalKeys counts the keys of the whole connection. In cluster mode that is the
+// sum over the masters, since each node's DBSIZE covers only its own slots.
+func (c *RedisConnector) totalKeys(ctx context.Context) (int64, error) {
+	if c.redis.mode != config.RedisModeCluster {
+		return c.client.Do(ctx, "DBSIZE").Int64()
+	}
+
+	if c.topology == nil {
+		return 0, errors.New("cluster topology is unavailable")
+	}
+	masters, err := c.topology.Masters(ctx)
+	if err != nil {
+		return 0, err
+	}
+
+	var total int64
+	for _, master := range masters {
+		client, err := c.topology.NodeScanClient(master)
+		if err != nil {
+			return 0, err
+		}
+		sizer, ok := client.(redisDBSizer)
+		if !ok {
+			return 0, fmt.Errorf("node %s does not support DBSIZE", master)
+		}
+		size, err := sizer.DBSize(ctx).Result()
+		if err != nil {
+			return 0, err
+		}
+		total += size
+	}
+	return total, nil
 }
 
 func (c *RedisConnector) Close() error {
