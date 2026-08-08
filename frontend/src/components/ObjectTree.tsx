@@ -175,6 +175,7 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const connections = useConnectionStore((state) => state.connections)
   const updateVisibleSchemas = useConnectionStore((state) => state.updateVisibleSchemas)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
+  const keyPattern = useWorkspaceStore((state) => state.keyPatternByConnection[connId] ?? '')
   const treeCursors = useWorkspaceStore((state) => state.treeCursors)
   const treeLoadingByKey = useWorkspaceStore((state) => state.treeLoadingByKey)
   const treeErrorByKey = useWorkspaceStore((state) => state.treeErrorByKey)
@@ -462,9 +463,20 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
       return null
     }
 
+    // Under a filter the budget runs out on keys EXAMINED, not on keys shown, so
+    // a cut-short page can hold few matches or none. Saying "showing first ~1000
+    // keys" over an empty list would be plainly false, and it would read as "this
+    // pattern does not exist here" when the scan simply never got that far.
+    const filtered = Boolean(keyPattern)
+    const shown = (treeItems[key] ?? []).length
+
     return (
       <div className="mt-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-        Showing first ~1000 keys. This prefix has more — query it in the console (SCAN/KEYS).
+        {filtered
+          ? shown === 0
+            ? 'No matches yet — the scan stopped before covering the keyspace. Narrow the pattern, or use SCAN in the console.'
+            : 'Partial matches: the scan stopped before covering the keyspace. Narrow the pattern for the rest, or use SCAN in the console.'
+          : 'Showing first ~1000 keys. This prefix has more — query it in the console (SCAN/KEYS).'}
       </div>
     )
   }

@@ -267,6 +267,12 @@ func TestTreeScanPattern(t *testing.T) {
 		{name: "root, character class counts as a glob", path: "", match: "dev[iu]ce", want: "dev[iu]ce"},
 		{name: "namespace scopes the filter", path: "profile", match: "2029*", want: "profile:2029*"},
 		{name: "namespace scopes a contains match", path: "profile", match: "2029", want: "profile:*2029*"},
+		// Typed in the root to surface a namespace buried past the first page,
+		// then that namespace is opened. Scoping the pattern again would build
+		// "fp:fp:*" and the folder would open empty.
+		{name: "a full-key filter stays absolute when its namespace opens", path: "fp", match: "fp:*", want: "fp:*"},
+		{name: "a full-key filter with a deeper path stays absolute", path: "fp", match: "fp:1*", want: "fp:1*"},
+		{name: "a separator without a glob is still absolute", path: "fp", match: "fp:", want: "*fp:*"},
 	}
 
 	for _, tt := range tests {

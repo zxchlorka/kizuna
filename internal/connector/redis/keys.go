@@ -145,6 +145,17 @@ func treeScanPattern(path, separator, match string) string {
 	if path == "" {
 		return glob
 	}
+	// A filter that already spells out a full key is absolute — the user typed it
+	// against the whole keyspace, in the tree root, to find a namespace too rare
+	// to appear in the first page. Prefixing it with the namespace being opened
+	// would build "fp:fp:*" and the folder found that way would open empty.
+	// Only a bare fragment is relative to the open path.
+	//
+	// Nothing outside the namespace can leak in: buildNamespaceObjects keeps only
+	// keys under path+separator regardless of how wide the pattern is.
+	if strings.Contains(match, separator) {
+		return glob
+	}
 	return path + separator + glob
 }
 
