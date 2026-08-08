@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Plus, Sun, Moon, Settings } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -12,7 +12,7 @@ import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import type { Connection } from '@/types/api'
-import { useConnectionHealthStore } from '@/stores/connectionHealth'
+import { HEALTH_POLL_MS, useConnectionHealthStore } from '@/stores/connectionHealth'
 
 export default function ConnectionListPage() {
   const navigate = useNavigate()
@@ -53,6 +53,10 @@ export default function ConnectionListPage() {
     void fetchConnections()
   }, [connections.length, error, fetchConnections, loadedOnce, loading])
 
+  // Stable across re-renders so the poll below is not torn down and restarted
+  // every time this component renders for an unrelated reason.
+  const connectionIds = useMemo(() => connections.map((connection) => connection.id), [connections])
+
   // Pruning is gated on the fetch having actually succeeded, not merely having
   // finished: the store sets loadedOnce on its error path too (see
   // stores/connections.ts), leaving connections at []. Without this, one
@@ -61,16 +65,57 @@ export default function ConnectionListPage() {
   // on its own, so this is the second half of the same guard, placed here
   // because only the caller knows whether the list is trustworthy.
   useEffect(() => {
-    if (!loadedOnce || error) {
-      return
-    }
-    const connectionIds = connections.map((connection) => connection.id)
-    if (connectionIds.length === 0) {
+    if (!loadedOnce || error || connectionIds.length === 0) {
       return
     }
     pruneHealth(connectionIds)
     void refreshStaleHealth(connectionIds)
-  }, [connections, error, loadedOnce, pruneHealth, refreshStaleHealth])
+  }, [connectionIds, error, loadedOnce, pruneHealth, refreshStaleHealth])
+
+  // Health only re-checks itself while this screen is open and its tab is in the
+  // foreground. Without the tick, a status had exactly one chance to be right --
+  // the moment the list mounted -- so a server that came back (VPN reconnected,
+  // datasource restarted) stayed red until the user pressed test by hand.
+  //
+  // Scoped rather than global on purpose: dialing every datasource on a minute's
+  // schedule while the user is working inside one database is load nobody asked
+  // for. The tick is also TTL-gated by refreshStale, so a burst of remounts or a
+  // tab regaining focus cannot turn into a burst of connection tests.
+  useEffect(() => {
+    if (!loadedOnce || error || connectionIds.length === 0) {
+      return
+    }
+
+    let timer: number | undefined
+    const tick = () => {
+      if (document.hidden) {
+        return
+      }
+      void refreshStaleHealth(connectionIds)
+    }
+    const start = () => {
+      window.clearInterval(timer)
+      timer = window.setInterval(tick, HEALTH_POLL_MS)
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        // Stop the timer outright instead of letting it fire into a hidden tab:
+        // browsers throttle background intervals unpredictably, and a resumed
+        // tab should re-check immediately rather than wait out a stale phase.
+        window.clearInterval(timer)
+        return
+      }
+      tick()
+      start()
+    }
+
+    start()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+  }, [connectionIds, error, loadedOnce, refreshStaleHealth])
 
   const openCreate = () => {
     setEditingConnection(undefined)
