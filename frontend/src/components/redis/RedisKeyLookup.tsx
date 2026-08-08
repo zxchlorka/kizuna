@@ -52,6 +52,25 @@ export function RedisKeyLookup({ connId }: RedisKeyLookupProps) {
               setError(null)
             }
           }}
+          onPaste={(event) => {
+            // Selecting a key with the mouse picks up the whitespace the grid's
+            // markup puts between cells, so a paste after a typed prefix lands
+            // as "profile: 1234" and matches nothing. Trimming on submit is too
+            // late — by then the space is in the middle of the key.
+            const pasted = event.clipboardData.getData('text').trim()
+            if (!pasted) {
+              return
+            }
+            event.preventDefault()
+            const input = event.currentTarget
+            // setRangeText replaces the selection and leaves the caret after the
+            // inserted text, the way a native paste would.
+            input.setRangeText(pasted, input.selectionStart ?? 0, input.selectionEnd ?? 0, 'end')
+            setValue(input.value)
+            if (error) {
+              setError(null)
+            }
+          }}
           placeholder="Open key by name…"
           spellCheck={false}
           autoComplete="off"
