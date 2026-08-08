@@ -17,7 +17,7 @@ interface ConnectionHealthStore {
   hydrate: () => void
   prune: (ids: string[]) => void
   refresh: (id: string, options?: { force?: boolean }) => Promise<ConnectionHealthEntry>
-  refreshStale: (ids: string[]) => Promise<void>
+  refreshStale: (ids: string[], options?: { force?: boolean }) => Promise<void>
 }
 
 const STORAGE_KEY = 'kizuna-connection-health'
@@ -206,10 +206,20 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
     return request
   },
 
-  refreshStale: async (ids: string[]) => {
+  // force re-tests everything regardless of how recently it was checked. It is
+  // what opening or reloading the list means: the user is asking, now, whether
+  // these are up. Without it a reload inside the TTL window returned the cached
+  // answer and looked like the page had simply ignored the reload.
+  //
+  // The cached entry is still rendered while the re-test runs, so a forced pass
+  // revalidates in the background instead of blanking the cards.
+  refreshStale: async (ids: string[], options?: { force?: boolean }) => {
     const stale = ids.filter((id) => {
       const entry = get().entries[id]
-      return !isFresh(entry) && !entry?.checking
+      if (entry?.checking) {
+        return false
+      }
+      return options?.force === true || !isFresh(entry)
     })
 
     let cursor = 0
@@ -218,7 +228,7 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
       while (cursor < stale.length) {
         const id = stale[cursor++]
         try {
-          await get().refresh(id)
+          await get().refresh(id, { force: options?.force })
         } catch {
           // Keep background refresh best-effort. The card will render the error state.
         }
