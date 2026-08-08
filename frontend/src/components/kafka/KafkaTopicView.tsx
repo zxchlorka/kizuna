@@ -255,13 +255,11 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             partitionCount={partitions.length}
             partitionFilter={tab?.partitionFilter ?? null}
             filterActive={tab?.filterActive ?? false}
-            filterField={tab?.filterField ?? ''}
-            filterValue={tab?.filterValue ?? ''}
-            filterOp={tab?.filterOp ?? 'eq'}
+            filterConditions={tab?.filterConditions ?? []}
+            filterMode={tab?.filterMode ?? 'and'}
             searchActive={tab?.searchActive ?? false}
-            searchField={tab?.searchField ?? ''}
-            searchValue={tab?.searchValue ?? ''}
-            searchOp={tab?.searchOp ?? 'eq'}
+            searchConditions={tab?.searchConditions ?? []}
+            searchMode={tab?.searchMode ?? 'and'}
             deepScanning={tab?.deepScanning ?? false}
             deepScanCanceled={tab?.deepScanCanceled ?? false}
             scanning={tab?.scanning ?? false}
@@ -277,9 +275,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             onDirectionChange={(next) => void setDirection(connId, topic, tabId, next)}
             onRefresh={() => void refreshMessages(connId, topic, tabId)}
             onLoadOlder={() => void fetchOlderMessages(connId, topic, tabId)}
-            onFilterLoaded={(field, value, op) => setLoadedFilter(tabId, field, value, op)}
+            onFilterLoaded={(conditions, mode) => setLoadedFilter(tabId, conditions, mode)}
             onClearFilter={() => clearLoadedFilter(tabId)}
-            onSearchTopic={(field, value, op) => void searchTopic(connId, topic, tabId, field, value, op)}
+            onSearchTopic={(conditions, mode) => void searchTopic(connId, topic, tabId, conditions, mode)}
             onScanMore={() => void scanMore(connId, topic, tabId)}
             onScanAll={() => void scanAll(connId, topic, tabId)}
             onCancelScanAll={() => cancelScanAll(tabId)}

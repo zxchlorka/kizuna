@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, Filter, ListTree, Loader2, RefreshCw, Search, X } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsDown, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
+import { KafkaFilterDialog, emptyCondition } from '@/components/kafka/KafkaFilterDialog'
 import { KafkaSeekControl } from '@/components/kafka/KafkaSeekControl'
 import { EmptyState } from '@/components/EmptyState'
 import {
@@ -23,7 +24,8 @@ import {
   filterLoadedMessages,
   MAX_SCAN_MATCHES,
   type KafkaDirection,
-  type KafkaMatchOp,
+  type KafkaMatchCondition,
+  type KafkaMatchMode,
   type KafkaMessageRow,
   type KafkaSeek,
 } from '@/stores/kafka'
@@ -39,14 +41,12 @@ interface KafkaMessageBrowserProps {
   partitionFilter: number | null
   // Filter loaded (client-side).
   filterActive: boolean
-  filterField: string
-  filterValue: string
-  filterOp: KafkaMatchOp
+  filterConditions: KafkaMatchCondition[]
+  filterMode: KafkaMatchMode
   // Search topic (backend scan).
   searchActive: boolean
-  searchField: string
-  searchValue: string
-  searchOp: KafkaMatchOp
+  searchConditions: KafkaMatchCondition[]
+  searchMode: KafkaMatchMode
   scanning: boolean
   scanned: number
   scanPartial: boolean
@@ -66,9 +66,9 @@ interface KafkaMessageBrowserProps {
   onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
-  onFilterLoaded: (field: string, value: string, op: KafkaMatchOp) => void
+  onFilterLoaded: (conditions: KafkaMatchCondition[], mode: KafkaMatchMode) => void
   onClearFilter: () => void
-  onSearchTopic: (field: string, value: string, op: KafkaMatchOp) => void
+  onSearchTopic: (conditions: KafkaMatchCondition[], mode: KafkaMatchMode) => void
   onScanMore: () => void
   onScanAll: () => void
   onCancelScanAll: () => void
@@ -106,13 +106,11 @@ export function KafkaMessageBrowser({
   partitionCount,
   partitionFilter,
   filterActive,
-  filterField,
-  filterValue,
-  filterOp,
+  filterConditions,
+  filterMode,
   searchActive,
-  searchField,
-  searchValue,
-  searchOp,
+  searchConditions,
+  searchMode,
   scanning,
   scanned,
   scanPartial,
@@ -148,11 +146,13 @@ export function KafkaMessageBrowser({
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
-  const [fieldInput, setFieldInput] = useState('')
-  const [valueInput, setValueInput] = useState('')
-  // 'exists'/'missing' ищут САМ ФАКТ наличия поля — единственный способ искать
-  // поле, значений которого ещё не знаешь (только раскатывается, например).
-  const [opInput, setOpInput] = useState<KafkaMatchOp>('eq')
+  // The draft the dialog edits. Applied only when Filter loaded or Search topic
+  // runs, so opening the dialog and closing it changes nothing on screen.
+  const [conditions, setConditions] = useState<KafkaMatchCondition[]>([{ ...emptyCondition }])
+  const [mode, setMode] = useState<KafkaMatchMode>('and')
+  const [filterDialogOpen, setFilterDialogOpen] = useState(false)
+  // Which condition the field picker is filling.
+  const [pickerIndex, setPickerIndex] = useState(0)
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [pickerOpen, setPickerOpen] = useState(false)
@@ -163,24 +163,23 @@ export function KafkaMessageBrowser({
     message: KafkaMessageRow | null
   } | null>(null)
 
-  // Seed the editable inputs when a search is set programmatically (e.g. a link
-  // jump populates the topic scan) so the user sees and can refine what's being
-  // searched. Guarded on a non-empty field so clearing a search never wipes what
+  // Seed the draft when a search is set programmatically (e.g. a link jump
+  // populates the topic scan) so the user sees and can refine what is being
+  // searched. Guarded on a non-empty set so clearing a search never wipes what
   // the user typed.
   useEffect(() => {
-    if (searchField) {
-      setFieldInput(searchField)
-      setValueInput(searchValue)
-      setOpInput(searchOp)
+    if (searchConditions.length > 0) {
+      setConditions(searchConditions)
+      setMode(searchMode)
     }
-  }, [searchField, searchValue, searchOp])
+  }, [searchConditions, searchMode])
 
   // The visible table rows: raw loaded messages, narrowed by the client-side
   // "Filter loaded" predicate when one is applied. During a topic search the
   // messages ARE the scan matches and no client filter applies.
   const visibleMessages = useMemo(
-    () => (filterActive ? filterLoadedMessages(messages, filterField, filterValue, filterOp) : messages),
-    [filterActive, filterField, filterValue, filterOp, messages]
+    () => (filterActive ? filterLoadedMessages(messages, filterConditions, filterMode) : messages),
+    [filterActive, filterConditions, filterMode, messages]
   )
 
   const linkPickerItems = useMemo<LinkPickerItem[]>(() => {
@@ -227,15 +226,16 @@ export function KafkaMessageBrowser({
     setMenu({ x: event.clientX, y: event.clientY, message })
   }
 
-  const canFilter = Boolean(fieldInput.trim()) && !searchActive && messages.length > 0
-  const canSearch = Boolean(fieldInput.trim()) && !scanning
+  const readyConditions = conditions.filter((condition) => condition.field.trim() !== '')
+  const canFilter = readyConditions.length > 0 && !searchActive && messages.length > 0
+  const canSearch = readyConditions.length > 0 && !scanning
 
   // Enter applies the cheap, instant client-side filter — never the expensive
   // topic scan, which stays an explicit, confirmed button click.
   const submitFilter = (event: FormEvent) => {
     event.preventDefault()
     if (!canFilter) return
-    onFilterLoaded(fieldInput, valueInput, opInput)
+    onFilterLoaded(readyConditions, mode)
   }
 
   return (
@@ -308,60 +308,23 @@ export function KafkaMessageBrowser({
       </div>
 
       <form onSubmit={submitFilter} className="flex flex-wrap items-center gap-2">
-        <input
-          value={fieldInput}
-          onChange={(event) => setFieldInput(event.target.value)}
-          placeholder="JSON path (e.g. events[].name)"
-          aria-label="JSON field path"
-          title="Nested paths and arrays are supported, for example events[].name"
-          spellCheck={false}
-          autoComplete="off"
-          className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
-        />
         <Button
           type="button"
           size="sm"
           variant="outline"
           className="h-8 gap-1.5 font-mono text-[11px]"
-          onClick={() => setPickerOpen(true)}
-          title="Browse sampled messages and pick a field"
+          onClick={() => setFilterDialogOpen(true)}
+          title="Build the conditions a message must satisfy"
         >
-          <ListTree className="h-3.5 w-3.5" />
-          Choose field
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          Filters
+          {readyConditions.length > 0 && (
+            <span className="rounded-sm border border-orange-500/30 bg-orange-500/5 px-1.5 text-[10px] uppercase tracking-[0.12em] text-orange-600 dark:text-orange-400">
+              {readyConditions.length}
+              {readyConditions.length > 1 ? ` ${mode}` : ''}
+            </span>
+          )}
         </Button>
-        {/* Same Select as the Partition control one row up, rather than a bare
-            <select>: the native one renders in the OS palette, so it was the
-            only light-on-white popup in a dark toolbar. */}
-        <Select value={opInput} onValueChange={(value) => setOpInput(value as KafkaMatchOp)}>
-          <SelectTrigger
-            className="h-8 w-32 font-mono text-xs"
-            aria-label="Match operator"
-            title="equals — compare the value. has field / no field — look for the field itself, at any depth."
-          >
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="eq" className="font-mono text-xs">
-              equals
-            </SelectItem>
-            <SelectItem value="exists" className="font-mono text-xs">
-              has field
-            </SelectItem>
-            <SelectItem value="missing" className="font-mono text-xs">
-              no field
-            </SelectItem>
-          </SelectContent>
-        </Select>
-        <input
-          value={opInput === 'eq' ? valueInput : ''}
-          onChange={(event) => setValueInput(event.target.value)}
-          placeholder={opInput === 'eq' ? 'equals value' : 'not used'}
-          aria-label="Expected JSON field value"
-          disabled={opInput !== 'eq'}
-          spellCheck={false}
-          autoComplete="off"
-          className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50 disabled:cursor-not-allowed disabled:opacity-50"
-        />
         <Button
           type="submit"
           size="sm"
@@ -386,6 +349,19 @@ export function KafkaMessageBrowser({
           Search topic
         </Button>
       </form>
+
+      <KafkaFilterDialog
+        open={filterDialogOpen}
+        conditions={conditions}
+        mode={mode}
+        onOpenChange={setFilterDialogOpen}
+        onConditionsChange={setConditions}
+        onModeChange={setMode}
+        onPickField={(index) => {
+          setPickerIndex(index)
+          setPickerOpen(true)
+        }}
+      />
 
       {filterActive && (
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
@@ -584,7 +560,11 @@ export function KafkaMessageBrowser({
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         messages={messages}
-        onUseField={(path) => setFieldInput(path)}
+        onUseField={(path) =>
+          setConditions((current) =>
+            current.map((condition, at) => (at === pickerIndex ? { ...condition, field: path } : condition))
+          )
+        }
       />
 
       <LinkPickerDialog
@@ -728,7 +708,7 @@ export function KafkaMessageBrowser({
               size="sm"
               onClick={() => {
                 setConfirmOpen(false)
-                onSearchTopic(fieldInput, valueInput, opInput)
+                onSearchTopic(readyConditions, mode)
               }}
             >
               Search topic

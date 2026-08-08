@@ -110,9 +110,12 @@ func TestParseMatchFilterOp(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, _, op := parseMatchFilter(tt.filters)
-			if op != tt.want {
-				t.Fatalf("parseMatchFilter op = %q, want %q", op, tt.want)
+			query := parseMatchQuery(tt.filters)
+			if len(query.filters) != 1 {
+				t.Fatalf("expected one condition, got %d", len(query.filters))
+			}
+			if query.filters[0].op != tt.want {
+				t.Fatalf("parseMatchQuery op = %q, want %q", query.filters[0].op, tt.want)
 			}
 		})
 	}
