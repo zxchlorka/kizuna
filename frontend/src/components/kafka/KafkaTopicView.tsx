@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Layers, Lock, MessagesSquare, RefreshCw, Send, Users } from 'lucide-react'
+import { Layers, Lock, MessagesSquare, RefreshCw, Send, SlidersHorizontal, Users } from 'lucide-react'
 import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
+import { KafkaTopicConfig } from '@/components/kafka/KafkaTopicConfig'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
 import { KafkaPartitionsTable } from '@/components/kafka/KafkaPartitionsTable'
 import { KafkaProduceModal } from '@/components/kafka/KafkaProduceModal'
@@ -23,12 +24,13 @@ interface KafkaTopicViewProps {
   topic: string
 }
 
-type TopicTab = 'messages' | 'partitions' | 'groups'
+type TopicTab = 'messages' | 'partitions' | 'groups' | 'config'
 
 const tabs: Array<{ id: TopicTab; label: string; icon: typeof MessagesSquare }> = [
   { id: 'messages', label: 'Messages', icon: MessagesSquare },
   { id: 'partitions', label: 'Partitions', icon: Layers },
   { id: 'groups', label: 'Consumer Groups', icon: Users },
+  { id: 'config', label: 'Config', icon: SlidersHorizontal },
 ]
 
 export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
@@ -236,7 +238,10 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
           </div>
         </div>
 
-        {tab?.childrenError && activeTab !== 'messages' ? (
+        {/* Scoped to the tabs actually rendered from the children response:
+            Config loads its own schema, and a failed partition load reported
+            above the config table would blame the wrong request. */}
+        {tab?.childrenError && (activeTab === 'partitions' || activeTab === 'groups') ? (
           <ErrorBanner message={tab.childrenError} onRetry={() => void fetchTopicChildren(connId, topic, tabId)} />
         ) : null}
 
@@ -305,6 +310,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
           ) : (
             <KafkaConsumerGroups groups={groups} />
           ))}
+
+        {activeTab === 'config' && <KafkaTopicConfig connId={connId} topic={topic} />}
       </div>
 
       <KafkaProduceModal
