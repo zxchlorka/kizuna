@@ -21,7 +21,14 @@ interface ConnectionHealthStore {
 }
 
 const STORAGE_KEY = 'kizuna-connection-health'
-const HEALTH_TTL_MS = 60_000
+export const HEALTH_TTL_MS = 60_000
+
+// How often the connection list re-examines its entries. Deliberately shorter
+// than the TTL: a tick only turns into real network checks for entries that have
+// crossed HEALTH_TTL_MS, so the cost stays one round of checks per minute, but
+// polling at exactly the TTL would let a tick land just before an entry expires
+// and leave the status stale for close to two minutes.
+export const HEALTH_POLL_MS = HEALTH_TTL_MS / 2
 // Cap concurrent health checks so a large connection list refreshes fast without
 // dialing every datasource at once. Each check is bounded by fetchWithTimeout on
 // the client and dial/ping deadlines on the server, so workers never hang.
