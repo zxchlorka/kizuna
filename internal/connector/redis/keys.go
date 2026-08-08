@@ -20,9 +20,17 @@ const (
 	// Budget for one ListObjectsPage call. The page ends when any of these is
 	// hit, so a pattern that matches nothing on a huge keyspace still returns
 	// quickly with a cursor instead of iterating the whole database.
-	pageMaxKeys    = 1000
-	pageMaxScans   = 100 // SCAN iterations (~100k examined entries at COUNT 1000)
-	pageTimeBudget = 1500 * time.Millisecond
+	pageMaxKeys = 1000
+	// SCAN iterations at COUNT 1000, so ~400k entries examined. This is what
+	// bounds a selective filter: a pattern matching one key in ten thousand
+	// returns whatever it found in that many entries, not 1000 matches. The
+	// earlier 100 iterations returned a dozen keys on a production keyspace,
+	// which reads as "this pattern is rare" rather than "the scan stopped".
+	pageMaxScans = 400
+	// Kept under the client's 8s request timeout (frontend/src/lib/http.ts) with
+	// room for the round trip, so the budget that ends a page is always the
+	// server's — a client-side abort would lose the cursor with it.
+	pageTimeBudget = 5 * time.Second
 
 	scanBatchCount    = 1000
 	describeChunkSize = 500

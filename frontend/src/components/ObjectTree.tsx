@@ -457,6 +457,13 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   // A non-empty cursor means the scan was cut short by the per-page budget, so
   // more keys exist than the single page we load. We never paginate further in
   // the tree: the user queries large prefixes from the console instead.
+  // buildTreeKey(connId) is the `${connId}::` prefix every level of this tree
+  // shares, so startsWith identifies this connection's keys and the inequality
+  // drops the root itself.
+  const namespaceNoticeVisible = Array.from(expandedSchemas).some(
+    (key) => key !== rootKey && key.startsWith(rootKey) && Boolean(treeCursors[key])
+  )
+
   const renderRedisTruncatedNotice = (path = '') => {
     const key = buildTreeKey(connId, path)
     if (!treeCursors[key]) {
@@ -650,7 +657,11 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
         {(isRedisConnection ? rootItems : filteredRootItems).map((item) =>
           isRedisConnection ? renderRedisItem(item) : renderPgSchemaNode(item)
         )}
-        {isRedisConnection && renderRedisTruncatedNotice()}
+        {/* The root notice is suppressed while an open namespace is already
+            showing the same sentence: two identical warnings a few rows apart
+            read as two different problems. The namespace one is kept because it
+            names which level is incomplete. */}
+        {isRedisConnection && !namespaceNoticeVisible && renderRedisTruncatedNotice()}
       </div>
       {!isRedisConnection && (
         <CreateTableForm
