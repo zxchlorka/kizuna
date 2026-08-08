@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -383,19 +384,112 @@ func TestParseBeforeOffsets(t *testing.T) {
 	}
 }
 
-func TestParseMatchFilter(t *testing.T) {
+func TestParseMatchQuery(t *testing.T) {
 	t.Parallel()
 
-	field, value, _ := parseMatchFilter([]connector.FilterExpr{
+	query := parseMatchQuery([]connector.FilterExpr{
 		{Column: "match_field", Value: " user.id "},
 		{Column: "match_value", Value: "42"},
 	})
-	if field != "user.id" || value != "42" {
-		t.Fatalf("unexpected match filter: field=%q value=%q", field, value)
+	if len(query.filters) != 1 {
+		t.Fatalf("expected one condition, got %d", len(query.filters))
+	}
+	if query.filters[0].field != "user.id" || query.filters[0].value != "42" {
+		t.Fatalf("unexpected match filter: %+v", query.filters[0])
+	}
+	if query.mode != matchModeAnd {
+		t.Fatalf("expected AND by default, got %q", query.mode)
 	}
 
-	if field, _, _ := parseMatchFilter(nil); field != "" {
-		t.Fatalf("expected empty field for no filter, got %q", field)
+	if parseMatchQuery(nil).active() {
+		t.Fatal("expected no search for an empty filter list")
+	}
+}
+
+func TestParseMatchQueryMultipleConditions(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Value: "user.id"},
+		{Column: "match_value", Value: "42"},
+		{Column: "match_field.1", Value: "event"},
+		{Column: "match_value.1", Value: "signup"},
+		{Column: "match_field.2", Value: "trace"},
+		{Column: "match_op.2", Value: "missing"},
+		{Column: "match_mode", Value: "or"},
+	})
+
+	if query.mode != matchModeOr {
+		t.Fatalf("mode = %q, want or", query.mode)
+	}
+	want := []contentFilter{
+		{field: "user.id", value: "42", op: matchOpEquals},
+		{field: "event", value: "signup", op: matchOpEquals},
+		{field: "trace", op: matchOpMissing},
+	}
+	if !reflect.DeepEqual(query.filters, want) {
+		t.Fatalf("filters = %+v, want %+v", query.filters, want)
+	}
+}
+
+// A condition whose field never arrived is dropped rather than matching
+// everything: a blank row in the filter dialog must not widen the search.
+func TestParseMatchQueryDropsFieldlessConditions(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Value: "user.id"},
+		{Column: "match_value.1", Value: "orphaned"},
+		{Column: "match_field.2", Value: "   "},
+	})
+
+	if len(query.filters) != 1 || query.filters[0].field != "user.id" {
+		t.Fatalf("expected only the complete condition, got %+v", query.filters)
+	}
+}
+
+func TestMessageMatchesQueryCombinesConditions(t *testing.T) {
+	t.Parallel()
+
+	row := map[string]any{"format": "json", "value": `{"user":{"id":"42"},"event":"signup"}`}
+	idMatches := contentFilter{field: "user.id", value: "42", op: matchOpEquals}
+	eventMisses := contentFilter{field: "event", value: "logout", op: matchOpEquals}
+
+	tests := []struct {
+		name  string
+		query matchQuery
+		want  bool
+	}{
+		{
+			name:  "and needs every condition",
+			query: matchQuery{mode: matchModeAnd, filters: []contentFilter{idMatches, eventMisses}},
+			want:  false,
+		},
+		{
+			name:  "and accepts when all hold",
+			query: matchQuery{mode: matchModeAnd, filters: []contentFilter{idMatches, idMatches}},
+			want:  true,
+		},
+		{
+			name:  "or needs only one",
+			query: matchQuery{mode: matchModeOr, filters: []contentFilter{idMatches, eventMisses}},
+			want:  true,
+		},
+		{
+			name:  "or rejects when none hold",
+			query: matchQuery{mode: matchModeOr, filters: []contentFilter{eventMisses, eventMisses}},
+			want:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := messageMatchesQuery(row, tt.query); got != tt.want {
+				t.Fatalf("messageMatchesQuery = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

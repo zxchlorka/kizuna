@@ -41,18 +41,16 @@ interface KafkaTopicTabState {
   // `nextCursor`/`hasMore`; the visible rows are derived from `messages`
   // + this predicate (see filterLoadedMessages), so clearing it restores the
   // page and cursor instantly because they were never mutated.
-  filterField: string
-  filterOp: KafkaMatchOp
-  filterValue: string
+  filterConditions: KafkaMatchCondition[]
+  filterMode: KafkaMatchMode
   filterActive: boolean
 
   // "Search topic" — the budgeted BACKEND scan (match_field/match_value ->
   // messages.go). Each step scans one window under the reader's scan budget and
   // returns whatever it matched plus a cursor to continue deeper. `messages`
   // holds the accumulated matches while a search session is active.
-  searchField: string
-  searchValue: string
-  searchOp: KafkaMatchOp
+  searchConditions: KafkaMatchCondition[]
+  searchMode: KafkaMatchMode
   // Автоцикл «Search all»: гоняет шаги скана до начала лога.
   deepScanning: boolean
   deepScanCanceled: boolean
@@ -90,10 +88,27 @@ interface KafkaTopicTabState {
 // way to look for a field whose values are not known yet.
 export type KafkaMatchOp = 'eq' | 'exists' | 'missing'
 
-interface KafkaSearch {
+// One condition of a content search: a JSON path, what it must satisfy, and
+// the value to compare when the op is 'eq'.
+export interface KafkaMatchCondition {
   field: string
   value: string
   op: KafkaMatchOp
+}
+
+// How a set of conditions combines. 'and' narrows (every condition must hold),
+// 'or' widens (any one does).
+export type KafkaMatchMode = 'and' | 'or'
+
+interface KafkaSearch {
+  conditions: KafkaMatchCondition[]
+  mode: KafkaMatchMode
+}
+
+// A condition with no field is incomplete, not a wildcard: an empty row in the
+// filter dialog must never widen a search.
+export function activeConditions(conditions: KafkaMatchCondition[]): KafkaMatchCondition[] {
+  return conditions.filter((condition) => condition.field.trim() !== '')
 }
 
 // Which end of the log a browse starts from. 'newest' anchors at the end and
@@ -157,7 +172,7 @@ interface KafkaStore {
   // Explicit user "Refresh" of the current view (header + toolbar buttons, the
   // produce-then-refresh path). Search-aware: if a "Search topic" session is
   // active for this tab, re-run that search from the top (a fresh first step
-  // with the tab's existing searchField/searchValue) instead of browse-
+  // with the tab's existing search conditions) instead of browse-
   // overwriting the accumulated scan matches/cursor; otherwise reload the
   // newest browse page via fetchMessages. Restores the pre-Task-7 intent
   // (Refresh keeps you looking at the same kind of thing) on top of the new
@@ -174,16 +189,15 @@ interface KafkaStore {
   // interchangeable.
   setDirection: (connId: string, topic: string, tabId: string, direction: KafkaDirection) => Promise<void>
   // Filter loaded (client-side, no network).
-  setLoadedFilter: (tabId: string, field: string, value: string, op?: KafkaMatchOp) => void
+  setLoadedFilter: (tabId: string, conditions: KafkaMatchCondition[], mode?: KafkaMatchMode) => void
   clearLoadedFilter: (tabId: string) => void
   // Search topic (budgeted backend scan).
   searchTopic: (
     connId: string,
     topic: string,
     tabId: string,
-    field: string,
-    value: string,
-    op?: KafkaMatchOp
+    conditions: KafkaMatchCondition[],
+    mode?: KafkaMatchMode
   ) => Promise<void>
   scanMore: (connId: string, topic: string, tabId: string) => Promise<void>
   scanAll: (connId: string, topic: string, tabId: string) => Promise<void>
@@ -209,13 +223,11 @@ function defaultTabState(): KafkaTopicTabState {
     partitionFilter: null,
     seekOffset: '',
     seekTimestamp: '',
-    filterField: '',
-    filterValue: '',
-    filterOp: 'eq',
+    filterConditions: [],
+    filterMode: 'and',
     filterActive: false,
-    searchField: '',
-    searchValue: '',
-    searchOp: 'eq',
+    searchConditions: [],
+    searchMode: 'and',
     deepScanning: false,
     deepScanCanceled: false,
     searchActive: false,
@@ -244,18 +256,29 @@ function ensureState(tabs: Record<string, KafkaTopicTabState>, tabId: string): K
 // Non-JSON rows never match a non-empty path and are filtered out. Pure and
 // side-effect free, so the caller derives the visible set without ever mutating
 // the raw `messages`/cursor state.
+function conditionMatches(row: KafkaMessageRow, condition: KafkaMatchCondition): boolean {
+  const path = condition.field.trim()
+  if (condition.op === 'exists' || condition.op === 'missing') {
+    return fieldPresence(row.value, path, condition.op === 'exists')
+  }
+  return matchField(row.value, path, condition.value)
+}
+
+// filterLoadedMessages narrows the rows already on screen — no network. It
+// mirrors the backend scan predicate (messages.go) so that "Filter loaded" and
+// "Search topic" never disagree about what matches.
 export function filterLoadedMessages(
   messages: KafkaMessageRow[],
-  field: string,
-  value: string,
-  op: KafkaMatchOp = 'eq'
+  conditions: KafkaMatchCondition[],
+  mode: KafkaMatchMode = 'and'
 ): KafkaMessageRow[] {
-  const path = field.trim()
-  if (path === '') return messages
-  if (op === 'exists' || op === 'missing') {
-    return messages.filter((row) => fieldPresence(row.value, path, op === 'exists'))
-  }
-  return messages.filter((row) => matchField(row.value, path, value))
+  const active = activeConditions(conditions)
+  if (active.length === 0) return messages
+  return messages.filter((row) =>
+    mode === 'or'
+      ? active.some((condition) => conditionMatches(row, condition))
+      : active.every((condition) => conditionMatches(row, condition))
+  )
 }
 
 interface MessagesResponse {
@@ -371,9 +394,15 @@ async function requestMessages(
     }
   }
   if (search) {
-    filters.push({ column: 'match_field', op: 'eq', value: search.field })
-    filters.push({ column: 'match_value', op: 'eq', value: search.value })
-    filters.push({ column: 'match_op', op: 'eq', value: search.op })
+    // The first condition goes on the unsuffixed keys and the rest are
+    // numbered; parseMatchQuery in messages.go reads both.
+    activeConditions(search.conditions).forEach((condition, index) => {
+      const suffix = index === 0 ? '' : `.${index}`
+      filters.push({ column: `match_field${suffix}`, op: 'eq', value: condition.field })
+      filters.push({ column: `match_value${suffix}`, op: 'eq', value: condition.value })
+      filters.push({ column: `match_op${suffix}`, op: 'eq', value: condition.op })
+    })
+    filters.push({ column: 'match_mode', op: 'eq', value: search.mode })
   }
 
   const params = new URLSearchParams({ limit: '100' })
@@ -402,7 +431,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     if (current.scanning) return
     if (!reset && (!current.hasMore || !current.nextCursor)) return
 
-    const search: KafkaSearch = { field: current.searchField, value: current.searchValue, op: current.searchOp }
+    const search: KafkaSearch = { conditions: current.searchConditions, mode: current.searchMode }
     const cursorOffsets = reset ? null : current.nextCursor
 
     // Supersede any lingering controller and register this step's own so Cancel
@@ -655,7 +684,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
     refreshMessages: async (connId, topic, tabId) => {
       const current = ensureState(get().tabs, tabId)
       if (current.searchActive) {
-        await get().searchTopic(connId, topic, tabId, current.searchField, current.searchValue, current.searchOp)
+        await get().searchTopic(connId, topic, tabId, current.searchConditions, current.searchMode)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
@@ -746,13 +775,11 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             messages: [],
             nextCursor: null,
             hasMore: false,
-            filterField: '',
-            filterValue: '',
-            filterOp: 'eq',
+            filterConditions: [],
+            filterMode: 'and',
             filterActive: false,
-            searchField: '',
-            searchValue: '',
-            searchOp: 'eq',
+            searchConditions: [],
+            searchMode: 'and',
             searchActive: false,
             deepScanning: false,
             deepScanCanceled: false,
@@ -802,8 +829,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           },
         },
       }))
-      if (previous.searchActive && previous.searchField) {
-        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue, previous.searchOp)
+      if (previous.searchActive && previous.searchConditions.length > 0) {
+        await get().searchTopic(connId, topic, tabId, previous.searchConditions, previous.searchMode)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
@@ -837,24 +864,23 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
       }))
       // A search survives the flip for the same reason it survives a seek: the
       // direction changes which part of the log is swept, not what is looked for.
-      if (previous.searchActive && previous.searchField) {
-        await get().searchTopic(connId, topic, tabId, previous.searchField, previous.searchValue, previous.searchOp)
+      if (previous.searchActive && previous.searchConditions.length > 0) {
+        await get().searchTopic(connId, topic, tabId, previous.searchConditions, previous.searchMode)
         return
       }
       await get().fetchMessages(connId, topic, tabId)
     },
 
-    setLoadedFilter: (tabId, field, value, op = 'eq') => {
-      const trimmed = field.trim()
+    setLoadedFilter: (tabId, conditions, mode = 'and') => {
+      const active = activeConditions(conditions)
       set((state) => ({
         tabs: {
           ...state.tabs,
           [tabId]: {
             ...ensureState(state.tabs, tabId),
-            filterField: trimmed,
-            filterValue: op === 'eq' ? value : '',
-            filterOp: op,
-            filterActive: trimmed !== '',
+            filterConditions: active,
+            filterMode: mode,
+            filterActive: active.length > 0,
           },
         },
       }))
@@ -866,35 +892,30 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           ...state.tabs,
           [tabId]: {
             ...ensureState(state.tabs, tabId),
-            filterField: '',
-            filterValue: '',
-            filterOp: 'eq',
+            filterConditions: [],
+            filterMode: 'and',
             filterActive: false,
           },
         },
       }))
     },
 
-    searchTopic: async (connId, topic, tabId, field, value, op = 'eq') => {
-      const trimmed = field.trim()
-      if (trimmed === '') return
+    searchTopic: async (connId, topic, tabId, conditions, mode = 'and') => {
+      const active = activeConditions(conditions)
+      if (active.length === 0) return
       set((state) => ({
         tabs: {
           ...state.tabs,
           [tabId]: {
             ...ensureState(state.tabs, tabId),
-            searchField: trimmed,
-            // A presence search has no value to compare; keep it empty so a
-            // stale one cannot leak back in when the op switches to 'eq'.
-            searchValue: op === 'eq' ? value : '',
-            searchOp: op,
+            searchConditions: active,
+            searchMode: mode,
             deepScanCanceled: false,
             searchActive: true,
             // A topic scan replaces the loaded view with its matches; drop any
             // client-side filter so the two operations never stack on one set.
-            filterField: '',
-            filterValue: '',
-            filterOp: 'eq',
+            filterConditions: [],
+            filterMode: 'and',
             filterActive: false,
           },
         },
@@ -978,9 +999,8 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
           ...state.tabs,
           [tabId]: {
             ...ensureState(state.tabs, tabId),
-            searchField: '',
-            searchValue: '',
-            searchOp: 'eq',
+            searchConditions: [],
+            searchMode: 'and',
             searchActive: false,
             deepScanning: false,
             deepScanCanceled: false,

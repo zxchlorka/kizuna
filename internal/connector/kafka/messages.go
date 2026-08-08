@@ -280,8 +280,8 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if err != nil {
 		return nil, err
 	}
-	matchField, matchValue, matchOperator := parseMatchFilter(opts.Filters)
-	scanning := matchField != ""
+	matchQ := parseMatchQuery(opts.Filters)
+	scanning := matchQ.active()
 	seek, err := parseSeek(opts.Filters)
 	if err != nil {
 		return nil, err
@@ -462,7 +462,7 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		}
 		// Content search must inspect every candidate, so it deserializes them all
 		// before testing the match predicate.
-		rows = filterMatches(finalizeRows(rows), matchField, matchValue, matchOperator)
+		rows = filterMatches(finalizeRows(rows), matchQ)
 		meta["matched"] = len(rows)
 	} else {
 		// Deferred deserialization: only the rows that survived page selection are
@@ -1370,28 +1370,96 @@ const (
 	matchOpMissing matchOp = "missing"
 )
 
-// parseMatchFilter extracts the content-search predicate. An empty field means
-// no search (normal windowed paging). The value is compared verbatim, and is
-// ignored entirely unless the op is matchOpEquals. An absent or unrecognized
-// match_op falls back to matchOpEquals.
-func parseMatchFilter(filters []connector.FilterExpr) (field string, value string, op matchOp) {
-	op = matchOpEquals
+// matchMode combines a multi-condition search. AND is the default because it is
+// what narrowing means: each condition added removes messages.
+type matchMode string
+
+const (
+	matchModeAnd matchMode = "and"
+	matchModeOr  matchMode = "or"
+)
+
+// contentFilter is one field predicate of a content search.
+type contentFilter struct {
+	field string
+	value string
+	op    matchOp
+}
+
+// matchQuery is the whole content search: the conditions and how they combine.
+type matchQuery struct {
+	filters []contentFilter
+	mode    matchMode
+}
+
+// active reports whether anything is being searched for. An empty query means
+// normal windowed paging rather than a scan.
+func (q matchQuery) active() bool { return len(q.filters) > 0 }
+
+// parseMatchQuery extracts the content-search predicate.
+//
+// Conditions are numbered: match_field/match_value/match_op carry the first, and
+// match_field.N/match_value.N/match_op.N carry the rest. A flat key/value list is
+// the shape FilterExpr gives us, and a numeric suffix is the ordinary way to put
+// a list into one — the alternative, a nested filter object, would change the
+// contract every connector shares for the sake of one of them.
+//
+// A condition with an empty field is dropped, so trailing blank rows in the UI
+// cost nothing. The value is compared verbatim and is ignored entirely unless
+// the op is matchOpEquals. An absent or unrecognized match_op falls back to
+// matchOpEquals, and an absent or unrecognized match_mode to AND — so a
+// single-condition request is byte-for-byte what it was before.
+func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
+	byIndex := make(map[string]*contentFilter)
+	order := make([]string, 0, 4)
+	query := matchQuery{mode: matchModeAnd}
+
+	at := func(index string) *contentFilter {
+		if existing, ok := byIndex[index]; ok {
+			return existing
+		}
+		created := &contentFilter{op: matchOpEquals}
+		byIndex[index] = created
+		order = append(order, index)
+		return created
+	}
+
 	for _, filter := range filters {
-		switch strings.ToLower(strings.TrimSpace(filter.Column)) {
+		column := strings.ToLower(strings.TrimSpace(filter.Column))
+		if column == "match_mode" {
+			if matchMode(strings.ToLower(strings.TrimSpace(filter.Value))) == matchModeOr {
+				query.mode = matchModeOr
+			}
+			continue
+		}
+
+		name, index, _ := strings.Cut(column, ".")
+		switch name {
 		case "match_field":
-			field = strings.TrimSpace(filter.Value)
+			at(index).field = strings.TrimSpace(filter.Value)
 		case "match_value":
-			value = filter.Value
+			at(index).value = filter.Value
 		case "match_op":
 			switch matchOp(strings.ToLower(strings.TrimSpace(filter.Value))) {
 			case matchOpExists:
-				op = matchOpExists
+				at(index).op = matchOpExists
 			case matchOpMissing:
-				op = matchOpMissing
+				at(index).op = matchOpMissing
+			case matchOpEquals:
+				at(index).op = matchOpEquals
 			}
 		}
 	}
-	return field, value, op
+
+	// Numeric order would need parsing and would change nothing: the conditions
+	// are combined by AND or OR, both commutative. First-seen order keeps the
+	// unnumbered condition first, where the caller put it.
+	for _, index := range order {
+		if byIndex[index].field != "" {
+			query.filters = append(query.filters, *byIndex[index])
+		}
+	}
+	return query
 }
 
 // buildPaginationCursor turns one GetData call's per-partition frontier into the
@@ -1615,15 +1683,37 @@ func lowestConsumedOffsets(rows []map[string]any) map[int32]int64 {
 	return reached
 }
 
-// filterMatches keeps only rows whose JSON value has field == value.
-func filterMatches(rows []map[string]any, field string, value string, op matchOp) []map[string]any {
+// filterMatches keeps only the rows satisfying the query.
+func filterMatches(rows []map[string]any, query matchQuery) []map[string]any {
 	matches := make([]map[string]any, 0, 16)
 	for _, row := range rows {
-		if messageMatchesField(row, field, value, op) {
+		if messageMatchesQuery(row, query) {
 			matches = append(matches, row)
 		}
 	}
 	return matches
+}
+
+// messageMatchesQuery combines the per-field results. An empty query matches
+// everything, which is what "no search" means; it is never reached in practice
+// because an inactive query skips the scan path entirely.
+func messageMatchesQuery(row map[string]any, query matchQuery) bool {
+	if len(query.filters) == 0 {
+		return true
+	}
+	for _, filter := range query.filters {
+		matched := messageMatchesField(row, filter.field, filter.value, filter.op)
+		if query.mode == matchModeOr {
+			if matched {
+				return true
+			}
+			continue
+		}
+		if !matched {
+			return false
+		}
+	}
+	return query.mode != matchModeOr
 }
 
 // messageMatchesField reports whether a message contains a JSON leaf at the
