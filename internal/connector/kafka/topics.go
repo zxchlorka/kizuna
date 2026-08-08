@@ -3,9 +3,11 @@ package kafka
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
 
 	"github.com/twmb/franz-go/pkg/kadm"
+	"github.com/twmb/franz-go/pkg/kmsg"
 	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
@@ -131,4 +133,85 @@ func maxInt64(left, right int64) int64 {
 		return left
 	}
 	return right
+}
+
+// topicConfig is one broker-reported setting. Source is carried because it
+// answers the question a raw value cannot: whether somebody set this on the
+// topic or whether it is just the broker default showing through.
+type topicConfig struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
+	// SetOnTopic is true when the value comes from the topic's own config
+	// rather than from a broker or static default.
+	SetOnTopic bool `json:"set_on_topic"`
+}
+
+func (c *KafkaConnector) topicSchema(ctx context.Context, topic string) (*connector.Schema, error) {
+	ctx, cancel := context.WithTimeout(ctx, metadataTimeout)
+	defer cancel()
+
+	topics, err := c.admin.ListTopics(ctx, topic)
+	if err != nil {
+		return nil, normalizeKafkaError(err)
+	}
+	detail, ok := topics[topic]
+	if !ok || detail.Err != nil {
+		return nil, fmt.Errorf("%w: topic %q not found", connector.ErrRelationNotFound, topic)
+	}
+
+	resources, err := c.admin.DescribeTopicConfigs(ctx, topic)
+	if err != nil {
+		return nil, normalizeKafkaError(err)
+	}
+	resource, err := resources.On(topic, nil)
+	if err != nil {
+		return nil, normalizeKafkaError(err)
+	}
+	if resource.Err != nil {
+		return nil, normalizeKafkaError(resource.Err)
+	}
+
+	configs := make([]topicConfig, 0, len(resource.Configs))
+	for _, config := range resource.Configs {
+		// A sensitive config comes back with a nil value; listing the key with
+		// an empty value would read as "set to nothing" rather than "withheld".
+		if config.Sensitive {
+			continue
+		}
+		configs = append(configs, topicConfig{
+			Key:        config.Key,
+			Value:      config.MaybeValue(),
+			Source:     configSourceName(config.Source),
+			SetOnTopic: config.Source == kmsg.ConfigSourceDynamicTopicConfig,
+		})
+	}
+	sort.Slice(configs, func(i, j int) bool { return configs[i].Key < configs[j].Key })
+
+	return &connector.Schema{
+		ObjectType: "kafka_topic",
+		Columns:    []connector.ColumnMeta{},
+		Meta: map[string]any{
+			"partitions":  len(detail.Partitions),
+			"replication": topicReplicationFactor(detail),
+			"configs":     configs,
+		},
+	}, nil
+}
+
+func configSourceName(source kmsg.ConfigSource) string {
+	switch source {
+	case kmsg.ConfigSourceDynamicTopicConfig:
+		return "topic"
+	case kmsg.ConfigSourceDynamicBrokerConfig:
+		return "broker"
+	case kmsg.ConfigSourceDynamicDefaultBrokerConfig:
+		return "broker default"
+	case kmsg.ConfigSourceStaticBrokerConfig:
+		return "static broker"
+	case kmsg.ConfigSourceDefaultConfig:
+		return "default"
+	default:
+		return "unknown"
+	}
 }
