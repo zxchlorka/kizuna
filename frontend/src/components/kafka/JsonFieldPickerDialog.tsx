@@ -194,6 +194,16 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
     onOpenChange(false)
   }
 
+  // Double-click uses the row it landed on rather than whatever was selected
+  // before it: the click that opens the second half of a double-click has
+  // already selected this node, but reading selectedPath here would race that
+  // state update.
+  const confirmNode = (node: SchemaNode) => {
+    selectNode(node)
+    onUseField(node.path)
+    onOpenChange(false)
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* min-w-0 is load-bearing, not cosmetic: DialogContent is a grid, and a
@@ -298,6 +308,7 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
                       onToggle={toggle}
                       onFocus={setFocusedPath}
                       onSelect={selectNode}
+                      onConfirm={confirmNode}
                     />
                   ))
                 )}
