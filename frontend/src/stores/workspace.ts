@@ -441,9 +441,26 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     if ((get().keyPatternByConnection[connId] ?? '') === pattern) {
       return
     }
-    set((state) => ({
-      keyPatternByConnection: { ...state.keyPatternByConnection, [connId]: pattern },
-    }))
+    set((state) => {
+      // Every cached level of this tree was scanned under the OLD pattern, so all
+      // of it is now wrong -- including levels that are currently collapsed.
+      // refreshTree alone is not enough: it re-reads the root and the expanded
+      // namespaces, while a collapsed namespace keeps its entry, and expanding it
+      // renders that entry without refetching (ObjectTree only fetches a level it
+      // has no items for). The result was a filtered count over an unfiltered
+      // list of children.
+      const isOtherConnection = (key: string) => parseTreeKey(key).connId !== connId
+      const keep = <T,>(record: Record<string, T>): Record<string, T> =>
+        Object.fromEntries(Object.entries(record).filter(([key]) => isOtherConnection(key)))
+
+      return {
+        keyPatternByConnection: { ...state.keyPatternByConnection, [connId]: pattern },
+        treeItems: keep(state.treeItems),
+        treeCursors: keep(state.treeCursors),
+        treeLoadedByKey: keep(state.treeLoadedByKey),
+        treeErrorByKey: keep(state.treeErrorByKey),
+      }
+    })
     await get().refreshTree(connId)
   },
 
