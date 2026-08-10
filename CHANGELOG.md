@@ -3,6 +3,55 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.6.0 — 2026-08-10
+
+### Redis
+
+- New Overview tab per connection: memory against its configured limit, eviction
+  policy, key count, uptime, clients and fragmentation. Every figure is a total
+  for the connection — in cluster mode the masters are summed and the per-node
+  share is shown beside it. Read from one node, a 24-master cluster reported its
+  memory twenty-four times low.
+- The meter is drawn only against a real ceiling. `maxmemory 0` means Redis
+  enforces none, and it says so instead of showing a bar at 0%.
+- The key tree is built from one scan instead of one scan per level. Opening a
+  namespace costs no request, and a folder's count is the keys actually behind it
+  rather than the result of a second, differently budgeted scan.
+- `Scan more keys` continues from the cursor and appends, skipping keys an
+  earlier page already returned.
+- The tree can be filtered by key pattern, matched by `SCAN MATCH` on the server,
+  so it finds keys that were never loaded. Plain text is a contains match;
+  anything with `*`, `?` or `[` is passed through as a glob.
+- Pasting into the key lookup trims surrounding whitespace. Selecting a key with
+  the mouse picks up the spacing between cells, so a paste after a typed prefix
+  landed as `profile: 1234` and matched nothing.
+
+### Kafka
+
+- New Config tab on a topic: every broker-reported setting with the source that
+  set it, so a value chosen on the topic is distinguishable from a default that
+  can move underneath it.
+- `retention.bytes` is shown as the per-partition limit Kafka enforces, next to
+  the topic-wide ceiling it implies — 250 GB on a 12-partition topic bounds the
+  topic at 2.73 TiB, not 233 GiB.
+- Message search takes several field conditions combined with AND or OR, edited
+  in a dialog behind a Filters button. "Filter loaded" and "Search topic" apply
+  the same set.
+- Double-clicking a row in the field picker uses that field.
+
+### Connections
+
+- Health re-checks itself: every connection is re-tested when the list screen
+  opens, then on a 30-second tick while the tab is in the foreground, paused
+  while it is hidden. A reload previously always landed inside the cache window,
+  so a server that had come back stayed offline until the per-card test button
+  was pressed by hand.
+
+### Docs
+
+- The three README walkthrough clips removed in v0.5.2 are reshot on the current
+  build, with their static fallbacks refreshed from the same frames.
+
 ## v0.5.2 — 2026-08-05
 
 ### Cross-source links
