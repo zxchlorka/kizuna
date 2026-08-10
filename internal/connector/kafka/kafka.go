@@ -338,8 +338,11 @@ func unsupportedKafkaOperation(name string) error {
 	return fmt.Errorf("%w: kafka %s is not supported yet", connector.ErrBadRequest, name)
 }
 
-func (c *KafkaConnector) GetSchema(context.Context, string) (*connector.Schema, error) {
-	return nil, unsupportedKafkaOperation("schema")
+// GetSchema describes a topic: its partition count plus its broker-reported
+// configuration. Kafka has no columns, so Columns stays empty and everything
+// lands in Meta.
+func (c *KafkaConnector) GetSchema(ctx context.Context, object string) (*connector.Schema, error) {
+	return c.topicSchema(ctx, object)
 }
 
 func (c *KafkaConnector) GetObjectInfo(context.Context, string) (*connector.ObjectInfo, error) {

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { formatCompactCount, formatExactCount, splitSharedPrefix } from '@/lib/numberFormat'
+import {
+  formatBytes,
+  formatCompactCount,
+  formatDurationSeconds,
+  formatExactCount,
+  splitSharedPrefix,
+} from '@/lib/numberFormat'
 
 describe('formatCompactCount', () => {
   const cases: Array<{ name: string; value: number; want: string }> = [
@@ -43,5 +49,39 @@ describe('splitSharedPrefix', () => {
   it('highlights everything when the values are equal', () => {
     // A caught-up partition has no differing part to point at.
     expect(splitSharedPrefix('500', '500')).toEqual({ prefix: '', rest: '500' })
+  })
+})
+
+describe('formatBytes', () => {
+  const cases: Array<{ name: string; value: number; want: string }> = [
+    { name: 'zero', value: 0, want: '0 B' },
+    { name: 'plain bytes carry no fraction', value: 512, want: '512 B' },
+    { name: 'kibibytes', value: 2048, want: '2.00 KiB' },
+    // The retention.bytes from the topic that started this: read as GiB, not GB.
+    { name: 'a topic retention limit', value: 250000000000, want: '232.83 GiB' },
+    { name: 'terabytes', value: 3 * 1024 ** 4, want: '3.00 TiB' },
+    { name: 'not a number', value: Number.NaN, want: '\u2014' },
+  ]
+
+  cases.forEach(({ name, value, want }) => {
+    it(name, () => {
+      expect(formatBytes(value)).toBe(want)
+    })
+  })
+})
+
+describe('formatDurationSeconds', () => {
+  const cases: Array<{ name: string; value: number; want: string }> = [
+    { name: 'seconds', value: 45, want: '45s' },
+    { name: 'minutes', value: 305, want: '5m 5s' },
+    { name: 'hours', value: 7500, want: '2h 5m' },
+    { name: 'days drop everything below hours', value: 1043400, want: '12d 1h' },
+    { name: 'negative is not a duration', value: -1, want: '\u2014' },
+  ]
+
+  cases.forEach(({ name, value, want }) => {
+    it(name, () => {
+      expect(formatDurationSeconds(value)).toBe(want)
+    })
   })
 })

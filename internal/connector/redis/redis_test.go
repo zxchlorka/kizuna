@@ -411,6 +411,11 @@ redis_version:7.2.5
 uptime_in_seconds:1234
 # Clients
 connected_clients:8
+# Memory
+used_memory:1048576
+used_memory_rss:2097152
+maxmemory:4194304
+maxmemory_policy:allkeys-lru
 # Replication
 role:master
 `, nil),
@@ -444,8 +449,26 @@ role:master
 	if info.Port != "6379" {
 		t.Fatalf("unexpected port: %q", info.Port)
 	}
-	if info.Extra["connected_clients"] != "8" {
+	// Reported as a number now, not INFO's raw string: it is summed across the
+	// cluster's masters rather than passed through from one node.
+	if info.Extra["connected_clients"] != int64(8) {
 		t.Fatalf("unexpected connected clients: %#v", info.Extra["connected_clients"])
+	}
+	if info.Extra["used_memory"] != int64(1048576) {
+		t.Fatalf("unexpected used memory: %#v", info.Extra["used_memory"])
+	}
+	if info.Extra["maxmemory"] != int64(4194304) {
+		t.Fatalf("unexpected maxmemory: %#v", info.Extra["maxmemory"])
+	}
+	if info.Extra["maxmemory_policy"] != "allkeys-lru" {
+		t.Fatalf("unexpected policy: %#v", info.Extra["maxmemory_policy"])
+	}
+	if info.Extra["node_count"] != 1 {
+		t.Fatalf("unexpected node count: %#v", info.Extra["node_count"])
+	}
+	// Ratio of the totals, not one node's reported figure.
+	if info.Extra["mem_fragmentation_ratio"] != "2.00" {
+		t.Fatalf("unexpected fragmentation: %#v", info.Extra["mem_fragmentation_ratio"])
 	}
 	if info.Extra["role"] != "master" {
 		t.Fatalf("unexpected role: %#v", info.Extra["role"])

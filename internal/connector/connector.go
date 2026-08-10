@@ -43,10 +43,16 @@ type Object struct {
 // ObjectPageOpts selects one page of an incremental object listing.
 // Cursor is an opaque token from a previous page ("" = first page).
 // Node optionally pins the listing to a single cluster node.
+// Match optionally narrows the page to names matching a glob, scoped to Path.
+// Flat returns the page's objects as they are, without grouping them into
+// namespaces — the caller builds whatever hierarchy it wants from the names, so
+// one scan answers for the whole tree instead of one scan per level.
 type ObjectPageOpts struct {
 	Path   string
 	Cursor string
 	Node   string
+	Match  string
+	Flat   bool
 }
 
 type ObjectPage struct {

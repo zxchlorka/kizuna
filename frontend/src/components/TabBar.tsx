@@ -1,4 +1,4 @@
-import { Activity, Braces, CircleDot, Database, Eye, Folder, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
+import { Activity, Braces, CircleDot, Database, Eye, Folder, Gauge, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
@@ -10,7 +10,10 @@ interface TabBarProps {
   connId: string
 }
 
-function tabIcon(kind: 'sql' | 'redis-cli' | ObjectType) {
+function tabIcon(kind: 'sql' | 'redis-cli' | 'overview' | ObjectType) {
+  if (kind === 'overview') {
+    return <Gauge className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+  }
   if (kind === 'sql') {
     return <SquareTerminal className="h-3.5 w-3.5 text-amber-500" />
   }
@@ -50,7 +53,8 @@ function tabIcon(kind: 'sql' | 'redis-cli' | ObjectType) {
 }
 
 export function TabBar({ connId }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab, openRedisCliTab } = useWorkspaceStore()
+  const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab, openRedisCliTab, openOverviewTab } =
+    useWorkspaceStore()
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const isRedis = connection?.type === 'redis'
   const isKafka = connection?.type === 'kafka'
@@ -70,7 +74,15 @@ export function TabBar({ connId }: TabBarProps) {
                 : 'text-muted-foreground hover:bg-background/50 hover:text-foreground'
             )}
           >
-            {tabIcon(tab.kind === 'sql' ? 'sql' : tab.kind === 'redis-cli' ? 'redis-cli' : tab.objectType)}
+            {tabIcon(
+              tab.kind === 'sql'
+                ? 'sql'
+                : tab.kind === 'redis-cli'
+                  ? 'redis-cli'
+                  : tab.kind === 'overview'
+                    ? 'overview'
+                    : tab.objectType
+            )}
             <span className="max-w-[140px] truncate">{tab.label}</span>
             <button
               onClick={(e) => {
@@ -85,17 +97,30 @@ export function TabBar({ connId }: TabBarProps) {
         ))}
       </div>
       {isKafka ? null : isRedis ? (
-        <Button
-          type="button"
-          size="sm"
-          variant="outline"
-          className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
-          onClick={() => openRedisCliTab(connId)}
-          title="Open a new Redis CLI tab"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New CLI
-        </Button>
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
+            onClick={() => openOverviewTab(connId)}
+            title="Show memory, limits and key count for this server"
+          >
+            <Gauge className="h-3.5 w-3.5" />
+            Overview
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
+            onClick={() => openRedisCliTab(connId)}
+            title="Open a new Redis CLI tab"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New CLI
+          </Button>
+        </>
       ) : (
         <Button
           type="button"

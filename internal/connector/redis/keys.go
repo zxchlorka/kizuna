@@ -20,9 +20,17 @@ const (
 	// Budget for one ListObjectsPage call. The page ends when any of these is
 	// hit, so a pattern that matches nothing on a huge keyspace still returns
 	// quickly with a cursor instead of iterating the whole database.
-	pageMaxKeys    = 1000
-	pageMaxScans   = 100 // SCAN iterations (~100k examined entries at COUNT 1000)
-	pageTimeBudget = 1500 * time.Millisecond
+	pageMaxKeys = 1000
+	// SCAN iterations at COUNT 1000, so ~400k entries examined. This is what
+	// bounds a selective filter: a pattern matching one key in ten thousand
+	// returns whatever it found in that many entries, not 1000 matches. The
+	// earlier 100 iterations returned a dozen keys on a production keyspace,
+	// which reads as "this pattern is rare" rather than "the scan stopped".
+	pageMaxScans = 400
+	// Kept under the client's 8s request timeout (frontend/src/lib/http.ts) with
+	// room for the round trip, so the budget that ends a page is always the
+	// server's — a client-side abort would lose the cursor with it.
+	pageTimeBudget = 5 * time.Second
 
 	scanBatchCount    = 1000
 	describeChunkSize = 500
@@ -41,7 +49,7 @@ func (c *RedisConnector) ListObjects(ctx context.Context, path string) ([]connec
 	deadline := time.Now().Add(legacyTimeBudget)
 
 	for {
-		page, err := c.scanKeysPage(ctx, path, cursor, "")
+		page, err := c.scanKeysPage(ctx, path, cursor, "", "")
 		if err != nil {
 			return nil, err
 		}
@@ -77,7 +85,7 @@ func (c *RedisConnector) ListObjects(ctx context.Context, path string) ([]connec
 // ListObjectsPage implements connector.PagedObjectLister: it returns one
 // budgeted slice of the keyspace plus a cursor to continue from.
 func (c *RedisConnector) ListObjectsPage(ctx context.Context, opts connector.ObjectPageOpts) (*connector.ObjectPage, error) {
-	page, err := c.scanKeysPage(ctx, opts.Path, opts.Cursor, opts.Node)
+	page, err := c.scanKeysPage(ctx, opts.Path, opts.Cursor, opts.Node, opts.Match)
 	if err != nil {
 		return nil, err
 	}
@@ -86,9 +94,16 @@ func (c *RedisConnector) ListObjectsPage(ctx context.Context, opts connector.Obj
 	truncated := page.nextCursor != ""
 
 	var objects []connector.Object
-	if opts.Path == "" {
+	switch {
+	case opts.Flat:
+		// Every key described under its full name. The tree is assembled from
+		// these on the client, so expanding a namespace costs nothing and the
+		// count on a folder is the number of keys actually behind it rather than
+		// the result of a second, differently-budgeted scan.
+		objects, err = c.describeLeafObjects(ctx, page.keys, func(key string) string { return key }, truncated)
+	case opts.Path == "":
 		objects, err = c.buildRootObjects(ctx, page.keys, truncated)
-	} else {
+	default:
 		objects, err = c.buildNamespaceObjects(ctx, opts.Path, page.keys, truncated)
 	}
 	if err != nil {
@@ -126,11 +141,41 @@ func (b *scanBudget) spent(collected int) bool {
 	return collected >= b.maxKeys || b.scans >= b.maxScans || time.Now().After(b.deadline)
 }
 
-func (c *RedisConnector) scanKeysPage(ctx context.Context, path, cursorToken, node string) (*redisKeyPage, error) {
-	pattern := "*"
-	if path != "" {
-		pattern = path + c.redis.separator + "*"
+// treeScanPattern combines the namespace the tree is showing with the user's
+// filter into one SCAN MATCH glob. The filter is scoped to the open path, so
+// narrowing inside a namespace searches that namespace instead of restarting at
+// the root.
+//
+// A filter with no glob metacharacter is treated as "contains" rather than as
+// an exact key: typing `profile` matching nothing at all would read as a broken
+// filter, and a user who wants an exact key has the key lookup for that.
+func treeScanPattern(path, separator, match string) string {
+	glob := "*"
+	if match != "" {
+		glob = match
+		if !strings.ContainsAny(match, "*?[") {
+			glob = "*" + match + "*"
+		}
 	}
+	if path == "" {
+		return glob
+	}
+	// A filter that already spells out a full key is absolute — the user typed it
+	// against the whole keyspace, in the tree root, to find a namespace too rare
+	// to appear in the first page. Prefixing it with the namespace being opened
+	// would build "fp:fp:*" and the folder found that way would open empty.
+	// Only a bare fragment is relative to the open path.
+	//
+	// Nothing outside the namespace can leak in: buildNamespaceObjects keeps only
+	// keys under path+separator regardless of how wide the pattern is.
+	if strings.Contains(match, separator) {
+		return glob
+	}
+	return path + separator + glob
+}
+
+func (c *RedisConnector) scanKeysPage(ctx context.Context, path, cursorToken, node, match string) (*redisKeyPage, error) {
+	pattern := treeScanPattern(path, c.redis.separator, match)
 
 	if c.redis.mode == config.RedisModeCluster {
 		if node != "" {
