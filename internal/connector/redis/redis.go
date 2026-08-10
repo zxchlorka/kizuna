@@ -203,25 +203,39 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 		"master_name": c.redis.masterName,
 	}
 
-	for _, key := range []string{
-		"redis_version", "uptime_in_seconds", "connected_clients", "role",
-		// Memory. maxmemory is 0 when no limit is configured, which the UI
-		// reports as "no limit" rather than as a zero-byte ceiling.
-		"used_memory", "used_memory_human", "used_memory_rss", "used_memory_peak",
-		"maxmemory", "maxmemory_human", "maxmemory_policy", "mem_fragmentation_ratio",
-	} {
+	// Identity and per-node facts. Memory and counts are deliberately NOT taken
+	// from here: INFO answers for whichever node served the connection, and in a
+	// cluster that node's numbers are a fraction of the whole.
+	for _, key := range []string{"redis_version", "uptime_in_seconds", "role", "maxmemory_policy"} {
 		if value, ok := parsed[key]; ok {
 			extra[key] = value
 		}
 	}
 
-	// Reported separately from INFO keyspace, which only ever describes the node
-	// that answered: in cluster mode that is a fraction of the keyspace, and a
-	// silently low total is worse than none at all.
-	if total, err := c.totalKeys(ctx); err != nil {
-		slog.Warn("failed to count redis keys", "error", err)
+	// Totals for the connection. In cluster mode every master is asked and the
+	// results summed; the per-node figures are kept alongside so the screen can
+	// say what one node holds without implying it is the total.
+	if stats, err := c.collectStats(ctx, parsed); err != nil {
+		slog.Warn("failed to collect redis stats", "error", err)
 	} else {
-		extra["total_keys"] = total
+		if stats.keysKnown {
+			extra["total_keys"] = stats.keys
+		}
+		extra["used_memory"] = stats.usedMemory
+		extra["maxmemory"] = stats.maxMemory
+		extra["used_memory_rss"] = stats.rss
+		extra["used_memory_peak"] = stats.peak
+		extra["connected_clients"] = stats.clients
+		extra["node_count"] = stats.nodes
+		if stats.nodes > 1 {
+			extra["node_used_memory"] = stats.usedMemory / int64(stats.nodes)
+			extra["node_maxmemory"] = stats.maxMemory / int64(stats.nodes)
+		}
+		// Reported per node by Redis; over a cluster the honest aggregate is the
+		// ratio of the totals rather than one node's figure.
+		if stats.usedMemory > 0 {
+			extra["mem_fragmentation_ratio"] = fmt.Sprintf("%.2f", float64(stats.rss)/float64(stats.usedMemory))
+		}
 	}
 
 	if c.topology != nil {
@@ -254,36 +268,107 @@ type redisDBSizer interface {
 	DBSize(ctx context.Context) *goredis.IntCmd
 }
 
-// totalKeys counts the keys of the whole connection. In cluster mode that is the
-// sum over the masters, since each node's DBSIZE covers only its own slots.
-func (c *RedisConnector) totalKeys(ctx context.Context) (int64, error) {
+// redisInfoer is the INFO half of a per-node client, probed for alongside
+// redisDBSizer so the SCAN-only fakes in the tests keep compiling.
+type redisInfoer interface {
+	Info(ctx context.Context, sections ...string) *goredis.StringCmd
+}
+
+// clusterStats is what the Overview screen reports about a whole connection.
+// Every field is a total, not a sample: INFO answers for the one node that
+// served the connection, and in a 24-master cluster its 20 GiB of 30 GiB reads
+// as the cluster's when it is one twenty-fourth of it.
+type clusterStats struct {
+	// Masters counted. 1 outside cluster mode.
+	nodes int
+	keys  int64
+	// keysKnown is false when DBSIZE could not be read. Memory still is: a
+	// missing key count must not blank out the rest of the screen.
+	keysKnown  bool
+	usedMemory int64
+	// 0 when no limit is configured, matching Redis's own reporting.
+	maxMemory int64
+	rss       int64
+	peak      int64
+	clients   int64
+}
+
+func statsFromInfo(parsed map[string]string) clusterStats {
+	return clusterStats{
+		nodes:      1,
+		usedMemory: parseRedisInfoInt(parsed, "used_memory"),
+		maxMemory:  parseRedisInfoInt(parsed, "maxmemory"),
+		rss:        parseRedisInfoInt(parsed, "used_memory_rss"),
+		peak:       parseRedisInfoInt(parsed, "used_memory_peak"),
+		clients:    parseRedisInfoInt(parsed, "connected_clients"),
+	}
+}
+
+func parseRedisInfoInt(parsed map[string]string, key string) int64 {
+	value, err := strconv.ParseInt(strings.TrimSpace(parsed[key]), 10, 64)
+	if err != nil {
+		return 0
+	}
+	return value
+}
+
+// collectStats totals the connection. Outside cluster mode that is the INFO
+// already read plus one DBSIZE; in cluster mode every master is asked, because
+// each holds only its own slots and its own share of the memory.
+func (c *RedisConnector) collectStats(ctx context.Context, parsed map[string]string) (clusterStats, error) {
 	if c.redis.mode != config.RedisModeCluster {
-		return c.client.Do(ctx, "DBSIZE").Int64()
+		stats := statsFromInfo(parsed)
+		keys, err := c.client.Do(ctx, "DBSIZE").Int64()
+		if err != nil {
+			slog.Warn("failed to count redis keys", "error", err)
+			return stats, nil
+		}
+		stats.keys = keys
+		stats.keysKnown = true
+		return stats, nil
 	}
 
 	if c.topology == nil {
-		return 0, errors.New("cluster topology is unavailable")
+		return clusterStats{}, errors.New("cluster topology is unavailable")
 	}
 	masters, err := c.topology.Masters(ctx)
 	if err != nil {
-		return 0, err
+		return clusterStats{}, err
 	}
 
-	var total int64
+	total := clusterStats{keysKnown: true}
 	for _, master := range masters {
 		client, err := c.topology.NodeScanClient(master)
 		if err != nil {
-			return 0, err
+			return clusterStats{}, err
 		}
+
 		sizer, ok := client.(redisDBSizer)
 		if !ok {
-			return 0, fmt.Errorf("node %s does not support DBSIZE", master)
+			return clusterStats{}, fmt.Errorf("node %s does not support DBSIZE", master)
 		}
 		size, err := sizer.DBSize(ctx).Result()
 		if err != nil {
-			return 0, err
+			return clusterStats{}, err
 		}
-		total += size
+
+		infoer, ok := client.(redisInfoer)
+		if !ok {
+			return clusterStats{}, fmt.Errorf("node %s does not support INFO", master)
+		}
+		raw, err := infoer.Info(ctx).Result()
+		if err != nil {
+			return clusterStats{}, err
+		}
+
+		node := statsFromInfo(parseRedisInfo(raw))
+		total.nodes++
+		total.keys += size
+		total.usedMemory += node.usedMemory
+		total.maxMemory += node.maxMemory
+		total.rss += node.rss
+		total.peak += node.peak
+		total.clients += node.clients
 	}
 	return total, nil
 }

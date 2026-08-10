@@ -126,6 +126,13 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
   const fragmentation = num(extra, 'mem_fragmentation_ratio')
   const role = str(extra, 'role')
   const mode = str(extra, 'mode')
+  const nodes = num(extra, 'node_count') ?? 1
+  const nodeUsed = num(extra, 'node_used_memory')
+  const nodeMax = num(extra, 'node_maxmemory')
+  // Everything below the headline is a cluster total. Said plainly, because the
+  // same screen used to show one node's 20 GiB of 30 GiB as though it were the
+  // whole cluster's — which on 24 masters understated it twenty-four fold.
+  const clusterNote = nodes > 1 ? `Summed across ${nodes} masters` : undefined
 
   return (
     <div className="flex-1 overflow-auto p-4">
@@ -188,7 +195,17 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
                     This server did not report its memory use.
                   </div>
                 ) : max !== null && max > 0 ? (
-                  <MemoryMeter used={used} max={max} />
+                  <>
+                    <MemoryMeter used={used} max={max} />
+                    {nodes > 1 && (
+                      <div className="mt-2 font-mono text-[11px] text-muted-foreground">
+                        Across {nodes} masters
+                        {nodeUsed !== null && nodeMax !== null
+                          ? ` — ${formatBytes(nodeUsed)} of ${formatBytes(nodeMax)} on each`
+                          : ''}
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div>
                     <div className="font-mono text-sm">{formatBytes(used)} used</div>
@@ -201,8 +218,8 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3">
                 {statCard('Policy', policy ?? '—', policy === 'noeviction' ? 'Writes fail at the limit' : undefined)}
-                {statCard('Peak', peak === null ? '—' : formatBytes(peak))}
-                {statCard('RSS', rss === null ? '—' : formatBytes(rss))}
+                {statCard('Peak', peak === null ? '—' : formatBytes(peak), clusterNote)}
+                {statCard('RSS', rss === null ? '—' : formatBytes(rss), clusterNote)}
               </div>
             </div>
 
@@ -210,10 +227,14 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
               {statCard(
                 'Total keys',
                 totalKeys === null ? '—' : formatExactCount(totalKeys),
-                totalKeys === null ? 'Not counted' : mode === 'cluster' ? 'Summed across masters' : undefined
+                totalKeys === null ? 'Not counted' : clusterNote
               )}
-              {statCard('Uptime', uptime === null ? '—' : formatDurationSeconds(uptime))}
-              {statCard('Clients', clients === null ? '—' : formatExactCount(clients))}
+              {statCard(
+                'Uptime',
+                uptime === null ? '—' : formatDurationSeconds(uptime),
+                nodes > 1 ? 'On the node that answered' : undefined
+              )}
+              {statCard('Clients', clients === null ? '—' : formatExactCount(clients), clusterNote)}
               {statCard(
                 'Fragmentation',
                 fragmentation === null ? '—' : fragmentation.toFixed(2),
