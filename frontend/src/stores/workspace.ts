@@ -106,6 +106,7 @@ interface WorkspaceStore {
   fetchTree: (connId: string, path?: string, opts?: { refresh?: boolean }) => Promise<void>
   setSelectedNode: (connId: string, node: string) => Promise<void>
   setKeyPattern: (connId: string, pattern: string) => Promise<void>
+  scanMoreKeys: (connId: string) => Promise<void>
   refreshTree: (connId: string) => Promise<void>
   toggleSchema: (connId: string, schema: string) => void
   setTreeVisibility: (key: TreeVisibilityKey, visible: boolean) => void
@@ -167,7 +168,7 @@ function isRedisConnection(connId: string): boolean {
 function buildObjectsQuery(
   connId: string,
   path: string,
-  opts: { paged: boolean; cursor?: string; node?: string; match?: string }
+  opts: { paged: boolean; cursor?: string; node?: string; match?: string; flat?: boolean }
 ): string {
   const params = new URLSearchParams()
   if (path) params.set('path', path)
@@ -176,6 +177,9 @@ function buildObjectsQuery(
     if (opts.cursor) params.set('cursor', opts.cursor)
     if (opts.node) params.set('node', opts.node)
     if (opts.match) params.set('match', opts.match)
+    // Redis returns one flat page of keys and the tree is grouped on the client,
+    // so opening a namespace never costs a second scan.
+    if (opts.flat) params.set('flat', '1')
   }
   const query = params.toString()
   return `/api/connections/${connId}/objects${query ? `?${query}` : ''}`
@@ -341,7 +345,9 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       try {
         const node = get().selectedNodeByConnection[connId]
         const match = get().keyPatternByConnection[connId]
-        const res = await fetchWithTimeout(buildObjectsQuery(connId, normalizedPath, { paged, node, match }))
+        const res = await fetchWithTimeout(
+          buildObjectsQuery(connId, normalizedPath, { paged, node, match, flat: paged })
+        )
         if (!res.ok) {
           const body = await res.json().catch(() => ({ error: res.statusText }))
           throw new Error(body.error || 'Failed to fetch objects')
@@ -433,22 +439,19 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     await get().refreshTree(connId)
   },
 
-  // The key filter is per connection rather than per tree node: it narrows every
-  // level at once, so changing it re-reads the whole tree the way switching
-  // cluster node does. Re-applying the same pattern is a no-op so that a
-  // debounced input settling on its current value costs no SCAN.
+  // The key filter drives the single scan the whole Redis tree is built from, so
+  // changing it re-runs that scan the way switching cluster node does.
+  // Re-applying the same pattern is a no-op, so a debounced input settling on
+  // its current value costs no SCAN.
   setKeyPattern: async (connId: string, pattern: string) => {
     if ((get().keyPatternByConnection[connId] ?? '') === pattern) {
       return
     }
     set((state) => {
-      // Every cached level of this tree was scanned under the OLD pattern, so all
-      // of it is now wrong -- including levels that are currently collapsed.
-      // refreshTree alone is not enough: it re-reads the root and the expanded
-      // namespaces, while a collapsed namespace keeps its entry, and expanding it
-      // renders that entry without refetching (ObjectTree only fetches a level it
-      // has no items for). The result was a filtered count over an unfiltered
-      // list of children.
+      // Everything cached for this tree came from a scan under the OLD pattern,
+      // so all of it is now wrong. Dropped rather than refreshed in place: a
+      // continued scan (Scan more) appends to what is already there, and merging
+      // pages from two different patterns would be worse than an empty tree.
       const isOtherConnection = (key: string) => parseTreeKey(key).connId !== connId
       const keep = <T,>(record: Record<string, T>): Record<string, T> =>
         Object.fromEntries(Object.entries(record).filter(([key]) => isOtherConnection(key)))
@@ -464,16 +467,75 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     await get().refreshTree(connId)
   },
 
+  // Continues the Redis scan from where the last page stopped and appends what
+  // it finds. The tree is grouped on the client from one flat list, so appending
+  // keys is all it takes for namespaces and their counts to grow -- no level
+  // needs re-reading.
+  scanMoreKeys: async (connId: string) => {
+    const key = buildTreeKey(connId)
+    const cursor = get().treeCursors[key]
+    if (!cursor || get().treeLoadingByKey[key]) {
+      return
+    }
+
+    set((state) => {
+      const loadingByKey = { ...state.treeLoadingByKey, [key]: true }
+      return { treeLoadingByKey: loadingByKey, treeLoading: hasLoadingTreeRequests(loadingByKey) }
+    })
+
+    try {
+      const node = get().selectedNodeByConnection[connId]
+      const match = get().keyPatternByConnection[connId]
+      const res = await fetchWithTimeout(
+        buildObjectsQuery(connId, '', { paged: true, cursor, node, match, flat: true })
+      )
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }))
+        throw new Error(body.error || 'Failed to fetch more keys')
+      }
+
+      const page = (await res.json()) as ObjectPageResponse
+      set((state) => {
+        // A key can come back twice across pages: SCAN guarantees every key
+        // present for the whole iteration is returned at least once, not at most
+        // once. Deduplicating here keeps the tree honest about its counts.
+        const seen = new Set((state.treeItems[key] ?? []).map((item) => item.path ?? item.name))
+        const added = (page.objects ?? []).filter((item) => !seen.has(item.path ?? item.name))
+        const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+        return {
+          treeItems: { ...state.treeItems, [key]: [...(state.treeItems[key] ?? []), ...added] },
+          treeCursors: { ...state.treeCursors, [key]: page.next_cursor ?? '' },
+          treeLoadingByKey: loadingByKey,
+          treeLoading: hasLoadingTreeRequests(loadingByKey),
+        }
+      })
+    } catch (error) {
+      set((state) => {
+        const loadingByKey = { ...state.treeLoadingByKey, [key]: false }
+        return {
+          treeLoadingByKey: loadingByKey,
+          treeErrorByKey: { ...state.treeErrorByKey, [key]: (error as Error).message },
+          treeLoading: hasLoadingTreeRequests(loadingByKey),
+        }
+      })
+    }
+  },
+
   // refreshTree re-reads the root plus every currently expanded namespace of one
   // connection, stale-while-revalidate: the existing tree stays visible for the
   // whole request and is replaced per key only when a newer response lands. It
   // used to delete every cached page up front, which blanked the sidebar on each
   // refresh and lost the rows entirely if the request then failed.
   refreshTree: async (connId: string) => {
-    const expandedNamespaces = Array.from(get().expandedSchemas)
-      .filter((key) => parseTreeKey(key).connId === connId)
-      .map((key) => parseTreeKey(key).path)
-      .filter((path) => path !== '')
+    // A Redis tree is one flat page grouped on the client, so its namespaces are
+    // not separately fetched levels and there is nothing per-namespace to
+    // refresh -- re-reading the root rebuilds all of it.
+    const expandedNamespaces = isRedisConnection(connId)
+      ? []
+      : Array.from(get().expandedSchemas)
+          .filter((key) => parseTreeKey(key).connId === connId)
+          .map((key) => parseTreeKey(key).path)
+          .filter((path) => path !== '')
 
     const generation = (treeRefreshSeq.get(connId) ?? 0) + 1
     treeRefreshSeq.set(connId, generation)
@@ -490,6 +552,13 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       ])
 
       if (!isNewestRefresh()) {
+        return
+      }
+
+      // A Redis tree has no per-namespace cache to prune, and its root items are
+      // keys rather than namespaces -- running the sweep below against them would
+      // find no "live namespace" for any expanded folder and collapse every one.
+      if (isRedisConnection(connId)) {
         return
       }
 
