@@ -12,6 +12,10 @@ interface JsonFieldTreeNodeProps {
   onToggle: (path: string) => void
   onFocus: (path: string) => void
   onSelect: (node: SchemaNode) => void
+  // Double-click confirms in one gesture: single-click already selects, so the
+  // trip to the Use field button is the only thing left between choosing a row
+  // and using it.
+  onConfirm: (node: SchemaNode) => void
 }
 
 // Type badge colours reuse the app's established data vocabulary (see
@@ -57,6 +61,7 @@ export function JsonFieldTreeNode({
   onToggle,
   onFocus,
   onSelect,
+  onConfirm,
 }: JsonFieldTreeNodeProps) {
   const isExpanded = expanded.has(node.path)
   const isFocused = focusedPath === node.path
@@ -85,6 +90,7 @@ export function JsonFieldTreeNode({
         aria-selected={isSelected}
         onMouseDown={() => onFocus(node.path)}
         onClick={primaryAction}
+        onDoubleClick={node.selectable ? () => onConfirm(node) : undefined}
         className={cn(
           fieldRowGrid,
           'rounded-sm py-1 pr-2 transition-colors',
@@ -158,6 +164,7 @@ export function JsonFieldTreeNode({
             expanded={expanded}
             focusedPath={focusedPath}
             selectedPath={selectedPath}
+            onConfirm={onConfirm}
             onToggle={onToggle}
             onFocus={onFocus}
             onSelect={onSelect}

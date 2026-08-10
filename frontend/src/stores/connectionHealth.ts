@@ -17,11 +17,18 @@ interface ConnectionHealthStore {
   hydrate: () => void
   prune: (ids: string[]) => void
   refresh: (id: string, options?: { force?: boolean }) => Promise<ConnectionHealthEntry>
-  refreshStale: (ids: string[]) => Promise<void>
+  refreshStale: (ids: string[], options?: { force?: boolean }) => Promise<void>
 }
 
 const STORAGE_KEY = 'kizuna-connection-health'
-const HEALTH_TTL_MS = 60_000
+export const HEALTH_TTL_MS = 60_000
+
+// How often the connection list re-examines its entries. Deliberately shorter
+// than the TTL: a tick only turns into real network checks for entries that have
+// crossed HEALTH_TTL_MS, so the cost stays one round of checks per minute, but
+// polling at exactly the TTL would let a tick land just before an entry expires
+// and leave the status stale for close to two minutes.
+export const HEALTH_POLL_MS = HEALTH_TTL_MS / 2
 // Cap concurrent health checks so a large connection list refreshes fast without
 // dialing every datasource at once. Each check is bounded by fetchWithTimeout on
 // the client and dial/ping deadlines on the server, so workers never hang.
@@ -199,10 +206,20 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
     return request
   },
 
-  refreshStale: async (ids: string[]) => {
+  // force re-tests everything regardless of how recently it was checked. It is
+  // what opening or reloading the list means: the user is asking, now, whether
+  // these are up. Without it a reload inside the TTL window returned the cached
+  // answer and looked like the page had simply ignored the reload.
+  //
+  // The cached entry is still rendered while the re-test runs, so a forced pass
+  // revalidates in the background instead of blanking the cards.
+  refreshStale: async (ids: string[], options?: { force?: boolean }) => {
     const stale = ids.filter((id) => {
       const entry = get().entries[id]
-      return !isFresh(entry) && !entry?.checking
+      if (entry?.checking) {
+        return false
+      }
+      return options?.force === true || !isFresh(entry)
     })
 
     let cursor = 0
@@ -211,7 +228,7 @@ export const useConnectionHealthStore = create<ConnectionHealthStore>((set, get)
       while (cursor < stale.length) {
         const id = stale[cursor++]
         try {
-          await get().refresh(id)
+          await get().refresh(id, { force: options?.force })
         } catch {
           // Keep background refresh best-effort. The card will render the error state.
         }

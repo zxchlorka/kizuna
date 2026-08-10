@@ -37,15 +37,15 @@ describe('Filter loaded — client-side only', () => {
     const fetchMock = vi.fn()
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    useKafkaStore.getState().setLoadedFilter('tab-filter', 'src.event_data.events[].name', 'Auth')
+    useKafkaStore.getState().setLoadedFilter('tab-filter', [{ field: 'src.event_data.events[].name', value: 'Auth', op: 'eq' }])
     let tab = useKafkaStore.getState().tabs['tab-filter']
     expect(tab.filterActive).toBe(true)
-    expect(tab.filterField).toBe('src.event_data.events[].name')
+    expect(tab.filterConditions[0].field).toBe('src.event_data.events[].name')
 
     useKafkaStore.getState().clearLoadedFilter('tab-filter')
     tab = useKafkaStore.getState().tabs['tab-filter']
     expect(tab.filterActive).toBe(false)
-    expect(tab.filterField).toBe('')
+    expect(tab.filterConditions).toEqual([])
 
     // The whole point of "Filter loaded": zero requests, and the cursor state
     // (nextCursor/hasMore) is never mutated by filtering.
@@ -69,7 +69,7 @@ describe('Search topic — backend scan', () => {
     )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-scan', 'src.event_data.events[].name', 'Auth')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-scan', [{ field: 'src.event_data.events[].name', value: 'Auth', op: 'eq' }])
 
     const tab = useKafkaStore.getState().tabs['tab-scan']
     expect(tab.searchActive).toBe(true)
@@ -106,7 +106,7 @@ describe('Search topic — backend scan', () => {
       )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-more', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-more', [{ field: 'a.b', value: 'x', op: 'eq' }])
     await useKafkaStore.getState().scanMore('c1', 'topic', 'tab-more')
 
     const tab = useKafkaStore.getState().tabs['tab-more']
@@ -138,7 +138,7 @@ describe('Search topic — backend scan', () => {
     )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-partial', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-partial', [{ field: 'a.b', value: 'x', op: 'eq' }])
 
     const tab = useKafkaStore.getState().tabs['tab-partial']
     expect(tab.scanPartial).toBe(true)
@@ -174,7 +174,7 @@ describe('Cancel aborts the in-flight request', () => {
       )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cancel', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cancel', [{ field: 'a.b', value: 'x', op: 'eq' }])
     expect(useKafkaStore.getState().tabs['tab-cancel'].messages).toHaveLength(1)
 
     // Kick off a second step but don't await it — it hangs on the mock above.
@@ -232,12 +232,12 @@ describe('Cancel aborts the in-flight request', () => {
       )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', [{ field: 'a.b', value: 'x', op: 'eq' }])
     const stale = useKafkaStore.getState().scanMore('c1', 'topic', 'tab-stale')
     await Promise.resolve()
 
     useKafkaStore.getState().cancelScan('tab-stale')
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', 'a.b', 'y')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stale', [{ field: 'a.b', value: 'y', op: 'eq' }])
 
     const afterReplacement = useKafkaStore.getState().tabs['tab-stale']
     expect(afterReplacement.messages).toHaveLength(1)
@@ -292,7 +292,7 @@ describe('Search all — ceiling on accumulated matches', () => {
     })
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cap', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cap', [{ field: 'a.b', value: 'x', op: 'eq' }])
     expect(useKafkaStore.getState().tabs['tab-cap'].messages).toHaveLength(3000)
     expect(useKafkaStore.getState().tabs['tab-cap'].scanLimitReached).toBe(false)
 
@@ -325,7 +325,7 @@ describe('Search all — ceiling on accumulated matches', () => {
     )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact', [{ field: 'a.b', value: 'x', op: 'eq' }])
 
     const tab = useKafkaStore.getState().tabs['tab-exact']
     expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
@@ -347,7 +347,7 @@ describe('Search all — ceiling on accumulated matches', () => {
     )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact-more', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-exact-more', [{ field: 'a.b', value: 'x', op: 'eq' }])
 
     const tab = useKafkaStore.getState().tabs['tab-exact-more']
     expect(tab.messages).toHaveLength(MAX_SCAN_MATCHES)
@@ -376,7 +376,7 @@ describe('Search all — ceiling on accumulated matches', () => {
     )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-reset', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-reset', [{ field: 'a.b', value: 'x', op: 'eq' }])
 
     expect(useKafkaStore.getState().tabs['tab-reset'].scanLimitReached).toBe(false)
   })
@@ -397,7 +397,7 @@ describe('loadInitialMessages — mount-path guard against search clobbering', (
       )
     )
     vi.stubGlobal('fetch', searchFetch as unknown as typeof fetch)
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-remount', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-remount', [{ field: 'a.b', value: 'x', op: 'eq' }])
 
     const afterSearch = useKafkaStore.getState().tabs['tab-remount']
     expect(afterSearch.searchActive).toBe(true)
@@ -491,7 +491,7 @@ describe('Refresh is search-aware (settled-search clobber guard)', () => {
       )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-refresh-search', 'src.event_data.events[].name', 'Auth')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-refresh-search', [{ field: 'src.event_data.events[].name', value: 'Auth', op: 'eq' }])
 
     const settled = useKafkaStore.getState().tabs['tab-refresh-search']
     expect(settled.searchActive).toBe(true)
@@ -575,7 +575,7 @@ describe('Clearing a search returns to browse', () => {
       )
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-clear', 'a.b', 'x')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-clear', [{ field: 'a.b', value: 'x', op: 'eq' }])
     await useKafkaStore.getState().clearSearch('c1', 'topic', 'tab-clear')
 
     const tab = useKafkaStore.getState().tabs['tab-clear']
@@ -684,8 +684,8 @@ describe('Seek — browse anchor', () => {
         'tab-seek': {
           ...useKafkaStore.getState().tabs['tab-seek'],
           searchActive: true,
-          searchField: 'src.event_data.events[].name',
-          searchValue: 'Auth',
+          searchConditions: [{ field: 'src.event_data.events[].name', value: 'Auth', op: 'eq' }],
+          searchMode: 'and',
           messages: [scanRow(0, 9)],
         },
       },
@@ -876,7 +876,7 @@ describe('scanAll — автоцикл до начала лога', () => {
       .mockResolvedValueOnce(scanPage(3000, [900], false, 0))
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-all', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-all', [{ field: 'Metadata', value: '', op: 'exists' }])
     await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-all')
 
     const tab = useKafkaStore.getState().tabs['tab-all']
@@ -900,7 +900,7 @@ describe('scanAll — автоцикл до начала лога', () => {
     })
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cancel', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-cancel', [{ field: 'Metadata', value: '', op: 'exists' }])
     await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-cancel')
 
     const tab = useKafkaStore.getState().tabs['tab-cancel']
@@ -917,7 +917,7 @@ describe('scanAll — автоцикл до начала лога', () => {
     const fetchMock = vi.fn(() => Promise.resolve(scanPage(10, [], true, 777)))
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
 
-    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stuck', 'Metadata', '', 'exists')
+    await useKafkaStore.getState().searchTopic('c1', 'topic', 'tab-stuck', [{ field: 'Metadata', value: '', op: 'exists' }])
     await useKafkaStore.getState().scanAll('c1', 'topic', 'tab-stuck')
 
     // Первый запрос — сам поиск, дальше ровно один шаг цикла, который не сдвинул

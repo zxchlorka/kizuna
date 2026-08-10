@@ -136,13 +136,13 @@ describe('refreshTree — stale-while-revalidate', () => {
     expect(useWorkspaceStore.getState().treeRefreshingByConnection[CONN]).toBeFalsy()
   })
 
-  it('re-reads an expanded namespace and leaves it expanded', async () => {
+  // The Redis tree is one flat page grouped on the client, so a refresh re-reads
+  // the root and nothing else — and an open folder stays open, because expansion
+  // is no longer tied to a fetched level.
+  it('re-reads only the root and leaves an expanded namespace expanded', async () => {
     useWorkspaceStore.setState({
-      treeItems: {
-        [rootKey]: [{ name: 'profile', type: 'schema' }] as never,
-        [nsKey('profile')]: keyPage(['profile:1']).objects as never,
-      },
-      treeLoadedByKey: { [rootKey]: true, [nsKey('profile')]: true },
+      treeItems: { [rootKey]: keyPage(['profile:1']).objects as never },
+      treeLoadedByKey: { [rootKey]: true },
       expandedSchemas: new Set([nsKey('profile')]),
     })
     const requested: string[] = []
@@ -150,16 +150,15 @@ describe('refreshTree — stale-while-revalidate', () => {
       'fetch',
       vi.fn(async (url: string) => {
         requested.push(String(url))
-        return String(url).includes('path=profile')
-          ? jsonResponse(keyPage(['profile:1', 'profile:2']))
-          : jsonResponse({ objects: [{ name: 'profile', type: 'schema' }], next_cursor: '' })
+        return jsonResponse(keyPage(['profile:1', 'profile:2']))
       }) as unknown as typeof fetch
     )
 
     await useWorkspaceStore.getState().refreshTree(CONN)
 
-    expect(requested.some((url) => url.includes('path=profile'))).toBe(true)
-    expect(names(nsKey('profile'))).toEqual(['profile:1', 'profile:2'])
+    expect(requested.filter((url) => url.includes('path=')).length).toBe(0)
+    expect(requested.some((url) => url.includes('flat=1'))).toBe(true)
+    expect(names(rootKey)).toEqual(['profile:1', 'profile:2'])
     expect(useWorkspaceStore.getState().expandedSchemas.has(nsKey('profile'))).toBe(true)
   })
 
@@ -183,28 +182,42 @@ describe('refreshTree — stale-while-revalidate', () => {
     expect(requested.filter((url) => url.includes('path=')).length).toBe(0)
   })
 
-  it('drops cached pages for a namespace that no longer exists', async () => {
+  // Scan more continues from the cursor and appends. SCAN can hand back a key it
+  // already returned, so the append must not double-count it.
+  it('appends a continued scan and drops keys already held', async () => {
     useWorkspaceStore.setState({
-      treeItems: {
-        [rootKey]: [
-          { name: 'profile', type: 'schema' },
-          { name: 'gone', type: 'schema' },
-        ] as never,
-        [nsKey('gone')]: keyPage(['gone:1']).objects as never,
-      },
-      treeCursors: { [nsKey('gone')]: 'stale-cursor' },
-      treeLoadedByKey: { [rootKey]: true, [nsKey('gone')]: true },
-      expandedSchemas: new Set<string>(),
+      treeItems: { [rootKey]: keyPage(['profile:1', 'profile:2']).objects as never },
+      treeCursors: { [rootKey]: 'cursor-7' },
+      treeLoadedByKey: { [rootKey]: true },
     })
+    const requested: string[] = []
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => jsonResponse({ objects: [{ name: 'profile', type: 'schema' }], next_cursor: '' })) as unknown as typeof fetch
+      vi.fn(async (url: string) => {
+        requested.push(String(url))
+        return jsonResponse(keyPage(['profile:2', 'profile:3'], ''))
+      }) as unknown as typeof fetch
     )
 
-    await useWorkspaceStore.getState().refreshTree(CONN)
+    await useWorkspaceStore.getState().scanMoreKeys(CONN)
 
-    expect(useWorkspaceStore.getState().treeItems[nsKey('gone')]).toBeUndefined()
-    expect(useWorkspaceStore.getState().treeCursors[nsKey('gone')]).toBeUndefined()
+    expect(requested.some((url) => url.includes('cursor=cursor-7'))).toBe(true)
+    expect(names(rootKey)).toEqual(['profile:1', 'profile:2', 'profile:3'])
+    expect(useWorkspaceStore.getState().treeCursors[rootKey]).toBe('')
+  })
+
+  it('does nothing when there is no cursor to continue from', async () => {
+    useWorkspaceStore.setState({
+      treeItems: { [rootKey]: keyPage(['profile:1']).objects as never },
+      treeCursors: { [rootKey]: '' },
+    })
+    const fetchMock = vi.fn(async () => jsonResponse(keyPage(['profile:9'])))
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useWorkspaceStore.getState().scanMoreKeys(CONN)
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(names(rootKey)).toEqual(['profile:1'])
   })
 
   it('does not let a slower earlier refresh overwrite a newer one', async () => {

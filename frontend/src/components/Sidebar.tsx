@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, RefreshCw, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
+import { RedisKeyFilter } from '@/components/redis/RedisKeyFilter'
 import { RedisKeyLookup } from '@/components/redis/RedisKeyLookup'
 import { EmptyState } from '@/components/EmptyState'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -328,7 +329,12 @@ export function Sidebar({ connId }: SidebarProps) {
               </div>
             </div>
           )}
-          {currentConnection && isRedisConnection && <RedisKeyLookup connId={connId} />}
+          {currentConnection && isRedisConnection && (
+            <>
+              <RedisKeyLookup connId={connId} />
+              <RedisKeyFilter connId={connId} />
+            </>
+          )}
           {currentConnection && !isRedisConnection && !isKafkaConnection && (
             <TreeDatabaseSwitcher key={viewConnId} pageConnId={connId} viewConnId={viewConnId} />
           )}

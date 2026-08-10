@@ -65,3 +65,44 @@ export function splitSharedPrefix(value: string, other: string): SharedPrefixSpl
   }
   return { prefix: value.slice(0, shared), rest: value.slice(shared) }
 }
+
+const BYTE_UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB', 'PiB'] as const
+
+// formatBytes renders a byte count in binary units: 250000000000 -> "232.83 GiB".
+//
+// Binary rather than decimal because that is what the servers report: Redis
+// INFO's used_memory and Kafka's retention.bytes are both counted in bytes and
+// conventionally read as GiB, and rendering 250000000000 as "250 GB" next to a
+// server that calls it 232 GiB invites exactly the mismatch this screen exists
+// to prevent.
+export function formatBytes(value: number): string {
+  if (!Number.isFinite(value)) return '—'
+  const negative = value < 0
+  let size = Math.abs(value)
+  let unit = 0
+  while (size >= 1024 && unit < BYTE_UNITS.length - 1) {
+    size /= 1024
+    unit += 1
+  }
+  // Whole bytes never get a fraction; larger units keep two digits, enough to
+  // tell 232.83 GiB from 232.91 GiB without implying byte-level precision.
+  const rendered = unit === 0 ? String(Math.round(size)) : size.toFixed(2)
+  return `${negative ? '-' : ''}${rendered} ${BYTE_UNITS[unit]}`
+}
+
+// formatDurationSeconds renders an elapsed time at the two coarsest units that
+// carry information: 1043400 -> "12d 1h". Uptime is read to answer "was this
+// restarted recently", so seconds stop mattering once there are hours.
+export function formatDurationSeconds(value: number): string {
+  if (!Number.isFinite(value) || value < 0) return '—'
+  const total = Math.floor(value)
+  const days = Math.floor(total / 86400)
+  const hours = Math.floor((total % 86400) / 3600)
+  const minutes = Math.floor((total % 3600) / 60)
+  const seconds = total % 60
+
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
+}

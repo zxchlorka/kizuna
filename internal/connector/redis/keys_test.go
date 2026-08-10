@@ -249,3 +249,39 @@ func TestRedisListObjectsPageLeafDescribeUsesPipeline(t *testing.T) {
 		t.Fatalf("unexpected leaf ttl: %#v", leaf.TTLSeconds)
 	}
 }
+
+func TestTreeScanPattern(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		path  string
+		match string
+		want  string
+	}{
+		{name: "root, no filter", path: "", match: "", want: "*"},
+		{name: "namespace, no filter", path: "profile", match: "", want: "profile:*"},
+		{name: "root, plain text is a contains match", path: "", match: "device", want: "*device*"},
+		{name: "root, glob is passed through", path: "", match: "device:*", want: "device:*"},
+		{name: "root, question mark counts as a glob", path: "", match: "dev?ce", want: "dev?ce"},
+		{name: "root, character class counts as a glob", path: "", match: "dev[iu]ce", want: "dev[iu]ce"},
+		{name: "namespace scopes the filter", path: "profile", match: "2029*", want: "profile:2029*"},
+		{name: "namespace scopes a contains match", path: "profile", match: "2029", want: "profile:*2029*"},
+		// Typed in the root to surface a namespace buried past the first page,
+		// then that namespace is opened. Scoping the pattern again would build
+		// "fp:fp:*" and the folder would open empty.
+		{name: "a full-key filter stays absolute when its namespace opens", path: "fp", match: "fp:*", want: "fp:*"},
+		{name: "a full-key filter with a deeper path stays absolute", path: "fp", match: "fp:1*", want: "fp:1*"},
+		{name: "a separator without a glob is still absolute", path: "fp", match: "fp:", want: "*fp:*"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := treeScanPattern(tt.path, ":", tt.match); got != tt.want {
+				t.Fatalf("treeScanPattern(%q, %q) = %q, want %q", tt.path, tt.match, got, tt.want)
+			}
+		})
+	}
+}

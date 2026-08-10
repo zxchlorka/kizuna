@@ -82,7 +82,9 @@ function useOpenLinkEnd(resolve: (link: LinkRecord) => LinkEndpoint) {
 
       openTab(end.connId, end.scope, 'kafka_topic')
       go()
-      void searchTopic(end.connId, end.scope, `${end.connId}:kafka_topic:${end.scope}`, end.field, value)
+      void searchTopic(end.connId, end.scope, `${end.connId}:kafka_topic:${end.scope}`, [
+        { field: end.field, value, op: 'eq' },
+      ])
     },
     [resolve, navigate, openTab, openTabWithFilter, openConnection, resolveObjectType, searchTopic, pushToast]
   )
