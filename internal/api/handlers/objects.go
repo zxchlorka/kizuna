@@ -47,6 +47,7 @@ func (h *ObjectsHandler) ListObjects(w http.ResponseWriter, r *http.Request) {
 			Cursor: query.Get("cursor"),
 			Node:   query.Get("node"),
 			Match:  query.Get("match"),
+			Flat:   query.Get("flat") == "1",
 		})
 		if err != nil {
 			writeConnectorError(w, err)

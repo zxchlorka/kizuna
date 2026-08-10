@@ -29,8 +29,10 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { buildRedisTree, type RedisTreeNode } from '@/lib/redisTree'
+import { cn } from '@/lib/utils'
 import { normalizeVisibleSchemasSelection } from '@/lib/objectTreeVisibleSchemas'
-import { getObjectTypeLabel, isRedisNamespace } from '@/lib/objectTypes'
+import { getObjectTypeLabel } from '@/lib/objectTypes'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
@@ -186,6 +188,7 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const fetchTree = useWorkspaceStore((state) => state.fetchTree)
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
   const toggleSchema = useWorkspaceStore((state) => state.toggleSchema)
+  const scanMoreKeys = useWorkspaceStore((state) => state.scanMoreKeys)
   const setVisibleSchemas = useWorkspaceStore((state) => state.setVisibleSchemas)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const ddl = useDataStore((state) => state.ddl)
@@ -203,6 +206,12 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const isKafkaConnection = currentConnection?.type === 'kafka'
   const rootKey = buildTreeKey(connId)
   const rootItems = useMemo(() => treeItems[rootKey] ?? [], [rootKey, treeItems])
+  // One flat page in, the whole hierarchy out. Rebuilt only when the page or the
+  // separator changes, so expanding a namespace never recomputes it.
+  const redisTree = useMemo(
+    () => buildRedisTree(rootItems, currentConnection?.separator || ':'),
+    [rootItems, currentConnection?.separator]
+  )
   const rootLoading = treeLoadingByKey[rootKey] ?? false
   const rootError = treeErrorByKey[rootKey] ?? null
   const rootLoaded = treeLoadedByKey[rootKey] ?? false
@@ -460,86 +469,62 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   // buildTreeKey(connId) is the `${connId}::` prefix every level of this tree
   // shares, so startsWith identifies this connection's keys and the inequality
   // drops the root itself.
-  const namespaceNoticeVisible = Array.from(expandedSchemas).some(
-    (key) => key !== rootKey && key.startsWith(rootKey) && Boolean(treeCursors[key])
-  )
-
-  const renderRedisTruncatedNotice = (path = '') => {
-    const key = buildTreeKey(connId, path)
-    if (!treeCursors[key]) {
+  // The scan stops on a budget, not at the end of the keyspace, so a non-empty
+  // cursor means "there is more where this came from". Continuing appends to the
+  // tree rather than replacing it, so counts grow as the picture fills in.
+  const renderScanMore = () => {
+    if (!treeCursors[rootKey]) {
       return null
     }
-
-    // Under a filter the budget runs out on keys EXAMINED, not on keys shown, so
-    // a cut-short page can hold few matches or none. Saying "showing first ~1000
-    // keys" over an empty list would be plainly false, and it would read as "this
-    // pattern does not exist here" when the scan simply never got that far.
-    const filtered = Boolean(keyPattern)
-    const shown = (treeItems[key] ?? []).length
+    const scanning = treeLoadingByKey[rootKey] ?? false
 
     return (
-      <div className="mt-1 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
-        {filtered
-          ? shown === 0
-            ? 'No matches yet — the scan stopped before covering the keyspace. Narrow the pattern, or use SCAN in the console.'
-            : 'Partial matches: the scan stopped before covering the keyspace. Narrow the pattern for the rest, or use SCAN in the console.'
-          : 'Showing first ~1000 keys. This prefix has more — query it in the console (SCAN/KEYS).'}
+      <div className="mt-2 space-y-1">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 w-full gap-1.5 font-mono text-[11px]"
+          disabled={scanning}
+          onClick={() => void scanMoreKeys(connId)}
+        >
+          <Search className={cn('h-3.5 w-3.5', scanning && 'animate-pulse')} />
+          {scanning ? 'Scanning…' : 'Scan more keys'}
+        </Button>
+        <div className="px-1 text-[11px] text-muted-foreground">
+          {formatCount(rootItems.length)} loaded{keyPattern ? ` matching ${keyPattern}` : ''} — the scan stopped on
+          its budget, not at the end of the keyspace.
+        </div>
       </div>
     )
   }
 
-  const renderRedisNamespaceNode = (item: ObjectItem) => {
-    const nodePath = item.path ?? item.name
-    const childKey = buildTreeKey(connId, nodePath)
+  const renderRedisNamespaceNode = (node: RedisTreeNode) => {
+    const childKey = buildTreeKey(connId, node.path)
     const expanded = expandedSchemas.has(childKey)
-    const children = treeItems[childKey] || []
-    const nodeLoading = expanded && Boolean(treeLoadingByKey[childKey])
-    const nodeError = expanded ? treeErrorByKey[childKey] : null
-    const nodeLoaded = treeLoadedByKey[childKey] ?? false
 
     return (
-      <div key={`namespace:${nodePath}`}>
+      <div key={`namespace:${node.path}`}>
         <button
           type="button"
-          onClick={() => handleNodeClick(nodePath)}
+          onClick={() => toggleSchema(connId, node.path)}
           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
         >
           {getIcon('namespace', expanded)}
-          <span className="truncate">{item.name}</span>
+          <span className="truncate">{node.name}</span>
           <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
-            {formatCount(item.row_count)}{item.meta?.truncated ? '+' : ''} keys
+            {formatCount(node.keyCount)} keys
           </span>
         </button>
         {expanded && (
           <div className="ml-4 border-l border-border pl-1">
-            {nodeLoading && <LoadingSkeleton variant="tree" />}
-            {!nodeLoading && nodeError && (
-              <div className="mt-2">
-                <ErrorBanner message={nodeError} onRetry={() => void fetchTree(connId, nodePath)} />
-              </div>
-            )}
-            {!nodeLoading && !nodeError && nodeLoaded && children.length === 0 && (
-              <EmptyState
-                variant="no_tables"
-                compact
-                className="mt-2"
-                title="No keys in namespace"
-                description="This namespace currently has no loaded children."
-              />
-            )}
-            {!nodeLoading && !nodeError &&
-              children.map((child) =>
-                isRedisNamespace(child.type) ? renderRedisNamespaceNode(child) : renderRedisLeafItem(child)
-              )}
-            {!nodeLoading && !nodeError && renderRedisTruncatedNotice(nodePath)}
+            {node.namespaces.map(renderRedisNamespaceNode)}
+            {node.keys.map((child) => renderRedisLeafItem(child))}
           </div>
         )}
       </div>
     )
   }
-
-  const renderRedisItem = (item: ObjectItem) =>
-    isRedisNamespace(item.type) ? renderRedisNamespaceNode(item) : renderRedisLeafItem(item)
 
   const renderKafkaTopicItem = (item: ObjectItem) => {
     const partitions = typeof item.meta?.partitions === 'number' ? item.meta.partitions : 0
@@ -654,14 +639,17 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   return (
     <>
       <div className="space-y-0.5">
-        {(isRedisConnection ? rootItems : filteredRootItems).map((item) =>
-          isRedisConnection ? renderRedisItem(item) : renderPgSchemaNode(item)
-        )}
+        {isRedisConnection
+          ? [
+              ...redisTree.namespaces.map(renderRedisNamespaceNode),
+              ...redisTree.keys.map((item) => renderRedisLeafItem(item)),
+            ]
+          : filteredRootItems.map((item) => renderPgSchemaNode(item))}
         {/* The root notice is suppressed while an open namespace is already
             showing the same sentence: two identical warnings a few rows apart
             read as two different problems. The namespace one is kept because it
             names which level is incomplete. */}
-        {isRedisConnection && !namespaceNoticeVisible && renderRedisTruncatedNotice()}
+        {isRedisConnection && renderScanMore()}
       </div>
       {!isRedisConnection && (
         <CreateTableForm

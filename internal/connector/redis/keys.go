@@ -94,9 +94,16 @@ func (c *RedisConnector) ListObjectsPage(ctx context.Context, opts connector.Obj
 	truncated := page.nextCursor != ""
 
 	var objects []connector.Object
-	if opts.Path == "" {
+	switch {
+	case opts.Flat:
+		// Every key described under its full name. The tree is assembled from
+		// these on the client, so expanding a namespace costs nothing and the
+		// count on a folder is the number of keys actually behind it rather than
+		// the result of a second, differently-budgeted scan.
+		objects, err = c.describeLeafObjects(ctx, page.keys, func(key string) string { return key }, truncated)
+	case opts.Path == "":
 		objects, err = c.buildRootObjects(ctx, page.keys, truncated)
-	} else {
+	default:
 		objects, err = c.buildNamespaceObjects(ctx, opts.Path, page.keys, truncated)
 	}
 	if err != nil {
