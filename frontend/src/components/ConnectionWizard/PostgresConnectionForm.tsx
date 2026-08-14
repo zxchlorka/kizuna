@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { ConnectionTagsField } from '@/components/ConnectionWizard/ConnectionTagsField'
+import { describeDsn, parseDsn } from '@/lib/postgresDsn'
 import type { ConnectionFormValues } from '@/lib/connectionForms'
 
 interface PostgresConnectionFormProps {
@@ -9,6 +11,31 @@ interface PostgresConnectionFormProps {
 }
 
 export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConnectionFormProps) {
+  const [filledFrom, setFilledFrom] = useState<string | null>(null)
+
+  // A connection string is how these are actually shared — in a wiki, a ticket,
+  // a colleague's message — so pasting one into the first field it fits should
+  // fill the form rather than land in Host verbatim. Both shapes Postgres itself
+  // accepts are recognised; anything else pastes normally.
+  const handlePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const parsed = parseDsn(event.clipboardData.getData('text'))
+    if (!parsed) {
+      return
+    }
+    event.preventDefault()
+
+    onChange({
+      ...(parsed.host !== undefined ? { host: parsed.host } : {}),
+      ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
+      ...(parsed.database !== undefined ? { database: parsed.database } : {}),
+      ...(parsed.username !== undefined ? { username: parsed.username } : {}),
+      // An edit form shows a masked password it never received; overwriting it
+      // from a DSN that carries one is intended, leaving it alone otherwise.
+      ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+    })
+    setFilledFrom(describeDsn(parsed))
+  }
+
   return (
     <div className="space-y-4">
       <div>
@@ -32,9 +59,15 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
           <Input
             value={form.host}
             onChange={(event) => onChange({ host: event.target.value })}
-            placeholder="localhost"
+            onPaste={handlePaste}
+            placeholder="localhost, or paste a connection string"
             className="font-mono"
           />
+          {filledFrom && (
+            <p className="mt-1 font-mono text-[11px] text-amber-600 dark:text-amber-400">
+              Filled from the pasted string: {filledFrom}.
+            </p>
+          )}
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
