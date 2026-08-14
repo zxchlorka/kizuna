@@ -36,6 +36,18 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 	ttl := keyMeta.ttl
 
 	meta := redisMeta(keyType, ttl)
+
+	// What this one key costs in RAM, sampled rather than walked: MEMORY USAGE
+	// visits a bounded number of elements on a large collection instead of every
+	// one. A key that cannot be measured is reported without the figure rather
+	// than failing the whole schema read.
+	// Through the typed method, not Do: a raw command carries no key position, so
+	// a cluster client cannot tell which node owns the key and asks the wrong one.
+	if sizer, ok := c.client.(redisMemoryUsager); ok {
+		if bytes, err := sizer.MemoryUsage(ctx, object).Result(); err == nil {
+			meta["memory_bytes"] = bytes
+		}
+	}
 	var columns []connector.ColumnMeta
 
 	switch keyType {

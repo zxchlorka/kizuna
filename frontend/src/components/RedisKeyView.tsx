@@ -62,6 +62,7 @@ import {
   suggestKeyPattern,
 } from '@/lib/links'
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
+import { formatBytes } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
@@ -365,6 +366,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const meta = tabData?.meta ?? {}
 
   const metaType = typeof meta.type === 'string' ? meta.type : undefined
+  // Sampled by Redis on large collections, so it is an estimate — worth showing
+  // because "which key is eating the memory" has no other answer in the UI.
+  const memoryBytes = typeof meta.memory_bytes === 'number' ? meta.memory_bytes : null
   const normalizedType = normalizeRedisObjectType(metaType ?? objectType)
   const currentTTL = typeof meta.ttl === 'number' ? meta.ttl : (ttlSeconds ?? null)
   const ttlLabel = formatRedisTTL(currentTTL)
@@ -796,6 +800,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               {metaCard('Type', getRedisObjectTypeLabel(metaType ?? objectType), 'text-foreground')}
               {metaCard('Connection', connection?.name ?? connId, 'text-foreground')}
               {metaCard('Mode', connection?.mode ?? 'standalone', 'text-foreground')}
+              {memoryBytes !== null && metaCard('Memory', formatBytes(memoryBytes), 'text-foreground')}
             </div>
           </div>
 
