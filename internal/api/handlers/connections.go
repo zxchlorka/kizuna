@@ -349,6 +349,39 @@ func (h *ConnectionsHandler) Info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
+// ServerStats reports what the server itself is doing. Only connectors that can
+// answer implement the capability; the rest say so rather than returning an
+// empty result that reads as "nothing to report".
+func (h *ConnectionsHandler) ServerStats(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	section := connector.ServerStatsSection(r.URL.Query().Get("section"))
+	if section == "" {
+		writeError(w, http.StatusBadRequest, "section is required")
+		return
+	}
+
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	provider, ok := c.(connector.ServerStatsProvider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "server statistics are not available for this connection type")
+		return
+	}
+
+	result, err := provider.ServerStats(r.Context(), section)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func generateID() string {
 	b := make([]byte, 16)
 	_, _ = rand.Read(b)

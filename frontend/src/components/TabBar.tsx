@@ -122,6 +122,18 @@ export function TabBar({ connId }: TabBarProps) {
           </Button>
         </>
       ) : (
+        <>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            className="h-8 shrink-0 gap-1.5 font-mono text-[11px]"
+            onClick={() => openOverviewTab(connId)}
+            title="Show what this server is doing: activity, blocking, top queries, tables"
+          >
+            <Gauge className="h-3.5 w-3.5" />
+            Overview
+          </Button>
         <Button
           type="button"
           size="sm"
@@ -130,9 +142,10 @@ export function TabBar({ connId }: TabBarProps) {
           onClick={() => openSqlTab(connId)}
           title="Open a new SQL console tab"
         >
-          <Plus className="h-3.5 w-3.5" />
-          New SQL
-        </Button>
+            <Plus className="h-3.5 w-3.5" />
+            New SQL
+          </Button>
+        </>
       )}
     </div>
   )
