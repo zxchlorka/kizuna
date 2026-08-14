@@ -81,6 +81,8 @@ const (
 	StatsTables ServerStatsSection = "tables"
 	// StatsReplication: how far each replica is behind.
 	StatsReplication ServerStatsSection = "replication"
+	// StatsIndexes: indexes nothing has read, with what they cost to keep.
+	StatsIndexes ServerStatsSection = "indexes"
 )
 
 // ServerStatsProvider is an optional capability for connectors that can report
