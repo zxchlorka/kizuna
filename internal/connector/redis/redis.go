@@ -268,6 +268,12 @@ type redisDBSizer interface {
 	DBSize(ctx context.Context) *goredis.IntCmd
 }
 
+// redisMemoryUsager is MEMORY USAGE, probed for rather than required so the
+// SCAN-only fakes in the tests keep compiling.
+type redisMemoryUsager interface {
+	MemoryUsage(ctx context.Context, key string, samples ...int) *goredis.IntCmd
+}
+
 // redisInfoer is the INFO half of a per-node client, probed for alongside
 // redisDBSizer so the SCAN-only fakes in the tests keep compiling.
 type redisInfoer interface {
