@@ -43,10 +43,8 @@ func (c *RedisConnector) GetSchema(ctx context.Context, object string) (*connect
 	// than failing the whole schema read.
 	// Through the typed method, not Do: a raw command carries no key position, so
 	// a cluster client cannot tell which node owns the key and asks the wrong one.
-	if sizer, ok := c.client.(redisMemoryUsager); ok {
-		if bytes, err := sizer.MemoryUsage(ctx, object).Result(); err == nil {
-			meta["memory_bytes"] = bytes
-		}
+	if bytes, ok := c.keyMemoryUsage(ctx, object); ok {
+		meta["memory_bytes"] = bytes
 	}
 	var columns []connector.ColumnMeta
 
@@ -160,4 +158,20 @@ func columnNames(columns []connector.ColumnMeta) []string {
 		names = append(names, column.Name)
 	}
 	return names
+}
+
+// keyMemoryUsage reports what one key costs in RAM, sampled by Redis rather than
+// walked on a large collection. Reported through the typed method, not Do: a raw
+// command carries no key position, so a cluster client cannot tell which node
+// owns the key and asks the wrong one.
+func (c *RedisConnector) keyMemoryUsage(ctx context.Context, key string) (int64, bool) {
+	sizer, ok := c.client.(redisMemoryUsager)
+	if !ok {
+		return 0, false
+	}
+	bytes, err := sizer.MemoryUsage(ctx, key).Result()
+	if err != nil {
+		return 0, false
+	}
+	return bytes, true
 }
