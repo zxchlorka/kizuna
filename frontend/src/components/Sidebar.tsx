@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, RefreshCw, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
+import type { CreateEntry } from '@/components/redis/CreateKeyDialog'
 import { RedisKeyFilter } from '@/components/redis/RedisKeyFilter'
 import { RedisKeyLookup } from '@/components/redis/RedisKeyLookup'
 import { EmptyState } from '@/components/EmptyState'
@@ -122,17 +123,20 @@ export function Sidebar({ connId }: SidebarProps) {
     type: 'redis_string' | 'redis_hash' | 'redis_list' | 'redis_set' | 'redis_zset'
     ttl?: number | null
     value: string
-    field?: string
-    score?: number
+    entries: CreateEntry[]
     direction?: 'left' | 'right'
   }) => {
     setCreateKeySaving(true)
     try {
+      // The backend already takes a map for a hash and a list for the rest, so
+      // several entries need no new endpoint — only a form that collects them.
       let value: unknown = payload.value
       if (payload.type === 'redis_hash') {
-        value = { [payload.field ?? 'field']: payload.value }
+        value = Object.fromEntries(payload.entries.map((entry) => [entry.field, entry.value]))
       } else if (payload.type === 'redis_zset') {
-        value = [{ member: payload.value, score: payload.score ?? 0 }]
+        value = payload.entries.map((entry) => ({ member: entry.value, score: Number(entry.score) || 0 }))
+      } else if (payload.type === 'redis_list' || payload.type === 'redis_set') {
+        value = payload.entries.map((entry) => entry.value)
       }
 
       const res = await fetchWithTimeout(`/api/connections/${connId}/keys`, {
