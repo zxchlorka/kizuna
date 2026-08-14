@@ -145,6 +145,17 @@ type topicConfig struct {
 	// SetOnTopic is true when the value comes from the topic's own config
 	// rather than from a broker or static default.
 	SetOnTopic bool `json:"set_on_topic"`
+	// Fallbacks is what this setting would be without the override above it, in
+	// order of preference. It answers the question a bare "set on the topic"
+	// cannot: what the cluster would apply if the override were dropped, and
+	// under which broker setting to go change it for everyone.
+	Fallbacks []topicConfigFallback `json:"fallbacks,omitempty"`
+}
+
+type topicConfigFallback struct {
+	Key    string `json:"key"`
+	Value  string `json:"value"`
+	Source string `json:"source"`
 }
 
 func (c *KafkaConnector) topicSchema(ctx context.Context, topic string) (*connector.Schema, error) {
@@ -179,11 +190,30 @@ func (c *KafkaConnector) topicSchema(ctx context.Context, topic string) (*connec
 		if config.Sensitive {
 			continue
 		}
+		// The broker already sent the fallback chain — kadm asks for synonyms on
+		// every describe — so naming it costs no extra round trip. The first
+		// synonym normally repeats the effective value under its own source; it
+		// is kept, because "topic override 250 GB, broker default 1 GB" is the
+		// comparison worth seeing.
+		fallbacks := make([]topicConfigFallback, 0, len(config.Synonyms))
+		for _, synonym := range config.Synonyms {
+			value := ""
+			if synonym.Value != nil {
+				value = *synonym.Value
+			}
+			fallbacks = append(fallbacks, topicConfigFallback{
+				Key:    synonym.Key,
+				Value:  value,
+				Source: configSourceName(synonym.Source),
+			})
+		}
+
 		configs = append(configs, topicConfig{
 			Key:        config.Key,
 			Value:      config.MaybeValue(),
 			Source:     configSourceName(config.Source),
 			SetOnTopic: config.Source == kmsg.ConfigSourceDynamicTopicConfig,
+			Fallbacks:  fallbacks,
 		})
 	}
 	sort.Slice(configs, func(i, j int) bool { return configs[i].Key < configs[j].Key })
