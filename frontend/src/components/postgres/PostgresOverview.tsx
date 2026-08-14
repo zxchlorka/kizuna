@@ -16,7 +16,7 @@ type Section = 'activity' | 'statements' | 'tables' | 'replication' | 'indexes' 
 interface StatsResult {
   columns: ColumnMeta[]
   rows: Array<Record<string, unknown>>
-  meta?: { hint?: string }
+  meta?: { hint?: string; notice?: string }
 }
 
 const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb: string }> = [
@@ -179,6 +179,15 @@ export function PostgresOverview({ connId }: PostgresOverviewProps) {
                 <div className="font-mono text-[11px] text-muted-foreground">{result.meta.hint}</div>
               )}
             </div>
+
+            {/* Raised above the table, not tucked into the header: a wall of
+                "<insufficient privilege>" needs its explanation before the rows,
+                not beside them. */}
+            {result.meta?.notice && (
+              <div className="border-b border-amber-500/30 bg-amber-500/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                {result.meta.notice}
+              </div>
+            )}
 
             {result.rows.length === 0 ? (
               <div className="px-3 py-8 text-center font-mono text-xs text-muted-foreground">
