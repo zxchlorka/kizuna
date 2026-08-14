@@ -83,6 +83,8 @@ const (
 	StatsReplication ServerStatsSection = "replication"
 	// StatsIndexes: indexes nothing has read, with what they cost to keep.
 	StatsIndexes ServerStatsSection = "indexes"
+	// StatsSequences: sequences approaching the ceiling of the column they feed.
+	StatsSequences ServerStatsSection = "sequences"
 )
 
 // ServerStatsProvider is an optional capability for connectors that can report
