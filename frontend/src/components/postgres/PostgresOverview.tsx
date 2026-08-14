@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Activity, Database, Gauge, Layers, RefreshCw, Timer, Unplug } from 'lucide-react'
+import { Activity, Database, Gauge, Hash, Layers, RefreshCw, Timer, Unplug } from 'lucide-react'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { fetchWithTimeout } from '@/lib/http'
@@ -11,7 +11,7 @@ interface PostgresOverviewProps {
   connId: string
 }
 
-type Section = 'activity' | 'statements' | 'tables' | 'replication' | 'indexes'
+type Section = 'activity' | 'statements' | 'tables' | 'replication' | 'indexes' | 'sequences'
 
 interface StatsResult {
   columns: ColumnMeta[]
@@ -46,6 +46,13 @@ const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb
     icon: Unplug,
     blurb:
       'Indexes nothing has read, largest first — each still costs a write on every insert and holds its disk. A zero right after a statistics reset means unknown, not unused.',
+  },
+  {
+    id: 'sequences',
+    label: 'Sequences',
+    icon: Hash,
+    blurb:
+      'Headroom against the ceiling of the column each sequence feeds. An integer column stops at 2 147 483 647 and inserts simply begin to fail.',
   },
   {
     id: 'replication',

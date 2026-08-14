@@ -209,6 +209,44 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 			LIMIT 200`,
 	},
 
+	// A sequence feeding an integer column stops at 2147483647, and the inserts
+	// simply start failing. The ceiling comes from the COLUMN, not the sequence:
+	// pg_sequences reports max_value as 2^63 for almost everything, so reading it
+	// alone reports 0% used on a sequence with a week to live.
+	connector.StatsSequences: {
+		hint: "Headroom is measured against the column's type, not the sequence's own max_value.",
+		sql: `
+			WITH owned AS (
+			    SELECT c.oid                        AS seq_oid,
+			           n.nspname || '.' || c.relname AS sequence,
+			           dc.relname                    AS "table",
+			           a.attname                     AS column,
+			           format_type(a.atttypid, NULL) AS column_type,
+			           CASE a.atttypid
+			               WHEN 'smallint'::regtype THEN 32767::bigint
+			               WHEN 'integer'::regtype  THEN 2147483647::bigint
+			               ELSE 9223372036854775807::bigint
+			           END                           AS ceiling
+			    FROM pg_class c
+			    JOIN pg_namespace n ON n.oid = c.relnamespace
+			    JOIN pg_depend d ON d.objid = c.oid AND d.classid = 'pg_class'::regclass
+			    JOIN pg_class dc ON dc.oid = d.refobjid
+			    JOIN pg_attribute a ON a.attrelid = d.refobjid AND a.attnum = d.refobjsubid
+			    WHERE c.relkind = 'S' AND d.deptype IN ('a', 'i')
+			)
+			SELECT o.sequence,
+			       o."table" || '.' || o.column AS feeds,
+			       o.column_type,
+			       s.last_value,
+			       o.ceiling                    AS max_value,
+			       round(100.0 * COALESCE(s.last_value, 0) / o.ceiling, 2) AS pct_used
+			FROM owned o
+			JOIN pg_sequences s
+			  ON s.schemaname || '.' || s.sequencename = o.sequence
+			ORDER BY 100.0 * COALESCE(s.last_value, 0) / o.ceiling DESC
+			LIMIT 200`,
+	},
+
 	// Replication lag in bytes and in time. Bytes answer "how far behind", the
 	// time columns answer "how long behind" — a replica can be a few megabytes
 	// behind for a second or for an hour, and only the second one is an outage.
