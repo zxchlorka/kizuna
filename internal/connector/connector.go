@@ -68,6 +68,33 @@ type PagedObjectLister interface {
 	ListObjectsPage(ctx context.Context, opts ObjectPageOpts) (*ObjectPage, error)
 }
 
+// ServerStatsSection names one view of what a server is doing right now.
+type ServerStatsSection string
+
+const (
+	// StatsActivity: running queries, what blocks what, and connections left
+	// open inside a transaction.
+	StatsActivity ServerStatsSection = "activity"
+	// StatsStatements: the workload by cost, from pg_stat_statements.
+	StatsStatements ServerStatsSection = "statements"
+	// StatsTables: size, dead tuples and when autovacuum last ran.
+	StatsTables ServerStatsSection = "tables"
+	// StatsReplication: how far each replica is behind.
+	StatsReplication ServerStatsSection = "replication"
+)
+
+// ServerStatsProvider is an optional capability for connectors that can report
+// what the server itself is doing, as opposed to what is stored in it.
+//
+// Each section answers in the same shape the data grid already renders, so the
+// screen showing them needs no per-section table code. A section the server
+// cannot answer — an extension that is not installed, a role without the
+// privilege to see other sessions — must come back as a plain error explaining
+// which, not as an empty table that reads as "nothing is happening".
+type ServerStatsProvider interface {
+	ServerStats(ctx context.Context, section ServerStatsSection) (*DataResult, error)
+}
+
 // SQLCatalogColumn is one column of a table in the SQL catalog snapshot.
 type SQLCatalogColumn struct {
 	Name string `json:"name"`
