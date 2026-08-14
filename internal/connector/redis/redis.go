@@ -230,6 +230,7 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 		if stats.nodes > 1 {
 			extra["node_used_memory"] = stats.usedMemory / int64(stats.nodes)
 			extra["node_maxmemory"] = stats.maxMemory / int64(stats.nodes)
+			extra["nodes"] = stats.nodeStats
 		}
 		// Reported per node by Redis; over a cluster the honest aggregate is the
 		// ratio of the totals rather than one node's figure.
@@ -291,6 +292,20 @@ type clusterStats struct {
 	rss       int64
 	peak      int64
 	clients   int64
+	// nodeStats is what each master reported on its own. The totals above hide
+	// skew, and skew is the thing worth seeing: a cluster at 67% overall with one
+	// node at 95% starts refusing writes for that node's slots while the summary
+	// still looks calm.
+	nodeStats []redisNodeStat
+}
+
+type redisNodeStat struct {
+	Address    string `json:"address"`
+	Keys       int64  `json:"keys"`
+	UsedMemory int64  `json:"used_memory"`
+	MaxMemory  int64  `json:"maxmemory"`
+	Clients    int64  `json:"connected_clients"`
+	Uptime     string `json:"uptime_in_seconds,omitempty"`
 }
 
 func statsFromInfo(parsed map[string]string) clusterStats {
@@ -361,7 +376,16 @@ func (c *RedisConnector) collectStats(ctx context.Context, parsed map[string]str
 			return clusterStats{}, err
 		}
 
-		node := statsFromInfo(parseRedisInfo(raw))
+		parsedNode := parseRedisInfo(raw)
+		node := statsFromInfo(parsedNode)
+		total.nodeStats = append(total.nodeStats, redisNodeStat{
+			Address:    master,
+			Keys:       size,
+			UsedMemory: node.usedMemory,
+			MaxMemory:  node.maxMemory,
+			Clients:    node.clients,
+			Uptime:     parsedNode["uptime_in_seconds"],
+		})
 		total.nodes++
 		total.keys += size
 		total.usedMemory += node.usedMemory
