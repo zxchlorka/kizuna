@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Activity, Database, Gauge, Layers, RefreshCw, Timer } from 'lucide-react'
+import { Activity, Database, Gauge, Layers, RefreshCw, Timer, Unplug } from 'lucide-react'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { fetchWithTimeout } from '@/lib/http'
@@ -11,7 +11,7 @@ interface PostgresOverviewProps {
   connId: string
 }
 
-type Section = 'activity' | 'statements' | 'tables' | 'replication'
+type Section = 'activity' | 'statements' | 'tables' | 'replication' | 'indexes'
 
 interface StatsResult {
   columns: ColumnMeta[]
@@ -41,6 +41,13 @@ const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb
     blurb: 'Size next to neglect — a large table autovacuum has not visited explains a lot of mysteries.',
   },
   {
+    id: 'indexes',
+    label: 'Unused indexes',
+    icon: Unplug,
+    blurb:
+      'Indexes nothing has read, largest first — each still costs a write on every insert and holds its disk. A zero right after a statistics reset means unknown, not unused.',
+  },
+  {
     id: 'replication',
     label: 'Replication',
     icon: Gauge,
@@ -52,7 +59,7 @@ const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb
 // query text is the only column that wants the full width it can get.
 function alignFor(name: string): string {
   if (name === 'query') return 'text-left'
-  return /(_ms|_rows|_pct|calls|rows|pid)$/.test(name) ? 'text-right tabular-nums' : 'text-left'
+  return /(_ms|_rows|_pct|_used|_value|calls|rows|pid|scans|size)$/.test(name) ? 'text-right tabular-nums' : 'text-left'
 }
 
 function renderCell(value: unknown): string {

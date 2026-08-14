@@ -187,6 +187,28 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 			LIMIT 200`,
 	},
 
+	// An index nothing reads still costs a write on every insert and update, and
+	// still occupies its disk. Ordered by size, because that is what dropping it
+	// gives back.
+	connector.StatsIndexes: {
+		hint: "Scan counts are since the last statistics reset — a fresh zero means unknown, not unused.",
+		sql: `
+			SELECT s.schemaname || '.' || s.relname                  AS "table",
+			       s.indexrelname                                    AS index,
+			       pg_size_pretty(pg_relation_size(s.indexrelid))    AS size,
+			       s.idx_scan                                        AS scans,
+			       date_trunc('second', st.stats_reset)              AS stats_since,
+			       i.indisunique                                     AS is_unique
+			FROM pg_stat_user_indexes s
+			JOIN pg_index i ON i.indexrelid = s.indexrelid
+			LEFT JOIN pg_stat_database st ON st.datname = current_database()
+			WHERE s.idx_scan = 0
+			  AND NOT i.indisprimary
+			  AND NOT i.indisunique
+			ORDER BY pg_relation_size(s.indexrelid) DESC
+			LIMIT 200`,
+	},
+
 	// Replication lag in bytes and in time. Bytes answer "how far behind", the
 	// time columns answer "how long behind" — a replica can be a few megabytes
 	// behind for a second or for an hour, and only the second one is an outage.
