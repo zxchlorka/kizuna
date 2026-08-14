@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +34,15 @@ func (c *RedisConnector) Mutate(ctx context.Context, op connector.MutateOp) (*co
 			c.invalidateKeyMeta(op.Object)
 			return &connector.MutateResult{RowsAffected: 1}, nil
 		}
+	}
+
+	if op.Type == "copy" {
+		destination, _ := op.Data["destination"].(string)
+		if err := c.copyKey(ctx, op.Object, strings.TrimSpace(destination)); err != nil {
+			return nil, err
+		}
+		c.invalidateKeyMeta(destination)
+		return &connector.MutateResult{RowsAffected: 1}, nil
 	}
 
 	keyType, err := redisTypeOrNotFound(ctx, c, op.Object)
@@ -367,4 +377,52 @@ func (c *RedisConnector) deleteFromKey(ctx context.Context, keyType string, op c
 	default:
 		return 0, fmt.Errorf("%w: delete with where is not supported for redis type %q", connector.ErrBadRequest, keyType)
 	}
+}
+
+// copyKey duplicates a key's contents under a new name, TTL included.
+//
+// Not Redis's own COPY: that requires both keys to live in the same hash slot,
+// and in a cluster "profile:123" and "profile:456" almost never do — the command
+// fails with CROSSSLOT for exactly the case this feature exists for. DUMP and
+// RESTORE are single-key commands, so the cluster client routes each to whichever
+// node owns it, and the serialized value carries the type with it: one path
+// copies a hash, a zset and a stream alike.
+func (c *RedisConnector) copyKey(ctx context.Context, source, destination string) error {
+	if destination == "" {
+		return fmt.Errorf("%w: destination key is required", connector.ErrBadRequest)
+	}
+	if destination == source {
+		return fmt.Errorf("%w: destination must differ from the source key", connector.ErrBadRequest)
+	}
+
+	exists, err := c.client.Exists(ctx, destination).Result()
+	if err != nil {
+		return normalizeRedisError(err)
+	}
+	if exists > 0 {
+		return fmt.Errorf("%w: key %q already exists", connector.ErrBadRequest, destination)
+	}
+
+	payload, err := c.client.Do(ctx, "DUMP", source).Text()
+	if err != nil {
+		if errors.Is(err, goredis.Nil) {
+			return fmt.Errorf("%w: key %q not found", connector.ErrRelationNotFound, source)
+		}
+		return normalizeRedisError(err)
+	}
+
+	// PTTL answers -1 for "no expiry" and -2 for "no such key"; RESTORE wants 0
+	// for no expiry, so anything negative becomes 0 rather than being passed on.
+	ttl, err := c.client.Do(ctx, "PTTL", source).Int64()
+	if err != nil {
+		return normalizeRedisError(err)
+	}
+	if ttl < 0 {
+		ttl = 0
+	}
+
+	if err := c.client.Do(ctx, "RESTORE", destination, ttl, payload).Err(); err != nil {
+		return normalizeRedisError(err)
+	}
+	return nil
 }

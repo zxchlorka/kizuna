@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
-import { Binary, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -101,10 +103,35 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const refreshTree = useWorkspaceStore((state) => state.refreshTree)
   const closeTab = useWorkspaceStore((state) => state.closeTab)
   const pushToast = useToastStore((state) => state.push)
+  const openTab = useWorkspaceStore((state) => state.openTab)
 
   const [saving, setSaving] = useState(false)
   const [ttlDialogOpen, setTTLDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
+  const [copyOpen, setCopyOpen] = useState(false)
+  const [copyName, setCopyName] = useState('')
+  const [copying, setCopying] = useState(false)
+
+  // The copy is made server-side from the stored value, so the new key is a
+  // faithful duplicate of whatever type this is — no reading the contents into
+  // the browser and writing them back field by field.
+  const duplicateKey = async () => {
+    const destination = copyName.trim()
+    if (!destination || copying) {
+      return
+    }
+    setCopying(true)
+    try {
+      await mutate(connId, { type: 'copy', object, schema: '', where: {}, data: { destination } }, tabId, { reload: false })
+      setCopyOpen(false)
+      pushToast({ tone: 'success', title: 'Key duplicated', message: destination })
+      openTab(connId, destination, objectType)
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Duplicate failed', message: (error as Error).message })
+    } finally {
+      setCopying(false)
+    }
+  }
 
   const links = useLinksStore((state) => state.links)
   const fetchLinks = useLinksStore((state) => state.fetch)
@@ -739,10 +766,28 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     Read-only
                   </span>
                 ) : (
+                  <>
+                    {/* Duplicating beats recreating by hand: the contents are
+                        already right, only the name is new. */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => {
+                        setCopyName(`${object}-copy`)
+                        setCopyOpen(true)
+                      }}
+                      disabled={saving}
+                    >
+                      <CopyIcon className="h-3.5 w-3.5" />
+                      Duplicate
+                    </Button>
                   <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete key
                   </Button>
+                  </>
                 )}
               </div>
             </div>
@@ -784,6 +829,39 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           setTTLDialogOpen(false)
         }}
       />
+
+      <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-mono text-sm">Duplicate key</DialogTitle>
+            <DialogDescription className="font-mono text-xs">
+              Copies the contents and TTL of {object} to a new key.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            value={copyName}
+            onChange={(event) => setCopyName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') {
+                event.preventDefault()
+                void duplicateKey()
+              }
+            }}
+            placeholder="new key name"
+            className="font-mono"
+            aria-label="New key name"
+            autoFocus
+          />
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setCopyOpen(false)}>
+              Cancel
+            </Button>
+            <Button type="button" size="sm" disabled={copying || copyName.trim() === ''} onClick={() => void duplicateKey()}>
+              {copying ? 'Duplicating…' : 'Duplicate'}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <DeleteKeyDialog
         open={deleteDialogOpen}
