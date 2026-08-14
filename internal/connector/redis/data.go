@@ -22,24 +22,44 @@ func (c *RedisConnector) GetData(ctx context.Context, object string, opts connec
 	keyType := keyMeta.keyType
 	ttl := keyMeta.ttl
 
+	var (
+		result *connector.DataResult
+		derr   error
+	)
 	switch keyType {
 	case "string":
-		return c.getStringData(ctx, object, ttl, opts)
+		result, derr = c.getStringData(ctx, object, ttl, opts)
 	case "hash":
-		return c.getHashData(ctx, object, ttl, opts)
+		result, derr = c.getHashData(ctx, object, ttl, opts)
 	case "list":
-		return c.getListData(ctx, object, ttl, opts)
+		result, derr = c.getListData(ctx, object, ttl, opts)
 	case "set":
-		return c.getSetData(ctx, object, ttl, opts)
+		result, derr = c.getSetData(ctx, object, ttl, opts)
 	case "zset":
-		return c.getZSetData(ctx, object, ttl, opts)
+		result, derr = c.getZSetData(ctx, object, ttl, opts)
 	case "stream":
-		return c.getStreamData(ctx, object, ttl, opts)
+		result, derr = c.getStreamData(ctx, object, ttl, opts)
 	case "json":
-		return c.getJSONData(ctx, object, ttl, opts)
+		result, derr = c.getJSONData(ctx, object, ttl, opts)
 	default:
 		return nil, unsupportedRedisOperation("get data for " + keyType)
 	}
+
+	if derr != nil || result == nil {
+		return result, derr
+	}
+
+	// Attached here rather than only on the schema: the data response lands last
+	// and its meta replaces the schema's, so a figure set only there disappears
+	// as soon as the rows arrive.
+	if result.Meta == nil {
+		result.Meta = map[string]any{}
+	}
+	if bytes, ok := c.keyMemoryUsage(ctx, object); ok {
+		result.Meta["memory_bytes"] = bytes
+	}
+	return result, nil
+
 }
 
 func (c *RedisConnector) getStringData(ctx context.Context, key string, ttl int64, opts connector.DataOpts) (*connector.DataResult, error) {

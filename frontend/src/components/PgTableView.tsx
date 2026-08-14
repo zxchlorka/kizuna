@@ -23,6 +23,7 @@ import { PaginationBar } from '@/components/PgTableView/PaginationBar'
 import { Toolbar } from '@/components/PgTableView/Toolbar'
 import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { RowCardDialog } from '@/components/postgres/RowCardDialog'
 import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
@@ -157,6 +158,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   // Deriving them later by intersecting with the current page instead is what
   // made "Copy selected (12)" put 3 rows, or none, on the clipboard.
   const [selectedRows, setSelectedRows] = useState<Map<string, SelectedRow>>(new Map())
+  const [rowCard, setRowCard] = useState<TableRow | null>(null)
   const [editMode, setEditMode] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [showSaveDialog, setShowSaveDialog] = useState(false)
@@ -1126,6 +1128,16 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onConfirm={(target) => submitDangerousDDL('drop_column', target)}
       />
 
+      <RowCardDialog
+        open={rowCard !== null}
+        columns={columns}
+        row={rowCard}
+        title={object}
+        onOpenChange={(next) => {
+          if (!next) setRowCard(null)
+        }}
+      />
+
       {linkMenu && (
         <FloatingMenu x={linkMenu.x} y={linkMenu.y} onClose={() => setLinkMenu(null)}>
           <FloatingMenuLabel>Copy</FloatingMenuLabel>
@@ -1154,6 +1166,15 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
             }}
           >
             Copy row (JSON)
+          </FloatingMenuItem>
+          <FloatingMenuSeparator />
+          <FloatingMenuItem
+            onClick={() => {
+              setRowCard(linkMenu.row)
+              setLinkMenu(null)
+            }}
+          >
+            View row
           </FloatingMenuItem>
           <FloatingMenuSeparator />
           <FloatingMenuLabel>Open linked record</FloatingMenuLabel>
