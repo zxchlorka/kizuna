@@ -14,6 +14,7 @@ import { PgTableView } from '@/components/PgTableView'
 import { SqlConsole } from '@/components/SqlConsole/SqlConsole'
 import { RedisCli } from '@/components/redis/RedisCli/RedisCli'
 import { RedisOverview } from '@/components/redis/RedisOverview'
+import { PostgresOverview } from '@/components/postgres/PostgresOverview'
 import { KafkaTopicView } from '@/components/kafka/KafkaTopicView'
 import { isRedisObjectType } from '@/lib/objectTypes'
 import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
@@ -134,7 +135,11 @@ export default function DataViewPage() {
               ) : activeTab.kind === 'redis-cli' ? (
                 <RedisCli tabId={activeTab.id} connId={activeTab.connId} />
               ) : activeTab.kind === 'overview' ? (
-                <RedisOverview connId={activeTab.connId} />
+                currentConnection?.type === 'postgres' ? (
+                  <PostgresOverview connId={activeTab.connId} />
+                ) : (
+                  <RedisOverview connId={activeTab.connId} />
+                )
               ) : activeTab.objectType === 'index' ? (
                 <IndexInspectorView
                   connId={activeTab.connId}
