@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
@@ -42,7 +43,35 @@ func (p *PostgresConnector) ServerStats(ctx context.Context, section connector.S
 		return nil, explainStatsError(section, err)
 	}
 	result.Meta = map[string]any{"section": string(section), "hint": query.hint}
+	if notice := redactionNotice(section, result); notice != "" {
+		result.Meta["notice"] = notice
+	}
 	return result, nil
+}
+
+// Postgres redacts rather than refuses: a role without pg_read_all_stats still
+// gets every row of pg_stat_statements, with the query text replaced by
+// "<insufficient privilege>". Nothing errors, so without this the section is a
+// wall of identical placeholders and no explanation of why.
+func redactionNotice(section connector.ServerStatsSection, result *connector.DataResult) string {
+	if section != connector.StatsStatements || len(result.Rows) == 0 {
+		return ""
+	}
+
+	redacted := 0
+	for _, row := range result.Rows {
+		if text, ok := row["query"].(string); ok && strings.Contains(text, "insufficient privilege") {
+			redacted++
+		}
+	}
+	if redacted == 0 {
+		return ""
+	}
+
+	return fmt.Sprintf(
+		"%d of %d query texts are hidden: this role may only read its own. Granting pg_monitor "+
+			"(or pg_read_all_stats) reveals the rest; the timings above are accurate either way.",
+		redacted, len(result.Rows))
 }
 
 type statsQuery struct {
@@ -124,6 +153,7 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsActivity: {
 		hint: "Sessions on this server. A limited role sees only its own.",
 		sql: `
+			/* kizuna:stats */
 			SELECT a.pid,
 			       a.state,
 			       a.usename                                   AS "user",
@@ -151,6 +181,7 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsStatements: {
 		hint: "Since the last pg_stat_statements reset, not since server start.",
 		sql: `
+			/* kizuna:stats */
 			SELECT round(s.total_exec_time)::bigint            AS total_ms,
 			       s.calls,
 			       round(s.mean_exec_time::numeric, 2)         AS mean_ms,
@@ -160,8 +191,12 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 			             / NULLIF(sum(s.total_exec_time) OVER (), 0))::int AS pct_time,
 			       left(regexp_replace(s.query, '\s+', ' ', 'g'), 300)     AS query
 			FROM pg_stat_statements s
+			-- Excludes the queries this screen runs. Without it Kizuna measures
+			-- itself, tops its own ranking, and climbs with every Refresh. The
+			-- marker is a literal in our own SQL, never user input.
+			WHERE s.query NOT LIKE '%kizuna:stats%'
 			ORDER BY s.total_exec_time DESC
-			LIMIT 200`,
+			LIMIT 50`,
 	},
 
 	// Size and neglect side by side. A table is rarely interesting for its size
@@ -170,14 +205,18 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsTables: {
 		hint: "Dead-tuple counts are estimates maintained by the statistics collector.",
 		sql: `
+			/* kizuna:stats */
 			SELECT s.schemaname || '.' || s.relname                       AS "table",
 			       pg_size_pretty(pg_total_relation_size(c.oid))          AS total,
 			       pg_size_pretty(pg_table_size(c.oid))                   AS data,
 			       pg_size_pretty(pg_indexes_size(c.oid))                 AS indexes,
 			       s.n_live_tup                                           AS live_rows,
 			       s.n_dead_tup                                           AS dead_rows,
-			       CASE WHEN s.n_live_tup > 0
-			            THEN round(100.0 * s.n_dead_tup / s.n_live_tup)::int
+			       -- Share of the table's row versions that are dead, not the
+			       -- dead-to-live ratio: a table with 4 live and 11 dead rows is
+			       -- 73% dead, and reporting 275% reads as a broken number.
+			       CASE WHEN s.n_live_tup + s.n_dead_tup > 0
+			            THEN round(100.0 * s.n_dead_tup / (s.n_live_tup + s.n_dead_tup))::int
 			       END                                                    AS dead_pct,
 			       date_trunc('second', GREATEST(s.last_autovacuum, s.last_vacuum)) AS last_vacuum,
 			       date_trunc('second', GREATEST(s.last_autoanalyze, s.last_analyze)) AS last_analyze
@@ -193,6 +232,7 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsIndexes: {
 		hint: "Scan counts are since the last statistics reset — a fresh zero means unknown, not unused.",
 		sql: `
+			/* kizuna:stats */
 			SELECT s.schemaname || '.' || s.relname                  AS "table",
 			       s.indexrelname                                    AS index,
 			       pg_size_pretty(pg_relation_size(s.indexrelid))    AS size,
@@ -216,6 +256,7 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsSequences: {
 		hint: "Headroom is measured against the column's type, not the sequence's own max_value.",
 		sql: `
+			/* kizuna:stats */
 			WITH owned AS (
 			    SELECT c.oid                        AS seq_oid,
 			           n.nspname || '.' || c.relname AS sequence,
@@ -253,6 +294,7 @@ var statsQueries = map[connector.ServerStatsSection]statsQuery{
 	connector.StatsReplication: {
 		hint: "Rows appear on a primary with connected replicas; a replica reports none.",
 		sql: `
+			/* kizuna:stats */
 			SELECT r.application_name                       AS replica,
 			       r.client_addr::text                      AS client,
 			       r.state,
