@@ -3,6 +3,42 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.7.0 — 2026-08-16
+
+### Postgres
+
+- New Overview tab: sessions that are running something with the one holding the
+  lock named, the workload ordered by total time from pg_stat_statements, tables
+  by size next to dead tuples and last autovacuum, replication lag in bytes and
+  in time, indexes nothing has read, and sequences measured against the ceiling
+  of the column they feed rather than their own max_value.
+- A missing extension, or a role that may only read its own statistics, is named
+  as such — including which grant reveals the rest. Postgres reports the first as
+  an ordinary "relation does not exist" and the second by silently replacing the
+  query text, and neither says anything a reader can act on.
+- Every section states what its numbers do not cover: statements are counted
+  since the last reset, activity is only what the current role may see.
+- A pasted connection string fills the form. Both shapes Postgres accepts are
+  read, credentials are decoded, and a partial string fills what it has.
+- "View row" opens one record vertically, with each column's type and a copy
+  button per value, instead of scrolling a wide table sideways.
+
+### Redis
+
+- The Overview lists the cluster's masters with what each one holds, so a node
+  filling faster than the others is visible behind the totals.
+- A key shows what it occupies in memory, beside its type and TTL.
+- A key can be duplicated under a new name, contents and TTL included. Done with
+  DUMP and RESTORE rather than Redis's COPY, which requires both keys in the same
+  hash slot and so fails for exactly the keys worth duplicating in a cluster.
+- A new collection can be created with all of its entries at once rather than one
+  and then the rest by hand.
+
+### Kafka
+
+- A topic's Config shows what each setting falls back to without its override,
+  and which broker setting to change to move it for every topic at once.
+
 ## v0.6.0 — 2026-08-10
 
 ### Redis
