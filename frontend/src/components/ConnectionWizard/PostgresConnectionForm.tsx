@@ -12,6 +12,24 @@ interface PostgresConnectionFormProps {
 
 export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConnectionFormProps) {
   const [filledFrom, setFilledFrom] = useState<string | null>(null)
+  const [dsnText, setDsnText] = useState('')
+
+  const applyDsn = (text: string) => {
+    setDsnText(text)
+    const parsed = parseDsn(text)
+    if (!parsed) {
+      setFilledFrom(null)
+      return
+    }
+    onChange({
+      ...(parsed.host !== undefined ? { host: parsed.host } : {}),
+      ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
+      ...(parsed.database !== undefined ? { database: parsed.database } : {}),
+      ...(parsed.username !== undefined ? { username: parsed.username } : {}),
+      ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+    })
+    setFilledFrom(describeDsn(parsed))
+  }
 
   // A connection string is how these are actually shared — in a wiki, a ticket,
   // a colleague's message — so pasting one into the first field it fits should
@@ -40,6 +58,30 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
     <div className="space-y-4">
       <div>
         <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          Connection string <span className="normal-case tracking-normal opacity-60">— optional, fills the rest</span>
+        </label>
+        <Input
+          value={dsnText}
+          onChange={(event) => applyDsn(event.target.value)}
+          onPaste={(event) => {
+            // Handled here as well as onChange so a paste fills the form in the
+            // same tick, rather than after React round-trips the value.
+            const pasted = event.clipboardData.getData('text')
+            if (parseDsn(pasted)) {
+              event.preventDefault()
+              applyDsn(pasted)
+            }
+          }}
+          placeholder="postgres://user:pass@host:5432/dbname"
+          className="font-mono"
+        />
+        {filledFrom && (
+          <p className="mt-1 font-mono text-[11px] text-amber-600 dark:text-amber-400">Filled: {filledFrom}.</p>
+        )}
+      </div>
+
+      <div>
+        <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
           Name
         </label>
         <Input
@@ -60,7 +102,7 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
             value={form.host}
             onChange={(event) => onChange({ host: event.target.value })}
             onPaste={handlePaste}
-            placeholder="localhost, or paste a connection string"
+            placeholder="localhost"
             className="font-mono"
           />
           {filledFrom && (
