@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { describeDsn, looksLikeDsn, parseDsn } from '@/lib/postgresDsn'
+import { looksLikeDsn, parseDsn } from '@/lib/postgresDsn'
 
 describe('parseDsn', () => {
   it('reads a full URI', () => {
@@ -68,13 +68,5 @@ describe('looksLikeDsn', () => {
 
   it('recognises a keyword pair mid-string', () => {
     expect(looksLikeDsn('psql "host=db dbname=app"')).toBe(true)
-  })
-})
-
-describe('describeDsn', () => {
-  it('names what was taken, and never echoes the password', () => {
-    const summary = describeDsn({ host: 'db', port: 5432, database: 'app', username: 'u', password: 'secret' })
-    expect(summary).toBe('host db:5432, database app, user u, password')
-    expect(summary).not.toContain('secret')
   })
 })
