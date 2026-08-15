@@ -11,6 +11,14 @@ interface RedisOverviewProps {
   connId: string
 }
 
+interface RedisNodeStat {
+  address: string
+  keys: number
+  used_memory: number
+  maxmemory: number
+  connected_clients: number
+}
+
 // INFO reports every field as a string; a missing field and an unparseable one
 // are the same thing here — a number we do not have and must not invent.
 function num(extra: Record<string, unknown> | undefined, key: string): number | null {
@@ -133,6 +141,7 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
   // same screen used to show one node's 20 GiB of 30 GiB as though it were the
   // whole cluster's — which on 24 masters understated it twenty-four fold.
   const clusterNote = nodes > 1 ? `Summed across ${nodes} masters` : undefined
+  const nodeRows = Array.isArray(extra?.nodes) ? (extra.nodes as RedisNodeStat[]) : []
 
   return (
     <div className="flex-1 overflow-auto p-4">
@@ -241,6 +250,65 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
                 fragmentation !== null && fragmentation > 1.5 ? 'More RSS than data' : undefined
               )}
             </div>
+
+            {nodeRows.length > 0 && (
+              <div className="rounded-sm border border-border">
+                <div className="flex items-center justify-between gap-3 border-b border-border px-3 py-2">
+                  <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    Masters ({nodeRows.length})
+                  </div>
+                  <div className="font-mono text-[11px] text-muted-foreground">
+                    What each holds. The totals above cannot show an uneven one.
+                  </div>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full font-mono text-xs">
+                    <thead>
+                      <tr className="border-b border-border text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                        <th className="px-3 py-2 text-left font-normal">Node</th>
+                        <th className="px-3 py-2 text-right font-normal">Keys</th>
+                        <th className="px-3 py-2 text-right font-normal">Used</th>
+                        <th className="px-3 py-2 text-right font-normal">Limit</th>
+                        <th className="px-3 py-2 text-right font-normal">Used %</th>
+                        <th className="px-3 py-2 text-right font-normal">Clients</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {nodeRows.map((node) => {
+                        const pct = node.maxmemory > 0 ? (100 * node.used_memory) / node.maxmemory : null
+                        return (
+                          <tr key={node.address} className="border-b border-border/50 last:border-b-0">
+                            <td className="px-3 py-1.5">{node.address}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums">{formatExactCount(node.keys)}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums">{formatBytes(node.used_memory)}</td>
+                            <td className="px-3 py-1.5 text-right tabular-nums">
+                              {node.maxmemory > 0 ? formatBytes(node.maxmemory) : 'none'}
+                            </td>
+                            {/* The node that will hit its ceiling first is the
+                                one this table exists to surface. */}
+                            <td
+                              className={cn(
+                                'px-3 py-1.5 text-right tabular-nums',
+                                pct !== null && pct >= 90
+                                  ? 'text-red-600 dark:text-red-400'
+                                  : pct !== null && pct >= 75
+                                    ? 'text-orange-600 dark:text-orange-400'
+                                    : ''
+                              )}
+                            >
+                              {pct === null ? '—' : `${pct.toFixed(1)}%`}
+                            </td>
+                            <td className="px-3 py-1.5 text-right tabular-nums">
+                              {formatExactCount(node.connected_clients)}
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>

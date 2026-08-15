@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Activity, Database, Gauge, Layers, RefreshCw, Timer } from 'lucide-react'
+import { Activity, Database, Gauge, Hash, Layers, RefreshCw, Timer, Unplug } from 'lucide-react'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { Button } from '@/components/ui/button'
 import { fetchWithTimeout } from '@/lib/http'
@@ -11,12 +11,12 @@ interface PostgresOverviewProps {
   connId: string
 }
 
-type Section = 'activity' | 'statements' | 'tables' | 'replication'
+type Section = 'activity' | 'statements' | 'tables' | 'replication' | 'indexes' | 'sequences'
 
 interface StatsResult {
   columns: ColumnMeta[]
   rows: Array<Record<string, unknown>>
-  meta?: { hint?: string }
+  meta?: { hint?: string; notice?: string }
 }
 
 const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb: string }> = [
@@ -41,6 +41,20 @@ const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb
     blurb: 'Size next to neglect — a large table autovacuum has not visited explains a lot of mysteries.',
   },
   {
+    id: 'indexes',
+    label: 'Unused indexes',
+    icon: Unplug,
+    blurb:
+      'Indexes nothing has read, largest first — each still costs a write on every insert and holds its disk. A zero right after a statistics reset means unknown, not unused.',
+  },
+  {
+    id: 'sequences',
+    label: 'Sequences',
+    icon: Hash,
+    blurb:
+      'Headroom against the ceiling of the column each sequence feeds. An integer column stops at 2 147 483 647 and inserts simply begin to fail.',
+  },
+  {
     id: 'replication',
     label: 'Replication',
     icon: Gauge,
@@ -52,7 +66,7 @@ const sections: Array<{ id: Section; label: string; icon: typeof Activity; blurb
 // query text is the only column that wants the full width it can get.
 function alignFor(name: string): string {
   if (name === 'query') return 'text-left'
-  return /(_ms|_rows|_pct|calls|rows|pid)$/.test(name) ? 'text-right tabular-nums' : 'text-left'
+  return /(_ms|_rows|_pct|_used|_value|calls|rows|pid|scans|size)$/.test(name) ? 'text-right tabular-nums' : 'text-left'
 }
 
 function renderCell(value: unknown): string {
@@ -165,6 +179,15 @@ export function PostgresOverview({ connId }: PostgresOverviewProps) {
                 <div className="font-mono text-[11px] text-muted-foreground">{result.meta.hint}</div>
               )}
             </div>
+
+            {/* Raised above the table, not tucked into the header: a wall of
+                "<insufficient privilege>" needs its explanation before the rows,
+                not beside them. */}
+            {result.meta?.notice && (
+              <div className="border-b border-amber-500/30 bg-amber-500/5 px-3 py-2 font-mono text-[11px] leading-relaxed text-amber-600 dark:text-amber-400">
+                {result.meta.notice}
+              </div>
+            )}
 
             {result.rows.length === 0 ? (
               <div className="px-3 py-8 text-center font-mono text-xs text-muted-foreground">
