@@ -10,11 +10,18 @@ interface KafkaTopicConfigProps {
   topic: string
 }
 
+interface TopicConfigFallback {
+  key: string
+  value: string
+  source: string
+}
+
 interface TopicConfigEntry {
   key: string
   value: string
   source: string
   set_on_topic: boolean
+  fallbacks?: TopicConfigFallback[]
 }
 
 interface TopicSchema {
@@ -110,6 +117,7 @@ export function KafkaTopicConfig({ connId, topic }: KafkaTopicConfigProps) {
                 <th className="px-3 py-2 text-left font-normal">Key</th>
                 <th className="px-3 py-2 text-left font-normal">Value</th>
                 <th className="px-3 py-2 text-left font-normal">Set by</th>
+                <th className="px-3 py-2 text-left font-normal">Without the override</th>
               </tr>
             </thead>
             <tbody>
@@ -127,11 +135,22 @@ export function KafkaTopicConfig({ connId, topic }: KafkaTopicConfigProps) {
                   >
                     {config.source}
                   </td>
+                  {/* What this setting falls back to. A value set on the topic
+                      says nothing about what the cluster would apply without it,
+                      or which broker setting to change for every topic at once. */}
+                  <td className="px-3 py-1.5 align-top text-muted-foreground">
+                    {config.fallbacks && config.fallbacks.length > 0
+                      ? config.fallbacks
+                          .filter((fallback) => fallback.source !== config.source)
+                          .map((fallback) => `${fallback.key} = ${fallback.value || '—'} (${fallback.source})`)
+                          .join(' · ') || '—'
+                      : '—'}
+                  </td>
                 </tr>
               ))}
               {configs.length === 0 && (
                 <tr>
-                  <td colSpan={3} className="px-3 py-6 text-center text-muted-foreground">
+                  <td colSpan={4} className="px-3 py-6 text-center text-muted-foreground">
                     The broker reported no configs for this topic.
                   </td>
                 </tr>

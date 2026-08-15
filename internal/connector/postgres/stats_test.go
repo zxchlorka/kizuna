@@ -72,6 +72,7 @@ func TestEverySectionHasAQuery(t *testing.T) {
 	for _, section := range []connector.ServerStatsSection{
 		connector.StatsActivity, connector.StatsStatements,
 		connector.StatsTables, connector.StatsReplication,
+		connector.StatsIndexes, connector.StatsSequences,
 	} {
 		query, ok := statsQueries[section]
 		if !ok {
