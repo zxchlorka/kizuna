@@ -19,6 +19,12 @@ import { formatRedisTTL, getRedisObjectTypeLabel, toNumberOrNull } from '@/compo
 
 type CreateableRedisObjectType = Exclude<RedisObjectType, 'redis_stream' | 'redis_json'>
 
+export interface CreateEntry {
+  field: string
+  value: string
+  score: string
+}
+
 interface CreateKeyDialogProps {
   open: boolean
   saving: boolean
@@ -28,8 +34,7 @@ interface CreateKeyDialogProps {
     type: CreateableRedisObjectType
     ttl?: number | null
     value: string
-    field?: string
-    score?: number
+    entries: CreateEntry[]
     direction?: 'left' | 'right'
   }) => Promise<void> | void
 }
@@ -47,10 +52,17 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
   const [type, setType] = useState<CreateableRedisObjectType>('redis_string')
   const [ttlText, setTtlText] = useState('')
   const [value, setValue] = useState('')
-  const [field, setField] = useState('')
-  const [scoreText, setScoreText] = useState('0')
+  // One row shape for every collection type: hash uses field+value, zset
+  // value+score, list and set only value. A single list beats three parallel
+  // ones that would have to be kept in step as the type changes.
+  const [entries, setEntries] = useState<CreateEntry[]>([{ field: '', value: '', score: '0' }])
   const [direction, setDirection] = useState<'left' | 'right'>('right')
   const [error, setError] = useState<string | null>(null)
+
+  const updateEntry = (index: number, patch: Partial<CreateEntry>) => {
+    setEntries((current) => current.map((entry, at) => (at === index ? { ...entry, ...patch } : entry)))
+    setError(null)
+  }
 
   useEffect(() => {
     if (!open) {
@@ -61,8 +73,7 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
     setType('redis_string')
     setTtlText('')
     setValue('')
-    setField('')
-    setScoreText('0')
+    setEntries([{ field: '', value: '', score: '0' }])
     setDirection('right')
   }, [open])
 
@@ -95,18 +106,27 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
       return
     }
 
-    const score = type === 'redis_zset' ? toNumberOrNull(scoreText) : null
-    if (type === 'redis_zset' && score === null) {
-      setError('Score must be a valid number.')
-      return
-    }
+    const isCollection = type !== 'redis_string'
+    const filled = entries.filter((entry) => entry.value.trim() !== '' || entry.field.trim() !== '')
 
-    if ((type === 'redis_hash' || type === 'redis_list' || type === 'redis_set' || type === 'redis_zset') && value.trim() === '') {
-      setError('Initial value is required for this key type.')
+    if (!isCollection && value.trim() === '') {
+      setError('A value is required for a string key.')
       return
     }
-    if (type === 'redis_hash' && field.trim() === '') {
-      setError('Field name is required for hash keys.')
+    if (isCollection && filled.length === 0) {
+      setError('Add at least one entry for this key type.')
+      return
+    }
+    if (type === 'redis_hash' && filled.some((entry) => entry.field.trim() === '')) {
+      setError('Every hash entry needs a field name.')
+      return
+    }
+    if (isCollection && filled.some((entry) => entry.value.trim() === '')) {
+      setError('Every entry needs a value.')
+      return
+    }
+    if (type === 'redis_zset' && filled.some((entry) => toNumberOrNull(entry.score) === null)) {
+      setError('Every score must be a valid number.')
       return
     }
 
@@ -116,8 +136,7 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
       type,
       ttl,
       value,
-      field: field.trim() || undefined,
-      score: score ?? undefined,
+      entries: filled,
       direction,
     })
   }
@@ -201,57 +220,78 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
               <span className="font-mono text-foreground">{ttlPreview}</span>
             </div>
 
-            {type === 'redis_hash' && (
-              <>
-                <div className="space-y-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Field</label>
-                  <Input
-                    value={field}
-                    onChange={(event) => {
-                      setField(event.target.value)
-                      setError(null)
-                    }}
-                    placeholder="name"
-                    className="font-mono"
-                  />
+            {type !== 'redis_string' && (
+              <div className="space-y-2 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                    {type === 'redis_hash' ? 'Fields' : type === 'redis_zset' ? 'Members' : 'Values'}
+                  </label>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="h-7 gap-1.5 font-mono text-[11px]"
+                    onClick={() => setEntries((current) => [...current, { field: '', value: '', score: '0' }])}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Add
+                  </Button>
                 </div>
-                <div className="space-y-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Value</label>
-                  <Input
-                    value={value}
-                    onChange={(event) => {
-                      setValue(event.target.value)
-                      setError(null)
-                    }}
-                    placeholder="John"
-                    className="font-mono"
-                  />
-                </div>
-              </>
-            )}
 
-            {type === 'redis_list' && (
-              <>
-                <div className="space-y-2 md:col-span-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Value</label>
-                  <Textarea
-                    value={value}
-                    onChange={(event) => {
-                      setValue(event.target.value)
-                      setError(null)
-                    }}
-                    placeholder="First item"
-                    className="min-h-24 font-mono"
-                  />
+                {/* A collection is rarely created with exactly one entry, and
+                    filling in the rest afterwards one at a time was the tedious
+                    part. These rows map onto what the backend already accepts:
+                    a map for a hash, a list of members for the rest. */}
+                <div className="max-h-64 space-y-2 overflow-y-auto">
+                  {entries.map((entry, index) => (
+                    <div key={index} className="flex items-center gap-2">
+                      {type === 'redis_hash' && (
+                        <Input
+                          value={entry.field}
+                          onChange={(event) => updateEntry(index, { field: event.target.value })}
+                          placeholder="field"
+                          className="w-1/3 font-mono"
+                          aria-label={`Field for entry ${index + 1}`}
+                        />
+                      )}
+                      {type === 'redis_zset' && (
+                        <Input
+                          value={entry.score}
+                          onChange={(event) => updateEntry(index, { score: event.target.value })}
+                          placeholder="score"
+                          className="w-24 font-mono"
+                          aria-label={`Score for entry ${index + 1}`}
+                        />
+                      )}
+                      <Input
+                        value={entry.value}
+                        onChange={(event) => updateEntry(index, { value: event.target.value })}
+                        placeholder={type === 'redis_hash' ? 'value' : type === 'redis_set' ? 'member' : 'item'}
+                        className="flex-1 font-mono"
+                        aria-label={`Value for entry ${index + 1}`}
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        className={cn('h-9 w-9 shrink-0 p-0', entries.length === 1 && 'invisible')}
+                        onClick={() => setEntries((current) => current.filter((_, at) => at !== index))}
+                        aria-label={`Remove entry ${index + 1}`}
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-                <div className="space-y-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Direction</label>
-                  <div className="grid grid-cols-2 gap-2">
+
+                {type === 'redis_list' && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Direction</span>
                     <Button
                       type="button"
                       variant={direction === 'left' ? 'secondary' : 'outline'}
                       size="sm"
-                      className="h-9 font-mono text-xs"
+                      className="h-8 font-mono text-xs"
                       onClick={() => setDirection('left')}
                     >
                       LPUSH
@@ -260,58 +300,14 @@ export function CreateKeyDialog({ open, saving, onOpenChange, onConfirm }: Creat
                       type="button"
                       variant={direction === 'right' ? 'secondary' : 'outline'}
                       size="sm"
-                      className="h-9 font-mono text-xs"
+                      className="h-8 font-mono text-xs"
                       onClick={() => setDirection('right')}
                     >
                       RPUSH
                     </Button>
                   </div>
-                </div>
-              </>
-            )}
-
-            {type === 'redis_set' && (
-              <div className="space-y-2 md:col-span-2">
-                <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Member</label>
-                <Input
-                  value={value}
-                  onChange={(event) => {
-                    setValue(event.target.value)
-                    setError(null)
-                  }}
-                  placeholder="member-1"
-                  className="font-mono"
-                />
+                )}
               </div>
-            )}
-
-            {type === 'redis_zset' && (
-              <>
-                <div className="space-y-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Score</label>
-                  <Input
-                    value={scoreText}
-                    onChange={(event) => {
-                      setScoreText(event.target.value)
-                      setError(null)
-                    }}
-                    placeholder="1.0"
-                    className="font-mono"
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="block text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Member</label>
-                  <Input
-                    value={value}
-                    onChange={(event) => {
-                      setValue(event.target.value)
-                      setError(null)
-                    }}
-                    placeholder="member-1"
-                    className="font-mono"
-                  />
-                </div>
-              </>
             )}
 
             {type === 'redis_string' && (

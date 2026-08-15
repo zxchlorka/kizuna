@@ -276,7 +276,8 @@ export interface FilterExpr {
 }
 
 export interface MutateOp {
-  type: 'insert' | 'update' | 'delete'
+  // 'copy' duplicates a key under a new name; Redis only.
+  type: 'insert' | 'update' | 'delete' | 'copy'
   schema: string
   object: string
   where?: Record<string, unknown>
