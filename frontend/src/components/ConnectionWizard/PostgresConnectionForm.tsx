@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { ConnectionTagsField } from '@/components/ConnectionWizard/ConnectionTagsField'
+import { parseDsn } from '@/lib/postgresDsn'
 import type { ConnectionFormValues } from '@/lib/connectionForms'
 
 interface PostgresConnectionFormProps {
@@ -9,8 +11,68 @@ interface PostgresConnectionFormProps {
 }
 
 export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConnectionFormProps) {
+  const [dsnText, setDsnText] = useState('')
+
+  const applyDsn = (text: string) => {
+    setDsnText(text)
+    const parsed = parseDsn(text)
+    if (!parsed) {
+      return
+    }
+    onChange({
+      ...(parsed.host !== undefined ? { host: parsed.host } : {}),
+      ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
+      ...(parsed.database !== undefined ? { database: parsed.database } : {}),
+      ...(parsed.username !== undefined ? { username: parsed.username } : {}),
+      ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+    })
+  }
+
+  // A connection string is how these are actually shared — in a wiki, a ticket,
+  // a colleague's message — so pasting one into the first field it fits should
+  // fill the form rather than land in Host verbatim. Both shapes Postgres itself
+  // accepts are recognised; anything else pastes normally.
+  const handlePaste = (event: React.ClipboardEvent<HTMLInputElement>) => {
+    const parsed = parseDsn(event.clipboardData.getData('text'))
+    if (!parsed) {
+      return
+    }
+    event.preventDefault()
+
+    onChange({
+      ...(parsed.host !== undefined ? { host: parsed.host } : {}),
+      ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
+      ...(parsed.database !== undefined ? { database: parsed.database } : {}),
+      ...(parsed.username !== undefined ? { username: parsed.username } : {}),
+      // An edit form shows a masked password it never received; overwriting it
+      // from a DSN that carries one is intended, leaving it alone otherwise.
+      ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+    })
+  }
+
   return (
     <div className="space-y-4">
+      <div>
+        <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+          Connection string <span className="normal-case tracking-normal opacity-60">— optional, fills the rest</span>
+        </label>
+        <Input
+          value={dsnText}
+          onChange={(event) => applyDsn(event.target.value)}
+          onPaste={(event) => {
+            // Handled here as well as onChange so a paste fills the form in the
+            // same tick, rather than after React round-trips the value.
+            const pasted = event.clipboardData.getData('text')
+            if (parseDsn(pasted)) {
+              event.preventDefault()
+              applyDsn(pasted)
+            }
+          }}
+          placeholder="postgres://user:pass@host:5432/dbname"
+          className="font-mono"
+        />
+      </div>
+
       <div>
         <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
           Name
@@ -32,6 +94,7 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
           <Input
             value={form.host}
             onChange={(event) => onChange({ host: event.target.value })}
+            onPaste={handlePaste}
             placeholder="localhost"
             className="font-mono"
           />
