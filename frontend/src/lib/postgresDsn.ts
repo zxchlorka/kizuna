@@ -97,14 +97,3 @@ function parseKeywordValue(value: string): ParsedDsn | null {
 
   return Object.keys(parsed).length > 0 ? parsed : null
 }
-
-// describeDsn names what was filled in, so the form can say what it took rather
-// than silently rewriting fields the user was looking at.
-export function describeDsn(parsed: ParsedDsn): string {
-  const parts: string[] = []
-  if (parsed.host) parts.push(`host ${parsed.host}${parsed.port ? `:${parsed.port}` : ''}`)
-  if (parsed.database) parts.push(`database ${parsed.database}`)
-  if (parsed.username) parts.push(`user ${parsed.username}`)
-  if (parsed.password) parts.push('password')
-  return parts.join(', ')
-}

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
 import { ConnectionTagsField } from '@/components/ConnectionWizard/ConnectionTagsField'
-import { describeDsn, parseDsn } from '@/lib/postgresDsn'
+import { parseDsn } from '@/lib/postgresDsn'
 import type { ConnectionFormValues } from '@/lib/connectionForms'
 
 interface PostgresConnectionFormProps {
@@ -11,14 +11,12 @@ interface PostgresConnectionFormProps {
 }
 
 export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConnectionFormProps) {
-  const [filledFrom, setFilledFrom] = useState<string | null>(null)
   const [dsnText, setDsnText] = useState('')
 
   const applyDsn = (text: string) => {
     setDsnText(text)
     const parsed = parseDsn(text)
     if (!parsed) {
-      setFilledFrom(null)
       return
     }
     onChange({
@@ -28,7 +26,6 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
       ...(parsed.username !== undefined ? { username: parsed.username } : {}),
       ...(parsed.password !== undefined ? { password: parsed.password } : {}),
     })
-    setFilledFrom(describeDsn(parsed))
   }
 
   // A connection string is how these are actually shared — in a wiki, a ticket,
@@ -51,7 +48,6 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
       // from a DSN that carries one is intended, leaving it alone otherwise.
       ...(parsed.password !== undefined ? { password: parsed.password } : {}),
     })
-    setFilledFrom(describeDsn(parsed))
   }
 
   return (
@@ -75,9 +71,6 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
           placeholder="postgres://user:pass@host:5432/dbname"
           className="font-mono"
         />
-        {filledFrom && (
-          <p className="mt-1 font-mono text-[11px] text-amber-600 dark:text-amber-400">Filled: {filledFrom}.</p>
-        )}
       </div>
 
       <div>
@@ -105,11 +98,6 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
             placeholder="localhost"
             className="font-mono"
           />
-          {filledFrom && (
-            <p className="mt-1 font-mono text-[11px] text-amber-600 dark:text-amber-400">
-              Filled from the pasted string: {filledFrom}.
-            </p>
-          )}
         </div>
         <div>
           <label className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
