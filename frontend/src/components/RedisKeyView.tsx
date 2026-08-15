@@ -602,6 +602,18 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] uppercase tracking-[0.14em]', getRedisTypePillClass(metaType ?? objectType))}>
                       {getRedisObjectTypeLabel(metaType ?? objectType)}
                     </span>
+                    {/* Beside TTL rather than in a panel of its own: how much a
+                        key weighs belongs with the other small facts about it,
+                        not alongside which connection it came from. */}
+                    {memoryBytes !== null && (
+                      <span
+                        className="inline-flex items-center rounded-sm border border-sky-500/30 bg-sky-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.14em] text-sky-600 dark:text-sky-400"
+                        title="Memory this key occupies, sampled by Redis on large collections"
+                      >
+                        <Binary className="mr-1 h-3 w-3" />
+                        {formatBytes(memoryBytes)}
+                      </span>
+                    )}
                     {ttlLabel && readOnly && (
                       <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] font-mono uppercase tracking-[0.14em]', getRedisTTLStyle(currentTTL))}>
                         <TimerReset className="mr-1 h-3 w-3" />
@@ -800,7 +812,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               {metaCard('Type', getRedisObjectTypeLabel(metaType ?? objectType), 'text-foreground')}
               {metaCard('Connection', connection?.name ?? connId, 'text-foreground')}
               {metaCard('Mode', connection?.mode ?? 'standalone', 'text-foreground')}
-              {memoryBytes !== null && metaCard('Memory', formatBytes(memoryBytes), 'text-foreground')}
             </div>
           </div>
 
