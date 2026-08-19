@@ -6,7 +6,6 @@ export interface KafkaConfig {
   sasl_mechanism?: string
   tls_enabled?: boolean
   tls_ca_pem?: string
-  schema_registry_url?: string
 }
 export type PostgresSSLMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
 
