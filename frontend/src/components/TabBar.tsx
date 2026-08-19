@@ -1,6 +1,7 @@
 import { Activity, Braces, CircleDot, Database, Eye, Folder, Gauge, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { ConnectionLinksButton } from '@/components/links/ConnectionLinksButton'
 import { useConnectionStore } from '@/stores/connections'
 import { tabPageId, useWorkspaceStore } from '@/stores/workspace'
 import { isRedisObjectType } from '@/lib/objectTypes'
@@ -98,6 +99,16 @@ export function TabBar({ connId }: TabBarProps) {
       </div>
       {isKafka ? null : isRedis ? (
         <>
+          {/* Which server this is, and how it is wired, belong to the
+              connection — not to every key opened on it. */}
+          <span
+            className="hidden shrink-0 truncate font-mono text-[11px] text-muted-foreground md:inline"
+            title="The connection these tabs read from"
+          >
+            {connection?.name}
+            <span className="opacity-50"> · {connection?.mode ?? 'standalone'}</span>
+          </span>
+          <ConnectionLinksButton connId={connId} />
           <Button
             type="button"
             size="sm"
@@ -123,6 +134,7 @@ export function TabBar({ connId }: TabBarProps) {
         </>
       ) : (
         <>
+          <ConnectionLinksButton connId={connId} />
           <Button
             type="button"
             size="sm"
