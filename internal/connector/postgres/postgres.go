@@ -2,12 +2,19 @@ package postgres
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zxchlorka/kizuna/internal/config"
 	"github.com/zxchlorka/kizuna/internal/connector"
@@ -64,24 +71,129 @@ type schemaCacheBucket struct {
 	expires time.Time
 }
 
-// New creates a new PostgresConnector with a pgxpool connection pool.
-func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*PostgresConnector, error) {
-	password := cfg.Password
-	if encKey != "" && password != "" {
-		decrypted, err := config.Decrypt(encKey, password)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decrypt password: %w", err)
+// sslSettings returns the connection's TLS settings with defaults applied,
+// tolerating the nil config every connection stored before TLS support has.
+func sslSettings(cfg config.ConnectionConfig) config.PostgresConfig {
+	settings := config.PostgresConfig{}
+	if cfg.PostgresConfig != nil {
+		settings = *cfg.PostgresConfig
+	}
+	return settings.Normalize()
+}
+
+func decryptSecret(encKey, value string) (string, error) {
+	if encKey == "" || value == "" {
+		return value, nil
+	}
+	return config.Decrypt(encKey, value)
+}
+
+// dsnSSLMode is the mode handed to pgx, which is not always the mode the user
+// picked. libpq documents that sslmode=require with a root certificate present
+// verifies the chain, exactly as verify-ca does. pgx implements that rule by
+// looking at the sslrootcert *setting*, which we never set — our CA arrives as
+// inline PEM and is installed after parsing — so the upgrade is applied here
+// instead. Without it, supplying a CA and choosing require would verify nothing.
+func dsnSSLMode(ssl config.PostgresConfig) config.PostgresSSLMode {
+	if ssl.SSLMode == config.PostgresSSLRequire && ssl.SSLRootCert != "" {
+		return config.PostgresSSLVerifyCA
+	}
+	return ssl.SSLMode
+}
+
+// buildDSN assembles the connection URI. url.URL escapes the credentials, which
+// fmt.Sprintf did not: a password containing @, / or ? made the DSN parse as a
+// different host, or fail outright.
+func buildDSN(cfg config.ConnectionConfig, password string, ssl config.PostgresConfig) string {
+	dsn := url.URL{
+		Scheme:   "postgres",
+		User:     url.UserPassword(cfg.Username, password),
+		Host:     net.JoinHostPort(resolveHost(cfg.Host), strconv.Itoa(cfg.Port)),
+		Path:     "/" + cfg.Database,
+		RawQuery: url.Values{"sslmode": {string(dsnSSLMode(ssl))}}.Encode(),
+	}
+	return dsn.String()
+}
+
+// applyTLSMaterial installs the certificate material pgx cannot take from a
+// DSN. pgx reads sslrootcert/sslcert/sslkey as paths to files on disk; we hold
+// PEM inline, so the config is parsed first — that is what decides each mode's
+// verification rules — and the material is filled in afterwards.
+//
+// Every TLS config the parse produced is covered, not only the first one:
+// sslmode=prefer becomes two connection attempts, one with TLS and a plaintext
+// fallback, and pgx keeps the remainder in Fallbacks. Filling in only
+// ConnConfig.TLSConfig would leave a fallback attempt without the CA.
+func applyTLSMaterial(connCfg *pgconn.Config, ssl config.PostgresConfig, clientKey string) error {
+	var rootCAs *x509.CertPool
+	if ssl.SSLRootCert != "" {
+		rootCAs = x509.NewCertPool()
+		if !rootCAs.AppendCertsFromPEM([]byte(ssl.SSLRootCert)) {
+			return errors.New("ssl root certificate is not valid PEM")
 		}
-		password = decrypted
 	}
 
-	host := resolveHost(cfg.Host)
-	dsn := fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=disable",
-		cfg.Username, password, host, cfg.Port, cfg.Database)
+	var clientCerts []tls.Certificate
+	switch {
+	case ssl.SSLClientCert != "" && clientKey == "":
+		return errors.New("ssl client certificate needs its private key")
+	case ssl.SSLClientCert == "" && clientKey != "":
+		return errors.New("ssl client key needs its certificate")
+	case ssl.SSLClientCert != "":
+		pair, err := tls.X509KeyPair([]byte(ssl.SSLClientCert), []byte(clientKey))
+		if err != nil {
+			return fmt.Errorf("ssl client certificate and key do not load: %w", err)
+		}
+		clientCerts = []tls.Certificate{pair}
+	}
 
-	poolConfig, err := pgxpool.ParseConfig(dsn)
+	tlsConfigs := make([]*tls.Config, 0, len(connCfg.Fallbacks)+1)
+	if connCfg.TLSConfig != nil {
+		tlsConfigs = append(tlsConfigs, connCfg.TLSConfig)
+	}
+	for _, fallback := range connCfg.Fallbacks {
+		if fallback.TLSConfig != nil {
+			tlsConfigs = append(tlsConfigs, fallback.TLSConfig)
+		}
+	}
+
+	for _, tlsConfig := range tlsConfigs {
+		if rootCAs != nil {
+			// verify-ca verifies the chain inside a VerifyPeerCertificate closure
+			// that reads RootCAs off this same struct when the handshake runs, so
+			// assigning it here reaches that path too.
+			tlsConfig.RootCAs = rootCAs
+		}
+		if clientCerts != nil {
+			tlsConfig.Certificates = clientCerts
+		}
+		if ssl.SSLServerName != "" {
+			tlsConfig.ServerName = ssl.SSLServerName
+		}
+	}
+
+	return nil
+}
+
+// New creates a new PostgresConnector with a pgxpool connection pool.
+func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*PostgresConnector, error) {
+	password, err := decryptSecret(encKey, cfg.Password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt password: %w", err)
+	}
+
+	ssl := sslSettings(cfg)
+	clientKey, err := decryptSecret(encKey, ssl.SSLClientKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decrypt ssl client key: %w", err)
+	}
+
+	poolConfig, err := pgxpool.ParseConfig(buildDSN(cfg, password, ssl))
 	if err != nil {
 		return nil, normalizePostgresError(fmt.Errorf("failed to parse connection config: %w", err))
+	}
+	if err := applyTLSMaterial(&poolConfig.ConnConfig.Config, ssl, clientKey); err != nil {
+		return nil, normalizePostgresError(err)
 	}
 	poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
 

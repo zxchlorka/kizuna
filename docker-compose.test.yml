@@ -8,6 +8,59 @@ services:
     ports:
       - "55432:5432"
 
+  # Certificates for postgres-tls, made once into a named volume so the CA a
+  # saved connection carries stays valid when the containers are recreated.
+  # postgres:16-alpine has no openssl binary, hence the separate one-shot image.
+  postgres-tls-certs:
+    image: alpine/openssl:latest
+    entrypoint: sh
+    volumes:
+      - postgres-tls-certs:/certs
+    command:
+      - -c
+      - |
+        set -e
+        if [ -f /certs/server.crt ]; then echo "certificates already present"; exit 0; fi
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+          -keyout /certs/ca.key -out /certs/ca.crt -subj "/CN=kizuna-test-ca"
+        openssl req -newkey rsa:2048 -nodes \
+          -keyout /certs/server.key -out /certs/server.csr -subj "/CN=postgres-tls"
+        # Every name the server can be reached by: the service name from the
+        # compose network, and localhost/127.0.0.1 from the host. verify-full
+        # checks the name it dialled against these.
+        printf 'subjectAltName=DNS:postgres-tls,DNS:localhost,DNS:host.docker.internal,IP:127.0.0.1\n' > /certs/san.cnf
+        openssl x509 -req -in /certs/server.csr -CA /certs/ca.crt -CAkey /certs/ca.key \
+          -CAcreateserial -out /certs/server.crt -days 3650 -extfile /certs/san.cnf
+        # The postgres user in the server image owns the key and nothing else may
+        # read it, or the server refuses to start.
+        chown 70:70 /certs/server.key
+        chmod 600 /certs/server.key
+        echo "certificates generated"
+
+  postgres-tls:
+    image: postgres:16-alpine
+    depends_on:
+      postgres-tls-certs:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: devdb
+    volumes:
+      - postgres-tls-certs:/certs:ro
+    command:
+      - postgres
+      - -c
+      - ssl=on
+      - -c
+      - ssl_cert_file=/certs/server.crt
+      - -c
+      - ssl_key_file=/certs/server.key
+      - -c
+      - ssl_ca_file=/certs/ca.crt
+    ports:
+      - "55433:5432"
+
   redis:
     image: redis:7-alpine
     ports:
@@ -39,3 +92,6 @@ services:
       KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
     ports:
       - "59092:9094"
+
+volumes:
+  postgres-tls-certs:
