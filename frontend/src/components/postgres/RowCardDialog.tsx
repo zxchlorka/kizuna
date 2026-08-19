@@ -2,9 +2,17 @@ import { Copy } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
+import { availableStatements, buildRowStatement, type RowStatementKind } from '@/lib/rowSql'
 import { cn } from '@/lib/utils'
 import { useToastStore } from '@/stores/toast'
 import type { ColumnMeta, TableRow } from '@/types/api'
+
+const STATEMENT_LABELS: Record<RowStatementKind, string> = {
+  select: 'SELECT',
+  insert: 'INSERT',
+  update: 'UPDATE',
+  delete: 'DELETE',
+}
 
 interface RowCardDialogProps {
   open: boolean
@@ -31,6 +39,25 @@ export function RowCardDialog({ open, columns, row, title, onOpenChange }: RowCa
     if (!ok) {
       pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
     }
+  }
+
+  const statements = row ? availableStatements(columns, row) : []
+  const keyless = statements.length > 0 && !statements.includes('delete')
+
+  const copyStatement = async (kind: RowStatementKind) => {
+    if (!row) {
+      return
+    }
+    const statement = buildRowStatement(kind, title, columns, row)
+    if (!statement) {
+      return
+    }
+    const ok = await writeClipboardText(statement)
+    pushToast(
+      ok
+        ? { tone: 'success', title: `${STATEMENT_LABELS[kind]} copied`, message: title }
+        : { tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() }
+    )
   }
 
   return (
@@ -84,6 +111,30 @@ export function RowCardDialog({ open, columns, row, title, onOpenChange }: RowCa
             </tbody>
           </table>
         </div>
+
+        {row && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Copy as</span>
+            {statements.map((kind) => (
+              <Button
+                key={kind}
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 px-3 font-mono text-[11px]"
+                onClick={() => void copyStatement(kind)}
+              >
+                {STATEMENT_LABELS[kind]}
+              </Button>
+            ))}
+            {keyless && (
+              <span className="text-[11px] text-muted-foreground">
+                UPDATE and DELETE need a primary key — without one a statement could match rows other than
+                this.
+              </span>
+            )}
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   )
