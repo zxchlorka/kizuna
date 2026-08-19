@@ -3,6 +3,68 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.8.0 — 2026-08-19
+
+### Postgres
+
+- Connections can use TLS, from `prefer` through `verify-full`, with the CA and
+  an optional client certificate pasted in as PEM rather than named as files on
+  disk — a path recorded on one machine means nothing in the container the
+  config is mounted into. The private key is encrypted alongside the password
+  and is never sent back to the browser.
+- `require` with a CA given verifies the chain, as libpq documents; `verify-ca`
+  and `verify-full` fall back to the system trust store when no CA is supplied,
+  which is the whole configuration for a managed database with a publicly
+  signed certificate. A connection saved before any of this existed keeps
+  connecting exactly as it did.
+- A pasted connection string that names an `sslmode` now sets it, instead of
+  filling the rest of the form and leaving the connection in the clear.
+- A password containing `@`, `/` or `?` no longer changes which host is dialled.
+  The connection string was assembled by hand and those characters ended the
+  credentials early.
+- One row can be copied as a `SELECT`, `INSERT`, `UPDATE` or `DELETE`. The two
+  destructive statements are written only against a complete primary key —
+  without one they are not offered, since a `WHERE` over ordinary columns looks
+  just as precise and can match rows nobody looked at.
+
+### Redis
+
+- A key can be renamed. An existing name is refused rather than overwritten,
+  which is what Redis's own RENAME does silently. In a cluster, where a rename
+  across hash slots is impossible, the key is copied to the new slot and the old
+  one dropped; the copy happens first, so an interruption leaves the original
+  in place.
+- A link that reads a key's value can be followed from that value, and every
+  link a key can be walked along is shown beneath its name. Previously both
+  required opening the Links menu, so a link just created looked like one that
+  had not been saved.
+- A key's link menu is about that key alone. What else the connection is wired
+  to moved to the tab bar, beside Overview.
+- The key header keeps the pencil on the name it renames; refresh, duplicate and
+  delete are icons with hover labels. The type, connection and mode panels are
+  gone — the type was already a badge, and the other two belong to the
+  connection, which now names itself once in the tab bar.
+
+### Kafka
+
+- Messages can be searched by record key or by a header, not only by a path into
+  the payload. Both are strings the broker delivers beside the value, so they
+  match on a record whose body is binary or never parses as JSON — which is much
+  of what a search by correlation id is for.
+- Conditions take a `contains` comparison in addition to `equals`, on the key, a
+  header, or a payload field.
+
+### Workspace
+
+- The address bar carries the open object and any filters applied to it, so an
+  investigation can be handed to someone else as a link. Opening one restores
+  the object and its filters; browser Back and Forward walk the objects visited.
+
+### Removed
+
+- `schema_registry_url` is gone from the connection type. It was declared but
+  nothing ever read it, so it promised decoding the product does not do.
+
 ## v0.7.0 — 2026-08-16
 
 ### Postgres
