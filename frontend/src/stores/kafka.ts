@@ -444,7 +444,11 @@ async function requestMessages(
     // numbered; parseMatchQuery in messages.go reads both.
     activeConditions(search.conditions).forEach((condition, index) => {
       const suffix = index === 0 ? '' : `.${index}`
-      filters.push({ column: `match_field${suffix}`, op: 'eq', value: condition.field })
+      // A key condition has no field. Text left in the box from an earlier
+      // target would ride along and mean nothing.
+      if (conditionTarget(condition) !== 'key') {
+        filters.push({ column: `match_field${suffix}`, op: 'eq', value: condition.field })
+      }
       filters.push({ column: `match_value${suffix}`, op: 'eq', value: condition.value })
       filters.push({ column: `match_op${suffix}`, op: 'eq', value: condition.op })
       // Only sent when it says something: a payload condition is the default,
