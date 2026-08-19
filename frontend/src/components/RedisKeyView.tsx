@@ -624,7 +624,25 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                 </div>
                 <div className="min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Redis key</div>
-                  <h2 className="mt-1 truncate font-mono text-lg font-semibold text-foreground">{object}</h2>
+                  {/* Renaming edits this name, so the pencil sits on it rather
+                      than in the row of actions on the far side of the header. */}
+                  <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                    <h2 className="truncate font-mono text-lg font-semibold text-foreground">{object}</h2>
+                    {!readOnly && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setRenameOpen(true)}
+                        disabled={saving || renaming}
+                        title="Rename"
+                        aria-label="Rename key"
+                      >
+                        <PenLine className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] uppercase tracking-[0.14em]', getRedisTypePillClass(metaType ?? objectType))}>
                       {getRedisObjectTypeLabel(metaType ?? objectType)}
@@ -799,9 +817,21 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => void refresh()} disabled={loading || saving}>
+                {/* Icons only past this point: the header already carries the
+                    key, its type, its size and its TTL, and five labelled
+                    buttons beside all of that read as noise. Links keeps its
+                    word — it opens a menu rather than doing something. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => void refresh()}
+                  disabled={loading || saving}
+                  title="Refresh"
+                  aria-label="Refresh key"
+                >
                   <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-                  Refresh
                 </Button>
                 {readOnly ? (
                   <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
@@ -816,31 +846,29 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 gap-1.5"
+                      className="h-8 w-8 p-0"
                       onClick={() => {
                         setCopyName(`${object}-copy`)
                         setCopyOpen(true)
                       }}
                       disabled={saving}
+                      title="Duplicate"
+                      aria-label="Duplicate key"
                     >
                       <CopyIcon className="h-3.5 w-3.5" />
-                      Duplicate
                     </Button>
                     <Button
                       type="button"
-                      variant="outline"
+                      variant="destructive"
                       size="sm"
-                      className="h-8 gap-1.5"
-                      onClick={() => setRenameOpen(true)}
-                      disabled={saving || renaming}
+                      className="h-8 w-8 p-0"
+                      onClick={() => setDeleteDialogOpen(true)}
+                      disabled={saving}
+                      title="Delete key"
+                      aria-label="Delete key"
                     >
-                      <PenLine className="h-3.5 w-3.5" />
-                      Rename
+                      <Trash2 className="h-3.5 w-3.5" />
                     </Button>
-                  <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete key
-                  </Button>
                   </>
                 )}
               </div>
