@@ -1,8 +1,11 @@
 import { useState } from 'react'
 import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
 import { ConnectionTagsField } from '@/components/ConnectionWizard/ConnectionTagsField'
 import { parseDsn } from '@/lib/postgresDsn'
 import type { ConnectionFormValues } from '@/lib/connectionForms'
+import type { PostgresSSLMode } from '@/types/api'
 
 interface PostgresConnectionFormProps {
   form: ConnectionFormValues
@@ -10,8 +13,23 @@ interface PostgresConnectionFormProps {
   isEdit: boolean
 }
 
+const SSL_MODES: { value: PostgresSSLMode; label: string; hint: string }[] = [
+  { value: 'disable', label: 'disable', hint: 'No TLS. The password crosses the network in the clear.' },
+  { value: 'prefer', label: 'prefer', hint: 'TLS when the server offers it, plaintext when it does not. Not verified either way.' },
+  { value: 'require', label: 'require', hint: 'TLS always. Without a CA below nothing about the certificate is checked.' },
+  { value: 'verify-ca', label: 'verify-ca', hint: 'The certificate must be signed by a trusted CA. Its hostname is not checked.' },
+  { value: 'verify-full', label: 'verify-full', hint: 'Signed by a trusted CA and issued for this host. Use this against anything real.' },
+]
+
+// A DSN that names an sslmode is describing the server's requirement, so it is
+// worth honouring — a pasted "?sslmode=require" should not land in a form that
+// then connects in the clear.
+const parsedSslMode = (value: string | undefined): PostgresSSLMode | undefined =>
+  SSL_MODES.some((mode) => mode.value === value) ? (value as PostgresSSLMode) : undefined
+
 export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConnectionFormProps) {
   const [dsnText, setDsnText] = useState('')
+  const activeMode = SSL_MODES.find((mode) => mode.value === form.pgSslMode) ?? SSL_MODES[0]
 
   const applyDsn = (text: string) => {
     setDsnText(text)
@@ -19,12 +37,14 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
     if (!parsed) {
       return
     }
+    const sslMode = parsedSslMode(parsed.sslmode)
     onChange({
       ...(parsed.host !== undefined ? { host: parsed.host } : {}),
       ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
       ...(parsed.database !== undefined ? { database: parsed.database } : {}),
       ...(parsed.username !== undefined ? { username: parsed.username } : {}),
       ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+      ...(sslMode !== undefined ? { pgSslMode: sslMode } : {}),
     })
   }
 
@@ -39,6 +59,7 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
     }
     event.preventDefault()
 
+    const sslMode = parsedSslMode(parsed.sslmode)
     onChange({
       ...(parsed.host !== undefined ? { host: parsed.host } : {}),
       ...(parsed.port !== undefined ? { port: String(parsed.port) } : {}),
@@ -47,6 +68,7 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
       // An edit form shows a masked password it never received; overwriting it
       // from a DSN that carries one is intended, leaving it alone otherwise.
       ...(parsed.password !== undefined ? { password: parsed.password } : {}),
+      ...(sslMode !== undefined ? { pgSslMode: sslMode } : {}),
     })
   }
 
@@ -149,6 +171,121 @@ export function PostgresConnectionForm({ form, onChange, isEdit }: PostgresConne
             className="font-mono"
           />
         </div>
+      </div>
+
+      <div className="space-y-4 rounded-md border border-border/60 p-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <label className="block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+              TLS
+            </label>
+            <p className="mt-1 text-[11px] text-muted-foreground">{activeMode.hint}</p>
+          </div>
+          <div className="w-36 shrink-0">
+            <Select
+              value={form.pgSslMode}
+              onValueChange={(value) => onChange({ pgSslMode: value as PostgresSSLMode })}
+            >
+              <SelectTrigger className="font-mono text-xs">
+                <SelectValue placeholder="sslmode" />
+              </SelectTrigger>
+              <SelectContent>
+                {SSL_MODES.map((mode) => (
+                  <SelectItem key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+
+        {form.pgSslMode !== 'disable' && (
+          <>
+            <div>
+              <label
+                htmlFor="pg-ssl-root-cert"
+                className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+              >
+                CA certificate (PEM)
+              </label>
+              <Textarea
+                id="pg-ssl-root-cert"
+                value={form.pgSslRootCert}
+                onChange={(event) => onChange({ pgSslRootCert: event.target.value })}
+                placeholder={'-----BEGIN CERTIFICATE-----\n...\n-----END CERTIFICATE-----'}
+                className="min-h-24 resize-y font-mono text-xs"
+                spellCheck={false}
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Needed for a certificate the system does not already trust — a private CA, or a cloud
+                provider's own root. Leave blank to verify against the system trust store.
+              </p>
+            </div>
+
+            <div>
+              <label
+                htmlFor="pg-ssl-server-name"
+                className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+              >
+                Server name <span className="normal-case tracking-normal opacity-60">— optional</span>
+              </label>
+              <Input
+                id="pg-ssl-server-name"
+                value={form.pgSslServerName}
+                onChange={(event) => onChange({ pgSslServerName: event.target.value })}
+                placeholder="db.internal.example"
+                className="font-mono"
+              />
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                The name the certificate is checked against, when it differs from Host — connecting
+                through a tunnel, an IP address, or a proxy.
+              </p>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label
+                  htmlFor="pg-ssl-client-cert"
+                  className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+                >
+                  Client certificate
+                </label>
+                <Textarea
+                  id="pg-ssl-client-cert"
+                  value={form.pgSslClientCert}
+                  onChange={(event) => onChange({ pgSslClientCert: event.target.value })}
+                  placeholder={'-----BEGIN CERTIFICATE-----'}
+                  className="min-h-20 resize-y font-mono text-xs"
+                  spellCheck={false}
+                />
+              </div>
+              <div>
+                <label
+                  htmlFor="pg-ssl-client-key"
+                  className="mb-1 block text-[10px] font-medium uppercase tracking-[0.12em] text-muted-foreground"
+                >
+                  Client key
+                  {isEdit && form.pgSslClientCert && (
+                    <span className="ml-1 normal-case opacity-50">(blank = keep)</span>
+                  )}
+                </label>
+                <Textarea
+                  id="pg-ssl-client-key"
+                  value={form.pgSslClientKey}
+                  onChange={(event) => onChange({ pgSslClientKey: event.target.value })}
+                  placeholder={isEdit && form.pgSslClientCert ? '••••••••' : '-----BEGIN PRIVATE KEY-----'}
+                  className="min-h-20 resize-y font-mono text-xs"
+                  spellCheck={false}
+                />
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Only for servers that authenticate clients by certificate. The key is encrypted with the
+              rest of the configuration and is never sent back to this form.
+            </p>
+          </>
+        )}
       </div>
 
       <div>

@@ -21,40 +21,42 @@ type ConnectionsHandler struct {
 }
 
 type connectionRequest struct {
-	ID             string              `json:"id"`
-	Name           string              `json:"name"`
-	Type           string              `json:"type"`
-	Host           string              `json:"host"`
-	Port           int                 `json:"port"`
-	Database       string              `json:"database"`
-	Username       string              `json:"username"`
-	Tags           []string            `json:"tags"`
-	Password       string              `json:"password"`
-	VisibleSchemas []string            `json:"visible_schemas"`
-	ReadOnly       bool                `json:"read_only"`
-	RedisConfig    *config.RedisConfig `json:"redis_config"`
-	KafkaConfig    *config.KafkaConfig `json:"kafka_config"`
+	ID             string                 `json:"id"`
+	Name           string                 `json:"name"`
+	Type           string                 `json:"type"`
+	Host           string                 `json:"host"`
+	Port           int                    `json:"port"`
+	Database       string                 `json:"database"`
+	Username       string                 `json:"username"`
+	Tags           []string               `json:"tags"`
+	Password       string                 `json:"password"`
+	VisibleSchemas []string               `json:"visible_schemas"`
+	ReadOnly       bool                   `json:"read_only"`
+	PostgresConfig *config.PostgresConfig `json:"postgres_config"`
+	RedisConfig    *config.RedisConfig    `json:"redis_config"`
+	KafkaConfig    *config.KafkaConfig    `json:"kafka_config"`
 }
 
 type connectionResponse struct {
-	ID               string              `json:"id"`
-	Name             string              `json:"name"`
-	Type             string              `json:"type"`
-	Host             string              `json:"host"`
-	Port             int                 `json:"port"`
-	Database         string              `json:"database"`
-	Username         string              `json:"username"`
-	Tags             []string            `json:"tags,omitempty"`
-	VisibleSchemas   []string            `json:"visible_schemas"`
-	ReadOnly         bool                `json:"read_only"`
-	RedisConfig      *config.RedisConfig `json:"redis_config,omitempty"`
-	KafkaConfig      *config.KafkaConfig `json:"kafka_config,omitempty"`
-	Mode             config.RedisMode    `json:"mode,omitempty"`
-	Separator        string              `json:"separator,omitempty"`
-	TLSEnabled       bool                `json:"tlsEnabled,omitempty"`
-	MasterName       string              `json:"masterName,omitempty"`
-	ClusterAddresses []string            `json:"clusterAddresses,omitempty"`
-	SentinelAddrs    []string            `json:"sentinelAddresses,omitempty"`
+	ID               string                 `json:"id"`
+	Name             string                 `json:"name"`
+	Type             string                 `json:"type"`
+	Host             string                 `json:"host"`
+	Port             int                    `json:"port"`
+	Database         string                 `json:"database"`
+	Username         string                 `json:"username"`
+	Tags             []string               `json:"tags,omitempty"`
+	VisibleSchemas   []string               `json:"visible_schemas"`
+	ReadOnly         bool                   `json:"read_only"`
+	PostgresConfig   *config.PostgresConfig `json:"postgres_config,omitempty"`
+	RedisConfig      *config.RedisConfig    `json:"redis_config,omitempty"`
+	KafkaConfig      *config.KafkaConfig    `json:"kafka_config,omitempty"`
+	Mode             config.RedisMode       `json:"mode,omitempty"`
+	Separator        string                 `json:"separator,omitempty"`
+	TLSEnabled       bool                   `json:"tlsEnabled,omitempty"`
+	MasterName       string                 `json:"masterName,omitempty"`
+	ClusterAddresses []string               `json:"clusterAddresses,omitempty"`
+	SentinelAddrs    []string               `json:"sentinelAddresses,omitempty"`
 }
 
 func NewConnectionsHandler(cfg *config.AppConfig, manager *connector.ConnectionManager) *ConnectionsHandler {
@@ -93,6 +95,12 @@ func (h *ConnectionsHandler) Create(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		encPassword = encrypted
+	}
+
+	if err := h.prepareClientKey(req.PostgresConfig, ""); err != nil {
+		slog.Error("failed to encrypt ssl client key", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to encrypt ssl client key")
+		return
 	}
 
 	// Generate UUID
@@ -141,6 +149,12 @@ func (h *ConnectionsHandler) TestConfig(w http.ResponseWriter, r *http.Request) 
 		password = encrypted
 	}
 
+	if err := h.prepareClientKey(req.PostgresConfig, h.storedClientKey(req.ID)); err != nil {
+		slog.Error("failed to encrypt ssl client key", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to encrypt ssl client key")
+		return
+	}
+
 	cfg := buildConnectionConfig(req, password)
 
 	start := time.Now()
@@ -168,17 +182,18 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name        *string             `json:"name"`
-		Type        *string             `json:"type"`
-		Host        *string             `json:"host"`
-		Port        *int                `json:"port"`
-		Database    *string             `json:"database"`
-		Username    *string             `json:"username"`
-		Tags        *[]string           `json:"tags"`
-		Password    *string             `json:"password"`
-		ReadOnly    *bool               `json:"read_only"`
-		RedisConfig *config.RedisConfig `json:"redis_config"`
-		KafkaConfig *config.KafkaConfig `json:"kafka_config"`
+		Name           *string                `json:"name"`
+		Type           *string                `json:"type"`
+		Host           *string                `json:"host"`
+		Port           *int                   `json:"port"`
+		Database       *string                `json:"database"`
+		Username       *string                `json:"username"`
+		Tags           *[]string              `json:"tags"`
+		Password       *string                `json:"password"`
+		ReadOnly       *bool                  `json:"read_only"`
+		PostgresConfig *config.PostgresConfig `json:"postgres_config"`
+		RedisConfig    *config.RedisConfig    `json:"redis_config"`
+		KafkaConfig    *config.KafkaConfig    `json:"kafka_config"`
 	}
 
 	if !decodeJSON(w, r, &req) {
@@ -214,6 +229,27 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		existing.Password = encrypted
 	}
+	if req.PostgresConfig != nil {
+		incoming := req.PostgresConfig.Clone()
+		storedKey := ""
+		storedCert := ""
+		if existing.PostgresConfig != nil {
+			storedKey = existing.PostgresConfig.SSLClientKey
+			storedCert = existing.PostgresConfig.SSLClientCert
+		}
+		// A replaced certificate cannot be paired with the key kept from the old
+		// one — the handshake would fail later with a mismatch nobody can place.
+		if incoming.SSLClientCert != "" && incoming.SSLClientCert != storedCert && incoming.SSLClientKey == "" {
+			writeError(w, http.StatusBadRequest, "a new ssl client certificate must be sent with its private key")
+			return
+		}
+		if err := h.prepareClientKey(incoming, storedKey); err != nil {
+			writeError(w, http.StatusInternalServerError, "failed to encrypt ssl client key")
+			return
+		}
+		normalized := incoming.Normalize()
+		existing.PostgresConfig = &normalized
+	}
 	if req.RedisConfig != nil {
 		existing.RedisConfig = req.RedisConfig.Clone()
 		if existing.RedisConfig != nil {
@@ -230,6 +266,9 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 			normalized := existing.KafkaConfig.Normalize()
 			existing.KafkaConfig = &normalized
 		}
+	}
+	if existing.Type != "postgres" {
+		existing.PostgresConfig = nil
 	}
 	if existing.Type != "redis" {
 		existing.RedisConfig = nil
@@ -460,6 +499,42 @@ func (h *ConnectionsHandler) managerFactory(connType string) (connector.Connecto
 	return h.manager.Factory(connType)
 }
 
+// prepareClientKey encrypts the TLS client key for storage, in place.
+//
+// An empty key means "keep the stored one": the key never travels back to the
+// browser, so a form the user did not re-fill has nothing to send. That is the
+// same rule the password follows, and it is what stops an edit of the port from
+// wiping the certificate.
+func (h *ConnectionsHandler) prepareClientKey(pgCfg *config.PostgresConfig, storedKey string) error {
+	if pgCfg == nil {
+		return nil
+	}
+	if pgCfg.SSLClientKey == "" {
+		pgCfg.SSLClientKey = storedKey
+		return nil
+	}
+
+	encrypted, err := config.Encrypt(h.cfg.EncryptionKey, pgCfg.SSLClientKey)
+	if err != nil {
+		return err
+	}
+	pgCfg.SSLClientKey = encrypted
+	return nil
+}
+
+// storedClientKey returns the encrypted client key already saved for a
+// connection, or "" when there is none to carry over.
+func (h *ConnectionsHandler) storedClientKey(id string) string {
+	if id == "" {
+		return ""
+	}
+	existing, ok := h.cfg.GetConnection(id)
+	if !ok || existing.PostgresConfig == nil {
+		return ""
+	}
+	return existing.PostgresConfig.SSLClientKey
+}
+
 func buildConnectionConfig(req connectionRequest, password string) config.ConnectionConfig {
 	cfg := config.ConnectionConfig{
 		ID:             req.ID,
@@ -473,6 +548,10 @@ func buildConnectionConfig(req connectionRequest, password string) config.Connec
 		Tags:           normalizeTags(req.Tags),
 		VisibleSchemas: normalizeVisibleSchemas(req.VisibleSchemas),
 		ReadOnly:       req.ReadOnly,
+	}
+	if req.PostgresConfig != nil {
+		normalized := req.PostgresConfig.Normalize()
+		cfg.PostgresConfig = &normalized
 	}
 	if req.RedisConfig != nil {
 		cfg.RedisConfig = req.RedisConfig.Clone()
@@ -503,8 +582,14 @@ func buildConnectionResponse(conn config.ConnectionConfig) connectionResponse {
 		Tags:           slices.Clone(conn.Tags),
 		VisibleSchemas: slices.Clone(conn.VisibleSchemas),
 		ReadOnly:       conn.ReadOnly,
+		PostgresConfig: conn.PostgresConfig.Clone(),
 		RedisConfig:    conn.RedisConfig.Clone(),
 		KafkaConfig:    conn.KafkaConfig.Clone(),
+	}
+	if resp.PostgresConfig != nil {
+		// The private key stays on the server. The certificate does not: it is not
+		// secret, and the form uses its presence to say a key is stored.
+		resp.PostgresConfig.SSLClientKey = ""
 	}
 	if conn.RedisConfig != nil {
 		resp.Mode = conn.RedisConfig.Mode
@@ -529,6 +614,12 @@ func validateConnectionRequest(req connectionRequest) error {
 	case "postgres":
 		if strings.TrimSpace(req.Host) == "" || req.Port <= 0 || strings.TrimSpace(req.Database) == "" || strings.TrimSpace(req.Username) == "" {
 			return fmt.Errorf("postgres requires host, port, database, and username")
+		}
+		// A CA is deliberately not required by verify-ca/verify-full: with none
+		// given the system trust store is used, which is the whole configuration
+		// for a managed database whose certificate is publicly signed.
+		if req.PostgresConfig != nil && !config.ValidSSLMode(req.PostgresConfig.Normalize().SSLMode) {
+			return fmt.Errorf("unsupported postgres ssl mode: %s", req.PostgresConfig.SSLMode)
 		}
 	case "redis":
 		redisCfg := config.RedisConfig{}
