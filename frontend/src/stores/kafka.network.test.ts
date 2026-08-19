@@ -83,6 +83,43 @@ describe('Search topic — backend scan', () => {
     expect(calledUrl).toContain('match_value')
   })
 
+  // A key condition carries no field, and a rule that demanded one dropped it
+  // before it ever reached a request — the filter simply did nothing.
+  it('a key condition is sent with no field of its own', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({ columns: [], rows: [], total: 0, has_more: false, meta: { scanned: 5, matched: 0 } })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore
+      .getState()
+      .searchTopic('c1', 'topic', 'tab-key', [{ field: '', value: 'user-42', op: 'eq', target: 'key' }])
+
+    const calledUrl = decodeURIComponent(String(fetchMock.mock.calls[0][0]))
+    expect(calledUrl).toContain('"match_target","op":"eq","value":"key"')
+    expect(calledUrl).toContain('"match_value","op":"eq","value":"user-42"')
+    expect(calledUrl).not.toContain('match_field')
+  })
+
+  // Switching a condition from the payload to the key leaves the old path in
+  // the box; it must not ride along as a field the key does not have.
+  it('drops a leftover path when the condition moved to the key', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({ columns: [], rows: [], total: 0, has_more: false, meta: { scanned: 1, matched: 0 } })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore
+      .getState()
+      .searchTopic('c1', 'topic', 'tab-stale', [{ field: 'events[].name', value: 'user-42', op: 'eq', target: 'key' }])
+
+    expect(decodeURIComponent(String(fetchMock.mock.calls[0][0]))).not.toContain('events[].name')
+  })
+
   it('scanMore continues from the prior cursor and accumulates scanned + matches', async () => {
     const fetchMock = vi
       .fn()
