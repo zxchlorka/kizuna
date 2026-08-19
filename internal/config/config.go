@@ -9,19 +9,20 @@ import (
 )
 
 type ConnectionConfig struct {
-	ID             string       `json:"id"`
-	Name           string       `json:"name"`
-	Type           string       `json:"type"` // "postgres", "redis", "kafka"
-	Host           string       `json:"host"`
-	Port           int          `json:"port"`
-	Database       string       `json:"database"`
-	Username       string       `json:"username"`
-	Password       string       `json:"password"` // encrypted
-	Tags           []string     `json:"tags,omitempty"`
-	VisibleSchemas []string     `json:"visible_schemas"`
-	ReadOnly       bool         `json:"read_only,omitempty"`
-	RedisConfig    *RedisConfig `json:"redis_config,omitempty"`
-	KafkaConfig    *KafkaConfig `json:"kafka_config,omitempty"`
+	ID             string          `json:"id"`
+	Name           string          `json:"name"`
+	Type           string          `json:"type"` // "postgres", "redis", "kafka"
+	Host           string          `json:"host"`
+	Port           int             `json:"port"`
+	Database       string          `json:"database"`
+	Username       string          `json:"username"`
+	Password       string          `json:"password"` // encrypted
+	Tags           []string        `json:"tags,omitempty"`
+	VisibleSchemas []string        `json:"visible_schemas"`
+	ReadOnly       bool            `json:"read_only,omitempty"`
+	PostgresConfig *PostgresConfig `json:"postgres_config,omitempty"`
+	RedisConfig    *RedisConfig    `json:"redis_config,omitempty"`
+	KafkaConfig    *KafkaConfig    `json:"kafka_config,omitempty"`
 }
 
 type LinkConfig struct {
@@ -76,6 +77,7 @@ func cloneConnection(conn ConnectionConfig) ConnectionConfig {
 	clone := conn
 	clone.Tags = slices.Clone(conn.Tags)
 	clone.VisibleSchemas = slices.Clone(conn.VisibleSchemas)
+	clone.PostgresConfig = conn.PostgresConfig.Clone()
 	clone.RedisConfig = conn.RedisConfig.Clone()
 	clone.KafkaConfig = conn.KafkaConfig.Clone()
 	return clone

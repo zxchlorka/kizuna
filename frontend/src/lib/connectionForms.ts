@@ -4,7 +4,9 @@ import type {
   ConnectionType,
   KafkaConfig,
   KafkaConnectionInput,
+  PostgresConfig,
   PostgresConnectionInput,
+  PostgresSSLMode,
   RedisConfig,
   RedisConnectionInput,
   RedisMode,
@@ -28,6 +30,11 @@ export interface ConnectionFormValues {
   kafkaBrokersText: string
   kafkaSaslMechanism: string
   kafkaTlsCaPem: string
+  pgSslMode: PostgresSSLMode
+  pgSslRootCert: string
+  pgSslClientCert: string
+  pgSslClientKey: string
+  pgSslServerName: string
   readOnly: boolean
 }
 
@@ -49,6 +56,14 @@ const postgresDefaults: ConnectionFormValues = {
   kafkaBrokersText: '',
   kafkaSaslMechanism: '',
   kafkaTlsCaPem: '',
+  // libpq's own default, and what a new connection should try: TLS when the
+  // server offers it, plaintext when it does not. Connections stored before
+  // this setting existed stay on "disable", which the server fills in for them.
+  pgSslMode: 'prefer',
+  pgSslRootCert: '',
+  pgSslClientCert: '',
+  pgSslClientKey: '',
+  pgSslServerName: '',
   readOnly: false,
 }
 
@@ -152,6 +167,12 @@ export function createConnectionFormFromConnection(connection?: Connection): Con
     kafkaBrokersText: connection.kafka_config?.brokers?.join('\n') ?? '',
     kafkaSaslMechanism: connection.kafka_config?.sasl_mechanism ?? '',
     kafkaTlsCaPem: connection.kafka_config?.tls_ca_pem ?? '',
+    pgSslMode: connection.postgres_config?.ssl_mode ?? 'disable',
+    pgSslRootCert: connection.postgres_config?.ssl_root_cert ?? '',
+    pgSslClientCert: connection.postgres_config?.ssl_client_cert ?? '',
+    // Never sent back by the server; blank means the stored key is kept.
+    pgSslClientKey: '',
+    pgSslServerName: connection.postgres_config?.ssl_server_name ?? '',
     readOnly: connection.read_only ?? false,
   }
 
@@ -238,6 +259,20 @@ export function buildConnectionInput(form: ConnectionFormValues): ConnectionInpu
     return kafkaInput
   }
 
+  const postgresConfig: PostgresConfig = { ssl_mode: form.pgSslMode }
+  if (form.pgSslMode !== 'disable') {
+    // Only sent when TLS is on: a certificate left over from a mode the user
+    // turned off should not travel with the request, let alone be stored.
+    const rootCert = form.pgSslRootCert.trim()
+    const clientCert = form.pgSslClientCert.trim()
+    const clientKey = form.pgSslClientKey.trim()
+    const serverName = form.pgSslServerName.trim()
+    if (rootCert) postgresConfig.ssl_root_cert = rootCert
+    if (clientCert) postgresConfig.ssl_client_cert = clientCert
+    if (clientKey) postgresConfig.ssl_client_key = clientKey
+    if (serverName) postgresConfig.ssl_server_name = serverName
+  }
+
   const postgresInput: PostgresConnectionInput = {
     name: form.name.trim(),
     type: 'postgres',
@@ -248,6 +283,7 @@ export function buildConnectionInput(form: ConnectionFormValues): ConnectionInpu
     password: form.password,
     tags,
     read_only: form.readOnly,
+    postgres_config: postgresConfig,
   }
   return postgresInput
 }
