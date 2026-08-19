@@ -13,7 +13,6 @@ import { FkBreadcrumb } from '@/components/Navigation/FkBreadcrumb'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import {
   LINK_MENU_CAP,
-  LINK_PREVIEW_CAP,
   LinkPickerDialog,
   type LinkPickerItem,
 } from '@/components/links/LinkPickerDialog'
@@ -29,12 +28,10 @@ import { useLinksStore } from '@/stores/links'
 import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
   canReverse,
-  connectionLinks,
   extractPgColumn,
   linkSourceLabel,
   linkSummary,
   linkTargetLabel,
-  linkTouchesObject,
 } from '@/lib/links'
 import { classifyDataLoadError } from '@/lib/data-load-errors'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
@@ -148,7 +145,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     { x: number; y: number; row: TableRow; column?: string; value?: unknown } | null
   >(null)
   const [createLinkOpen, setCreateLinkOpen] = useState(false)
-  const [pickerGroup, setPickerGroup] = useState<'table' | 'reverse' | 'connection' | null>(null)
+  const [pickerGroup, setPickerGroup] = useState<'table' | 'reverse' | null>(null)
   // rowKey -> the row's PK predicate AND the row itself.
   //
   // Selection survives paging on purpose (Delete selected has always acted on
@@ -213,16 +210,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     [links, connId, object]
   )
 
-  // Everything else wired up on this connection. Membership is decided by what
-  // the link mentions, never by whether it happens to be navigable -- see
-  // linkTouchesObject.
-  const otherConnectionLinks = useMemo(
-    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'postgres'))),
-    [links, connId, object]
-  )
-  // The dialog answers "everything on this connection", so it lists them all.
-  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
-
 
   useEffect(() => {
     void (async () => {
@@ -273,16 +260,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         }
       })
     }
-    if (pickerGroup === 'connection') {
-      // Reference only: these belong to other tables, so this row holds no
-      // value to follow them with.
-      return allConnectionLinks.map((link) => ({
-        id: link.id,
-        label: linkSummary(link, connectionName),
-        disabled: true,
-        onPick: () => undefined,
-      }))
-    }
     return []
   }, [
     pickerGroup,
@@ -290,8 +267,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
     columns,
     tableLinks,
     reverseLinks,
-    allConnectionLinks,
-    connectionName,
     openLinkTarget,
     openLinkSource,
   ])
@@ -1234,26 +1209,8 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
               {linkSummary(link, connectionName)}
             </FloatingMenuItem>
           ))}
-          {/* What else this connection is wired to. Reference only -- these
-              belong to other tables, so this row has no value to follow them
-              with -- but without them a table with no links of its own looked
-              like a connection with none. */}
-          {/* The separator belongs to the whole connection block, not just its
-              preview: when every link on the connection is already listed above,
-              the preview is empty but "Show all" still needs to stand apart from
-              the group before it. */}
-          {allConnectionLinks.length > 0 && <FloatingMenuSeparator />}
-          {otherConnectionLinks.length > 0 && <FloatingMenuLabel>Elsewhere on this connection</FloatingMenuLabel>}
-          {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link: LinkRecord) => (
-            <FloatingMenuItem key={`conn-${link.id}`} disabled>
-              {linkSummary(link, connectionName)}
-            </FloatingMenuItem>
-          ))}
-          {allConnectionLinks.length > 0 && (
-            <FloatingMenuItem onClick={() => setPickerGroup('connection')}>
-              {`Show all ${allConnectionLinks.length} on this connection…`}
-            </FloatingMenuItem>
-          )}
+          {/* What else the connection is wired to belongs to the connection,
+              not to this row: the full list sits beside Overview. */}
           <FloatingMenuSeparator />
           <FloatingMenuItem
             onClick={() => {
@@ -1274,8 +1231,6 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         title={
           pickerGroup === 'reverse'
             ? 'Back to source'
-            : pickerGroup === 'connection'
-            ? 'Links on this connection'
             : 'Open linked record'
         }
         items={pickerItems}

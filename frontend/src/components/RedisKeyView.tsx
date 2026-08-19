@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { DeleteKeyDialog } from '@/components/redis/DeleteKeyDialog'
+import { RenameKeyDialog } from '@/components/redis/RenameKeyDialog'
 import { SetTTLDialog } from '@/components/redis/SetTTLDialog'
 import { HashEditor } from '@/components/redis/editors/HashEditor'
 import { JsonEditor } from '@/components/redis/editors/JsonEditor'
@@ -32,12 +33,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
-import {
-  LINK_MENU_CAP,
-  LINK_PREVIEW_CAP,
-  LinkPickerDialog,
-  type LinkPickerItem,
-} from '@/components/links/LinkPickerDialog'
+import { LINK_MENU_CAP, LinkPickerDialog, type LinkPickerItem } from '@/components/links/LinkPickerDialog'
+
+// Chips are a glance at where a key leads, not the list of everywhere it does —
+// the Links menu stays the place for that.
+const LINK_CHIP_CAP = 2
 import {
   FloatingMenu,
   FloatingMenuItem,
@@ -48,18 +48,17 @@ import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import {
   canReverse,
   captureFromKey,
-  connectionLinks,
   extractRedisValue,
   isPerElementExtract,
   keyLevelRedisLinks,
   linkSourceLabel,
   linkSummary,
   linkTargetLabel,
-  linkTouchesObject,
   memberRedisLinks,
   redisKeyMatchesPattern,
   selectionRedisLinks,
   suggestKeyPattern,
+  valueRedisLinks,
 } from '@/lib/links'
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
@@ -77,15 +76,6 @@ interface RedisKeyViewProps {
   object: string
   objectType: ObjectType
   ttlSeconds?: number | null
-}
-
-function metaCard(label: string, value: string, accentClass: string) {
-  return (
-    <div className="rounded-sm border border-border bg-muted/10 px-3 py-3">
-      <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
-      <div className={cn('mt-2 font-mono text-sm', accentClass)}>{value}</div>
-    </div>
-  )
 }
 
 export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: RedisKeyViewProps) {
@@ -112,6 +102,32 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
   const [copying, setCopying] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+
+  // The key under this tab stops existing, so the tab has to follow it: the new
+  // name is opened first and the old tab closed after, which leaves the new one
+  // active instead of dropping the user onto a neighbouring tab.
+  const renameKey = async (destination: string) => {
+    if (renaming) {
+      return
+    }
+    setRenaming(true)
+    try {
+      await mutate(connId, { type: 'rename', object, schema: '', where: {}, data: { destination } }, tabId, {
+        reload: false,
+      })
+      setRenameOpen(false)
+      pushToast({ tone: 'success', title: 'Key renamed', message: destination })
+      openTab(connId, destination, objectType)
+      closeTab(tabId)
+      await refreshTree(connId)
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Rename failed', message: (error as Error).message })
+    } finally {
+      setRenaming(false)
+    }
+  }
 
   // The copy is made server-side from the stored value, so the new key is a
   // faithful duplicate of whatever type this is — no reading the contents into
@@ -142,7 +158,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // и поле, по которому кликнули.
   const [createFromElement, setCreateFromElement] = useState<{ field?: string } | null>(null)
   const [pickerGroup, setPickerGroup] = useState<
-    'key' | 'reverse' | 'perElement' | 'connection' | 'member' | 'selection' | null
+    'key' | 'reverse' | 'perElement' | 'member' | 'selection' | null
   >(null)
 
   useEffect(() => {
@@ -154,6 +170,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   }, [fetchLinks])
 
   const keyLinks = useMemo(() => keyLevelRedisLinks(links, connId, object), [links, connId, object])
+  // Links that read the value rather than the key name. They belong on a click
+  // into the value: the header menu could already follow them, but nothing on
+  // the value itself said so, so a link just created looked like it had not been.
+  const valueLinks = useMemo(() => valueRedisLinks(links, connId, object), [links, connId, object])
   const memberLinks = useMemo(() => memberRedisLinks(links, connId, object), [links, connId, object])
 
   const [memberMenu, setMemberMenu] = useState<{
@@ -234,17 +254,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     [links, connId, object]
   )
 
-  // Everything else wired up on this connection. Without it a key that simply
-  // has no links of its own showed a menu with nothing but "+ Create link…",
-  // which reads as "this connection has none" rather than "none apply here".
-  // Membership is decided by what the link mentions, never by whether it is
-  // navigable -- see linkTouchesObject. Using reverseLinks (already narrowed by
-  // canReverse) put links pointing straight at this key under "elsewhere".
-  const otherConnectionLinks = useMemo(
-    () => connectionLinks(links, connId, links.filter((link) => linkTouchesObject(link, connId, object, 'redis'))),
-    [links, connId, object]
-  )
-
   // Point at this key but cannot be walked back to their source: shown, not followed.
   const inboundOnlyLinks = useMemo(
     () =>
@@ -257,12 +266,18 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       ),
     [links, connId, object]
   )
-  // The dialog answers "everything on this connection", so it lists the whole
-  // set -- including the links the menu already showed as actionable.
-  const allConnectionLinks = useMemo(() => connectionLinks(links, connId), [links, connId])
-
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
+
+  // Key-level links paired with the value they resolve to right now. A link
+  // whose value cannot be read here is left out rather than shown dead.
+  const followableLinks = useMemo(
+    () =>
+      keyLinks
+        .map((link) => ({ link, value: extractRedisValue(link, object, stringValue, rows) }))
+        .filter((entry): entry is { link: (typeof keyLinks)[number]; value: string } => entry.value !== null),
+    [keyLinks, object, stringValue, rows]
+  )
 
   // Полный список группы для модалки: в меню помещается только LINK_MENU_CAP
   // пунктов, здесь — всё, с полными метками.
@@ -301,16 +316,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         onPick: () => undefined,
       }))
     }
-    if (pickerGroup === 'connection') {
-      // Reference only: these describe wiring elsewhere on the connection, so
-      // there is no value here to follow them with.
-      return allConnectionLinks.map((link) => ({
-        id: link.id,
-        label: linkSummary(link, connectionName),
-        disabled: true,
-        onPick: () => undefined,
-      }))
-    }
     if (pickerGroup === 'member' && memberMenu) {
       const member = memberMenu.member
       return memberLinks.map((link) => ({
@@ -342,8 +347,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     keyLinks,
     reverseLinks,
     perElementLinks,
-    allConnectionLinks,
-    connectionName,
     memberLinks,
     elementSelectionLinks,
     memberMenu,
@@ -597,7 +600,25 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                 </div>
                 <div className="min-w-0">
                   <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Redis key</div>
-                  <h2 className="mt-1 truncate font-mono text-lg font-semibold text-foreground">{object}</h2>
+                  {/* Renaming edits this name, so the pencil sits on it rather
+                      than in the row of actions on the far side of the header. */}
+                  <div className="mt-1 flex min-w-0 items-center gap-1.5">
+                    <h2 className="truncate font-mono text-lg font-semibold text-foreground">{object}</h2>
+                    {!readOnly && (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setRenameOpen(true)}
+                        disabled={saving || renaming}
+                        title="Rename"
+                        aria-label="Rename key"
+                      >
+                        <PenLine className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     <span className={cn('inline-flex items-center rounded-sm border px-2 py-1 text-[10px] uppercase tracking-[0.14em]', getRedisTypePillClass(metaType ?? objectType))}>
                       {getRedisObjectTypeLabel(metaType ?? objectType)}
@@ -640,6 +661,37 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       </span>
                     )}
                   </div>
+
+                  {/* Where this key leads, on the key itself. A link used to be
+                      visible only after opening the Links menu, so one just
+                      created read as one that had not been saved. Only links
+                      that resolve to a value are shown — a chip that cannot be
+                      followed would be the same false signal in reverse. */}
+                  {followableLinks.length > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {followableLinks.slice(0, LINK_CHIP_CAP).map(({ link, value }) => (
+                        <button
+                          key={`chip-${link.id}`}
+                          type="button"
+                          onClick={() => openLinkTarget(link, value)}
+                          title={linkSummary(link, connectionName)}
+                          className="inline-flex min-w-0 max-w-[22rem] items-center gap-1 rounded-sm border border-violet-500/30 bg-violet-500/5 px-2 py-1 font-mono text-[10px] text-violet-600 transition-colors hover:bg-violet-500/10 dark:text-violet-400"
+                        >
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{linkTargetLabel(link, value)}</span>
+                        </button>
+                      ))}
+                      {followableLinks.length > LINK_CHIP_CAP && (
+                        <button
+                          type="button"
+                          onClick={() => setPickerGroup('key')}
+                          className="rounded-sm px-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                        >
+                          {`+${followableLinks.length - LINK_CHIP_CAP} more`}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -738,43 +790,33 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                         </span>
                       </DropdownMenuItem>
                     ))}
-                    {/* What else this connection is wired to. Reference only --
-                        these belong to other keys, so there is no value here to
-                        follow them with -- but without them a key with no links
-                        of its own looked like a connection with none. */}
-                    {/* The separator belongs to the whole connection block, not
-                        just its preview: when every link on the connection is
-                        already listed above, the preview is empty but "Show all"
-                        still needs to stand apart. */}
-                    {allConnectionLinks.length > 0 && <DropdownMenuSeparator />}
-                    {otherConnectionLinks.length > 0 && (
-                      <div className="px-2 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                        Elsewhere on this connection
-                      </div>
-                    )}
-                    {otherConnectionLinks.slice(0, LINK_PREVIEW_CAP).map((link) => (
-                      <DropdownMenuItem key={`conn-${link.id}`} disabled className="font-mono text-xs">
-                        <span className="block min-w-0 max-w-[32rem] truncate">
-                          {linkSummary(link, connectionName)}
-                        </span>
-                      </DropdownMenuItem>
-                    ))}
-                    {allConnectionLinks.length > 0 && (
-                      <DropdownMenuItem className="font-mono text-xs" onClick={() => setPickerGroup('connection')}>
-                        {`Show all ${allConnectionLinks.length} on this connection…`}
-                      </DropdownMenuItem>
-                    )}
-                    {(keyLinks.length > 0 || perElementLinks.length > 0 || allConnectionLinks.length > 0) && (
-                      <DropdownMenuSeparator />
-                    )}
+                    {/* What else the connection is wired to is not asked about
+                        here — this menu is about this key. The whole list lives
+                        beside Overview, where the connection's other facts are. */}
+                    {(keyLinks.length > 0 ||
+                      reverseLinks.length > 0 ||
+                      perElementLinks.length > 0 ||
+                      inboundOnlyLinks.length > 0) && <DropdownMenuSeparator />}
                     <DropdownMenuItem className="font-mono text-xs" onClick={() => setCreateLinkOpen(true)}>
                       + Create link…
                     </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
-                <Button type="button" variant="outline" size="sm" className="h-8 gap-1.5" onClick={() => void refresh()} disabled={loading || saving}>
+                {/* Icons only past this point: the header already carries the
+                    key, its type, its size and its TTL, and five labelled
+                    buttons beside all of that read as noise. Links keeps its
+                    word — it opens a menu rather than doing something. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => void refresh()}
+                  disabled={loading || saving}
+                  title="Refresh"
+                  aria-label="Refresh key"
+                >
                   <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-                  Refresh
                 </Button>
                 {readOnly ? (
                   <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
@@ -789,30 +831,34 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       type="button"
                       variant="outline"
                       size="sm"
-                      className="h-8 gap-1.5"
+                      className="h-8 w-8 p-0"
                       onClick={() => {
                         setCopyName(`${object}-copy`)
                         setCopyOpen(true)
                       }}
                       disabled={saving}
+                      title="Duplicate"
+                      aria-label="Duplicate key"
                     >
                       <CopyIcon className="h-3.5 w-3.5" />
-                      Duplicate
                     </Button>
-                  <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    Delete key
-                  </Button>
+                    <Button
+                      type="button"
+                      variant="destructive"
+                      size="sm"
+                      className="h-8 w-8 p-0"
+                      onClick={() => setDeleteDialogOpen(true)}
+                      disabled={saving}
+                      title="Delete key"
+                      aria-label="Delete key"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
                   </>
                 )}
               </div>
             </div>
 
-            <div className="grid gap-3 border-b border-border px-4 py-4 sm:grid-cols-3">
-              {metaCard('Type', getRedisObjectTypeLabel(metaType ?? objectType), 'text-foreground')}
-              {metaCard('Connection', connection?.name ?? connId, 'text-foreground')}
-              {metaCard('Mode', connection?.mode ?? 'standalone', 'text-foreground')}
-            </div>
           </div>
 
           {Boolean(meta.truncated) && (
@@ -879,6 +925,14 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         </DialogContent>
       </Dialog>
 
+      <RenameKeyDialog
+        open={renameOpen}
+        keyName={object}
+        saving={renaming}
+        onOpenChange={setRenameOpen}
+        onConfirm={renameKey}
+      />
+
       <DeleteKeyDialog
         open={deleteDialogOpen}
         keyName={object}
@@ -909,6 +963,28 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
       {memberMenu && (
         <FloatingMenu x={memberMenu.x} y={memberMenu.y} onClose={() => setMemberMenu(null)}>
+          {/* A link that reads the value is followed from the value. It resolves
+              against the whole value, not the click position, so it is offered
+              whether or not a word happens to be under the cursor. */}
+          {valueLinks.length > 0 && <FloatingMenuLabel>Open from this value</FloatingMenuLabel>}
+          {valueLinks.slice(0, LINK_MENU_CAP).map((link) => {
+            const value = extractRedisValue(link, object, stringValue, rows)
+            return (
+              <FloatingMenuItem
+                key={`val-${link.id}`}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) {
+                    openLinkTarget(link, value)
+                    setMemberMenu(null)
+                  }
+                }}
+              >
+                {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          {valueLinks.length > 0 && memberLinks.length > 0 && <FloatingMenuSeparator />}
           {memberLinks.length > 0 && <FloatingMenuLabel>Open from element</FloatingMenuLabel>}
           {memberLinks.slice(0, LINK_MENU_CAP).map((link) => (
             <FloatingMenuItem
@@ -953,7 +1029,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             </FloatingMenuItem>
           )}
 
-          {(memberLinks.length > 0 || elementSelectionLinks.length > 0) && <FloatingMenuSeparator />}
+          {(valueLinks.length > 0 || memberLinks.length > 0 || elementSelectionLinks.length > 0) && (
+            <FloatingMenuSeparator />
+          )}
           <FloatingMenuItem
             onClick={() => {
               setCreateFromElement({ field: memberMenu.field })
@@ -976,8 +1054,6 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             ? 'Back to source'
             : pickerGroup === 'perElement'
             ? 'Per-element links (right-click a value)'
-            : pickerGroup === 'connection'
-            ? `Links on ${connection?.name ?? connId}`
             : pickerGroup === 'selection'
             ? `Open from "${memberMenu?.token ?? ''}"`
             : pickerGroup === 'member'

@@ -6,7 +6,6 @@ export interface KafkaConfig {
   sasl_mechanism?: string
   tls_enabled?: boolean
   tls_ca_pem?: string
-  schema_registry_url?: string
 }
 export type PostgresSSLMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
 
@@ -290,8 +289,9 @@ export interface FilterExpr {
 }
 
 export interface MutateOp {
-  // 'copy' duplicates a key under a new name; Redis only.
-  type: 'insert' | 'update' | 'delete' | 'copy'
+  // 'copy' duplicates a key under a new name and 'rename' moves it to one;
+  // both are Redis only.
+  type: 'insert' | 'update' | 'delete' | 'copy' | 'rename'
   schema: string
   object: string
   where?: Record<string, unknown>

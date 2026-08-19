@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
-import { fieldPresence, matchField } from '@/lib/jsonPaths'
+import { fieldPresence, matchField, matchFieldContains } from '@/lib/jsonPaths'
 import type { ColumnMeta, KafkaProduceRequest, KafkaProduceResult, ObjectItem } from '@/types/api'
 
 export interface KafkaMessageRow {
@@ -86,14 +86,28 @@ interface KafkaTopicTabState {
 // What the searched field must satisfy. 'eq' is the original value search;
 // 'exists'/'missing' answer "does this field occur at all", which is the only
 // way to look for a field whose values are not known yet.
-export type KafkaMatchOp = 'eq' | 'exists' | 'missing'
+export type KafkaMatchOp = 'eq' | 'contains' | 'exists' | 'missing'
 
-// One condition of a content search: a JSON path, what it must satisfy, and
-// the value to compare when the op is 'eq'.
+// Which part of the record a condition reads. The payload is the default; a key
+// or header holds the correlation id, tenant or event type, and is readable even
+// when the payload is binary.
+export type KafkaMatchTarget = 'value' | 'key' | 'header'
+
+// One condition of a content search: where to look, what to satisfy, and the
+// value to compare when the op is 'eq' or 'contains'. `field` is a JSON path in
+// the payload or a header name; a key condition has none.
 export interface KafkaMatchCondition {
   field: string
   value: string
   op: KafkaMatchOp
+  // Absent means the payload, which is what the backend assumes for a request
+  // that carries no match_target — so an old condition keeps its meaning and
+  // produces the same request it always did.
+  target?: KafkaMatchTarget
+}
+
+export function conditionTarget(condition: KafkaMatchCondition): KafkaMatchTarget {
+  return condition.target ?? 'value'
 }
 
 // How a set of conditions combines. 'and' narrows (every condition must hold),
@@ -106,9 +120,10 @@ interface KafkaSearch {
 }
 
 // A condition with no field is incomplete, not a wildcard: an empty row in the
-// filter dialog must never widen a search.
+// filter dialog must never widen a search. The key is the exception — it is a
+// single value with no name to give, so a key condition is complete as it is.
 export function activeConditions(conditions: KafkaMatchCondition[]): KafkaMatchCondition[] {
-  return conditions.filter((condition) => condition.field.trim() !== '')
+  return conditions.filter((condition) => conditionTarget(condition) === 'key' || condition.field.trim() !== '')
 }
 
 // Which end of the log a browse starts from. 'newest' anchors at the end and
@@ -258,10 +273,41 @@ function ensureState(tabs: Record<string, KafkaTopicTabState>, tabId: string): K
 // the raw `messages`/cursor state.
 function conditionMatches(row: KafkaMessageRow, condition: KafkaMatchCondition): boolean {
   const path = condition.field.trim()
+
+  // Key and header conditions read strings the broker delivers beside the
+  // payload, so they hold for a record whose body never parses as JSON. Mirrors
+  // messageMatchesFilter in messages.go, down to a keyless record counting as
+  // absent rather than empty.
+  const target = conditionTarget(condition)
+  if (target === 'key') {
+    return stringMatches(row.key, Boolean(row.key), condition.value, condition.op)
+  }
+  if (target === 'header') {
+    if (path === '') return true
+    const present = row.headers !== undefined && path in row.headers
+    return stringMatches(row.headers?.[path] ?? '', present, condition.value, condition.op)
+  }
+
   if (condition.op === 'exists' || condition.op === 'missing') {
     return fieldPresence(row.value, path, condition.op === 'exists')
   }
+  if (condition.op === 'contains') {
+    return matchFieldContains(row.value, path, condition.value)
+  }
   return matchField(row.value, path, condition.value)
+}
+
+function stringMatches(value: string, present: boolean, want: string, op: KafkaMatchOp): boolean {
+  switch (op) {
+    case 'exists':
+      return present
+    case 'missing':
+      return !present
+    case 'contains':
+      return present && value.includes(want)
+    default:
+      return present && value === want
+  }
 }
 
 // filterLoadedMessages narrows the rows already on screen — no network. It
@@ -398,9 +444,18 @@ async function requestMessages(
     // numbered; parseMatchQuery in messages.go reads both.
     activeConditions(search.conditions).forEach((condition, index) => {
       const suffix = index === 0 ? '' : `.${index}`
-      filters.push({ column: `match_field${suffix}`, op: 'eq', value: condition.field })
+      // A key condition has no field. Text left in the box from an earlier
+      // target would ride along and mean nothing.
+      if (conditionTarget(condition) !== 'key') {
+        filters.push({ column: `match_field${suffix}`, op: 'eq', value: condition.field })
+      }
       filters.push({ column: `match_value${suffix}`, op: 'eq', value: condition.value })
       filters.push({ column: `match_op${suffix}`, op: 'eq', value: condition.op })
+      // Only sent when it says something: a payload condition is the default,
+      // and leaving it out keeps the request identical to what it was before.
+      if (condition.target !== undefined && condition.target !== 'value') {
+        filters.push({ column: `match_target${suffix}`, op: 'eq', value: condition.target })
+      }
     })
     filters.push({ column: 'match_mode', op: 'eq', value: search.mode })
   }

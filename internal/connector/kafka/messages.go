@@ -1365,9 +1365,24 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 type matchOp string
 
 const (
-	matchOpEquals  matchOp = "eq"
-	matchOpExists  matchOp = "exists"
-	matchOpMissing matchOp = "missing"
+	matchOpEquals   matchOp = "eq"
+	matchOpContains matchOp = "contains"
+	matchOpExists   matchOp = "exists"
+	matchOpMissing  matchOp = "missing"
+)
+
+// matchTarget is the part of the record a condition reads.
+//
+// The payload is the default and was the only option: a condition names a JSON
+// path inside it. A key or a header is where correlation ids, tenants and event
+// types usually live, and looking there costs no JSON parsing at all — the
+// record carries both as plain strings whatever the payload turns out to be.
+type matchTarget string
+
+const (
+	matchTargetValue  matchTarget = "value"
+	matchTargetKey    matchTarget = "key"
+	matchTargetHeader matchTarget = "header"
 )
 
 // matchMode combines a multi-condition search. AND is the default because it is
@@ -1381,9 +1396,17 @@ const (
 
 // contentFilter is one field predicate of a content search.
 type contentFilter struct {
-	field string
-	value string
-	op    matchOp
+	field  string
+	value  string
+	op     matchOp
+	target matchTarget
+}
+
+// addressable reports whether the condition names something to look at. A
+// payload path or a header needs a field; the key is a single value and has
+// none, so a key condition is complete on its own.
+func (f contentFilter) addressable() bool {
+	return f.target == matchTargetKey || f.field != ""
 }
 
 // matchQuery is the whole content search: the conditions and how they combine.
@@ -1418,7 +1441,7 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 		if existing, ok := byIndex[index]; ok {
 			return existing
 		}
-		created := &contentFilter{op: matchOpEquals}
+		created := &contentFilter{op: matchOpEquals, target: matchTargetValue}
 		byIndex[index] = created
 		order = append(order, index)
 		return created
@@ -1445,8 +1468,19 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 				at(index).op = matchOpExists
 			case matchOpMissing:
 				at(index).op = matchOpMissing
+			case matchOpContains:
+				at(index).op = matchOpContains
 			case matchOpEquals:
 				at(index).op = matchOpEquals
+			}
+		case "match_target":
+			switch matchTarget(strings.ToLower(strings.TrimSpace(filter.Value))) {
+			case matchTargetKey:
+				at(index).target = matchTargetKey
+			case matchTargetHeader:
+				at(index).target = matchTargetHeader
+			case matchTargetValue:
+				at(index).target = matchTargetValue
 			}
 		}
 	}
@@ -1455,7 +1489,7 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 	// are combined by AND or OR, both commutative. First-seen order keeps the
 	// unnumbered condition first, where the caller put it.
 	for _, index := range order {
-		if byIndex[index].field != "" {
+		if byIndex[index].addressable() {
 			query.filters = append(query.filters, *byIndex[index])
 		}
 	}
@@ -1702,7 +1736,7 @@ func messageMatchesQuery(row map[string]any, query matchQuery) bool {
 		return true
 	}
 	for _, filter := range query.filters {
-		matched := messageMatchesField(row, filter.field, filter.value, filter.op)
+		matched := messageMatchesFilter(row, filter)
 		if query.mode == matchModeOr {
 			if matched {
 				return true
@@ -1714,6 +1748,63 @@ func messageMatchesQuery(row map[string]any, query matchQuery) bool {
 		}
 	}
 	return query.mode != matchModeOr
+}
+
+// messageMatchesFilter routes a condition to the part of the record it reads.
+//
+// Only the payload predicate needs the record to be JSON. A key or header is a
+// string the broker delivers alongside the payload, so those conditions hold
+// for a record whose body is protobuf, binary, or unparseable — which is much
+// of what a search by correlation id is for.
+func messageMatchesFilter(row map[string]any, filter contentFilter) bool {
+	switch filter.target {
+	case matchTargetKey:
+		key, present := recordKey(row)
+		return stringMatches(key, present, filter.value, filter.op)
+	case matchTargetHeader:
+		if filter.field == "" {
+			return true
+		}
+		value, present := recordHeader(row, filter.field)
+		return stringMatches(value, present, filter.value, filter.op)
+	default:
+		return messageMatchesField(row, filter.field, filter.value, filter.op)
+	}
+}
+
+// recordKey reports the record's key and whether it had one at all. A record
+// produced without a key — every message on a topic that does not partition by
+// one, and every tombstone — is absent rather than empty, so "missing" can tell
+// the two apart.
+func recordKey(row map[string]any) (string, bool) {
+	key, ok := row["key"].(string)
+	if !ok || key == "" {
+		return "", false
+	}
+	return key, true
+}
+
+func recordHeader(row map[string]any, name string) (string, bool) {
+	headers, ok := row["headers"].(map[string]string)
+	if !ok {
+		return "", false
+	}
+	value, present := headers[name]
+	return value, present
+}
+
+// stringMatches applies an op to a plain string that may not be there at all.
+func stringMatches(value string, present bool, want string, op matchOp) bool {
+	switch op {
+	case matchOpExists:
+		return present
+	case matchOpMissing:
+		return !present
+	case matchOpContains:
+		return present && strings.Contains(value, want)
+	default:
+		return present && value == want
+	}
 }
 
 // messageMatchesField reports whether a message contains a JSON leaf at the
@@ -1759,6 +1850,8 @@ func messageMatchesField(row map[string]any, field string, want string, op match
 		return jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
 	case matchOpMissing:
 		return !jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
+	case matchOpContains:
+		return jsonPathMatchesAnywhere(parsed, segments, containsLeaf(want))
 	default:
 		return jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
 	}
@@ -1773,6 +1866,12 @@ func anyLeaf(any) bool { return true }
 
 func equalsLeaf(want string) leafPredicate {
 	return func(leaf any) bool { return jsonLeafEquals(leaf, want) }
+}
+
+// containsLeaf matches a leaf whose rendered form carries want as a substring —
+// how a trace id is found inside a longer message or url.
+func containsLeaf(want string) leafPredicate {
+	return func(leaf any) bool { return strings.Contains(jsonLeafText(leaf), want) }
 }
 
 type jsonPathSegmentKind int
@@ -1924,6 +2023,24 @@ func jsonPathMatchesFrom(value any, segments []jsonPathSegment, leaf leafPredica
 
 // jsonLeafEquals compares a decoded JSON scalar to the entered string. Numbers
 // compare numerically so "123" matches 123; nested objects/arrays never match.
+// jsonLeafText renders a leaf the way jsonLeafEquals compares one, so that a
+// contains search reads the same values an equals search does. A composite —
+// object or array — has no text form here and yields "", matching nothing.
+func jsonLeafText(leaf any) string {
+	switch typed := leaf.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return strconv.FormatBool(typed)
+	case float64:
+		return strconv.FormatFloat(typed, 'f', -1, 64)
+	case string:
+		return typed
+	default:
+		return ""
+	}
+}
+
 func jsonLeafEquals(leaf any, want string) bool {
 	switch typed := leaf.(type) {
 	case nil:

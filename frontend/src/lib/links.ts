@@ -157,6 +157,18 @@ export function memberRedisLinks(links: LinkRecord[], connId: string, key: strin
   return links.filter((link) => isRedisSource(link, connId, key) && link.source_extract === 'member')
 }
 
+// valueRedisLinks — линки, читающие само значение ключа: string_value берёт его
+// целиком, value_field — поле внутри него. Именно они применимы к клику по
+// значению; key_capture сюда не входит — он читает имя ключа, а не то, на что
+// нажали.
+export function valueRedisLinks(links: LinkRecord[], connId: string, key: string): LinkRecord[] {
+  return links.filter(
+    (link) =>
+      isRedisSource(link, connId, key) &&
+      (link.source_extract === 'string_value' || link.source_extract === 'value_field')
+  )
+}
+
 // selectionRedisLinks — линки, применимые к точке, по которой кликнули. Линк с
 // заданным source_field сужен до одного хэш-поля (cookie_ids → c:*), линк без
 // поля работает в любом месте ключа. Поле undefined означает «кликнули не по
