@@ -8,6 +8,18 @@ export interface KafkaConfig {
   tls_ca_pem?: string
   schema_registry_url?: string
 }
+export type PostgresSSLMode = 'disable' | 'prefer' | 'require' | 'verify-ca' | 'verify-full'
+
+export interface PostgresConfig {
+  ssl_mode?: PostgresSSLMode
+  ssl_root_cert?: string
+  ssl_client_cert?: string
+  // Write-only: the server never sends the key back, so an empty value on an
+  // edit means "keep the stored one".
+  ssl_client_key?: string
+  ssl_server_name?: string
+}
+
 export interface RedisConfig {
   mode?: RedisMode
   address?: string
@@ -49,6 +61,7 @@ export interface Connection {
   masterName?: string
   clusterAddresses?: string[]
   sentinelAddresses?: string[]
+  postgres_config?: PostgresConfig
   redis_config?: RedisConfig
   kafka_config?: KafkaConfig
   tags?: string[]
@@ -67,6 +80,7 @@ export interface PostgresConnectionInput {
   tags: string[]
   read_only?: boolean
   visible_schemas?: string[] | null
+  postgres_config?: PostgresConfig
 }
 
 export interface RedisConnectionInput {
