@@ -200,6 +200,37 @@ export function leafEquals(leaf: unknown, want: string): boolean {
   }
 }
 
+// leafText renders a leaf the way leafEquals compares one, so a contains search
+// reads the same values an equals search does. Mirrors jsonLeafText in
+// messages.go; a composite leaf has no text form and matches nothing.
+export function leafText(leaf: unknown): string {
+  if (leaf === null) return 'null'
+  switch (typeof leaf) {
+    case 'boolean':
+    case 'number':
+      return String(leaf)
+    case 'string':
+      return leaf
+    default:
+      return ''
+  }
+}
+
+// matchFieldContains is matchField with substring comparison — finding a trace
+// id inside a longer url or message.
+export function matchFieldContains(rawValue: string, path: string, want: string): boolean {
+  if (path === '') return true
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(rawValue)
+  } catch {
+    return false
+  }
+  const segments = parsePath(path)
+  if (segments.length === 0) return false
+  return traverse(parsed, segments).some((leaf) => leafText(leaf).includes(want))
+}
+
 // matchField reports whether the raw JSON string has a leaf at the canonical
 // path equal to want. It mirrors the Go messageMatchesField predicate for the
 // shared fixture set: an empty path matches everything, invalid JSON never
