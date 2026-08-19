@@ -34,6 +34,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { LINK_MENU_CAP, LinkPickerDialog, type LinkPickerItem } from '@/components/links/LinkPickerDialog'
+
+// Chips are a glance at where a key leads, not the list of everywhere it does —
+// the Links menu stays the place for that.
+const LINK_CHIP_CAP = 2
 import {
   FloatingMenu,
   FloatingMenuItem,
@@ -54,6 +58,7 @@ import {
   redisKeyMatchesPattern,
   selectionRedisLinks,
   suggestKeyPattern,
+  valueRedisLinks,
 } from '@/lib/links'
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
@@ -165,6 +170,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   }, [fetchLinks])
 
   const keyLinks = useMemo(() => keyLevelRedisLinks(links, connId, object), [links, connId, object])
+  // Links that read the value rather than the key name. They belong on a click
+  // into the value: the header menu could already follow them, but nothing on
+  // the value itself said so, so a link just created looked like it had not been.
+  const valueLinks = useMemo(() => valueRedisLinks(links, connId, object), [links, connId, object])
   const memberLinks = useMemo(() => memberRedisLinks(links, connId, object), [links, connId, object])
 
   const [memberMenu, setMemberMenu] = useState<{
@@ -259,6 +268,16 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   )
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
+
+  // Key-level links paired with the value they resolve to right now. A link
+  // whose value cannot be read here is left out rather than shown dead.
+  const followableLinks = useMemo(
+    () =>
+      keyLinks
+        .map((link) => ({ link, value: extractRedisValue(link, object, stringValue, rows) }))
+        .filter((entry): entry is { link: (typeof keyLinks)[number]; value: string } => entry.value !== null),
+    [keyLinks, object, stringValue, rows]
+  )
 
   // Полный список группы для модалки: в меню помещается только LINK_MENU_CAP
   // пунктов, здесь — всё, с полными метками.
@@ -642,6 +661,37 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       </span>
                     )}
                   </div>
+
+                  {/* Where this key leads, on the key itself. A link used to be
+                      visible only after opening the Links menu, so one just
+                      created read as one that had not been saved. Only links
+                      that resolve to a value are shown — a chip that cannot be
+                      followed would be the same false signal in reverse. */}
+                  {followableLinks.length > 0 && (
+                    <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                      {followableLinks.slice(0, LINK_CHIP_CAP).map(({ link, value }) => (
+                        <button
+                          key={`chip-${link.id}`}
+                          type="button"
+                          onClick={() => openLinkTarget(link, value)}
+                          title={linkSummary(link, connectionName)}
+                          className="inline-flex min-w-0 max-w-[22rem] items-center gap-1 rounded-sm border border-violet-500/30 bg-violet-500/5 px-2 py-1 font-mono text-[10px] text-violet-600 transition-colors hover:bg-violet-500/10 dark:text-violet-400"
+                        >
+                          <Link2 className="h-3 w-3 shrink-0" />
+                          <span className="truncate">{linkTargetLabel(link, value)}</span>
+                        </button>
+                      ))}
+                      {followableLinks.length > LINK_CHIP_CAP && (
+                        <button
+                          type="button"
+                          onClick={() => setPickerGroup('key')}
+                          className="rounded-sm px-1 font-mono text-[10px] text-muted-foreground hover:text-foreground"
+                        >
+                          {`+${followableLinks.length - LINK_CHIP_CAP} more`}
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -913,6 +963,28 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
       {memberMenu && (
         <FloatingMenu x={memberMenu.x} y={memberMenu.y} onClose={() => setMemberMenu(null)}>
+          {/* A link that reads the value is followed from the value. It resolves
+              against the whole value, not the click position, so it is offered
+              whether or not a word happens to be under the cursor. */}
+          {valueLinks.length > 0 && <FloatingMenuLabel>Open from this value</FloatingMenuLabel>}
+          {valueLinks.slice(0, LINK_MENU_CAP).map((link) => {
+            const value = extractRedisValue(link, object, stringValue, rows)
+            return (
+              <FloatingMenuItem
+                key={`val-${link.id}`}
+                disabled={value === null}
+                onClick={() => {
+                  if (value !== null) {
+                    openLinkTarget(link, value)
+                    setMemberMenu(null)
+                  }
+                }}
+              >
+                {value === null ? `${linkTargetLabel(link, null)} (no value)` : linkTargetLabel(link, value)}
+              </FloatingMenuItem>
+            )
+          })}
+          {valueLinks.length > 0 && memberLinks.length > 0 && <FloatingMenuSeparator />}
           {memberLinks.length > 0 && <FloatingMenuLabel>Open from element</FloatingMenuLabel>}
           {memberLinks.slice(0, LINK_MENU_CAP).map((link) => (
             <FloatingMenuItem
@@ -957,7 +1029,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
             </FloatingMenuItem>
           )}
 
-          {(memberLinks.length > 0 || elementSelectionLinks.length > 0) && <FloatingMenuSeparator />}
+          {(valueLinks.length > 0 || memberLinks.length > 0 || elementSelectionLinks.length > 0) && (
+            <FloatingMenuSeparator />
+          )}
           <FloatingMenuItem
             onClick={() => {
               setCreateFromElement({ field: memberMenu.field })

@@ -9,6 +9,7 @@ import {
   linkTouchesObject,
   memberRedisLinks,
   selectionRedisLinks,
+  valueRedisLinks,
 } from '@/lib/links'
 import type { LinkRecord } from '@/types/api'
 
@@ -130,6 +131,31 @@ describe('memberRedisLinks and keyLevelRedisLinks', () => {
 
   it('key-level links exclude every per-element mode', () => {
     expect(keyLevelRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).toEqual(['k'])
+  })
+})
+
+// Which links a click into the value may follow. Before these existed, a
+// string_value link could only be followed from the header menu, so a link just
+// created looked like one that had failed to save.
+describe('valueRedisLinks', () => {
+  const stringValue = link({ id: 'sv', source_extract: 'string_value' })
+  const valueField = link({ id: 'vf', source_extract: 'value_field', source_field: 'owner_id' })
+  const keyCapture = link({ id: 'kc', source_extract: 'key_capture' })
+  const member = link({ id: 'm', source_extract: 'member' })
+  const selection = link({ id: 's', source_extract: 'selection' })
+  const all = [stringValue, valueField, keyCapture, member, selection]
+
+  it('takes the links that read the value itself', () => {
+    expect(valueRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).toEqual(['sv', 'vf'])
+  })
+
+  it('leaves out key_capture, which reads the name rather than the value', () => {
+    expect(valueRedisLinks(all, 'redis-1', 'profile:42').map((l) => l.id)).not.toContain('kc')
+  })
+
+  it('ignores another connection and a key the pattern does not match', () => {
+    expect(valueRedisLinks(all, 'redis-2', 'profile:42')).toEqual([])
+    expect(valueRedisLinks(all, 'redis-1', 'session:42')).toEqual([])
   })
 })
 
