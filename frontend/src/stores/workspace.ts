@@ -121,6 +121,7 @@ interface WorkspaceStore {
   setTreeConn: (pageConnId: string, viewConnId: string) => void
   rebindSqlTab: (tabId: string, connId: string) => void
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType?: ObjectType) => void
+  openLinkedTab: (connId: string, object: string, objectType: ObjectType, filters: FilterExpr[]) => void
   clearObjectTabFilterState: (tabId: string) => void
   goBackFromTab: (tabId: string) => void
   openSqlTab: (connId: string) => void
@@ -721,6 +722,53 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
         }
       }),
     }))
+  },
+
+  // Opening what a shared link points at. Unlike openTabWithFilter this records
+  // no navigation history: arriving from someone else's URL is not a step back
+  // from anywhere, and inventing a "from" tab would put a Back arrow on a trail
+  // this session never walked.
+  openLinkedTab: (connId: string, object: string, objectType: ObjectType, filters: FilterExpr[]) => {
+    const normalized = normalizeFilters(filters)
+    if (normalized.length === 0) {
+      get().openTab(connId, object, objectType)
+      return
+    }
+
+    const { tabs } = get()
+    const dataTabs = useDataStore.getState().tabs
+    const existing = tabs.find((tab) => {
+      if (tab.kind !== 'object' || tab.connId !== connId || tab.object !== object || tab.objectType !== objectType) {
+        return false
+      }
+      const activeFilters = dataTabs[tab.id]?.opts.filters ?? tab.initialFilters ?? []
+      return filtersEqual(activeFilters, normalized)
+    })
+    if (existing) {
+      set({ activeTabId: existing.id })
+      return
+    }
+
+    const id = buildFilteredTabID(connId, object, objectType, normalized)
+    const tab: ObjectTab = {
+      kind: 'object',
+      id,
+      connId,
+      object,
+      label: `${object} (filtered)`,
+      objectType,
+      initialFilters: normalized,
+      navigationTrail: [{ tabId: id, label: object, filterLabel: buildFilterLabel(normalized) }],
+    }
+
+    useDataStore.getState().setOpts(id, {
+      filters: normalized,
+      offset: 0,
+      order_by: '',
+      order_dir: 'asc',
+    })
+
+    set({ tabs: [...tabs, tab], activeTabId: id })
   },
 
   openTabWithFilter: (connId: string, object: string, filter: FilterExpr, objectType: ObjectType = 'table') => {
