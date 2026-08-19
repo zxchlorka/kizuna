@@ -3,7 +3,8 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import type { KafkaMatchCondition, KafkaMatchMode, KafkaMatchOp } from '@/stores/kafka'
+import { conditionTarget } from '@/stores/kafka'
+import type { KafkaMatchCondition, KafkaMatchMode, KafkaMatchOp, KafkaMatchTarget } from '@/stores/kafka'
 
 interface KafkaFilterDialogProps {
   open: boolean
@@ -17,6 +18,10 @@ interface KafkaFilterDialogProps {
 }
 
 export const emptyCondition: KafkaMatchCondition = { field: '', value: '', op: 'eq' }
+
+// Only equals and contains compare against typed text; presence ops read the
+// field alone.
+const takesValue = (op: KafkaMatchOp): boolean => op === 'eq' || op === 'contains'
 
 export function KafkaFilterDialog({
   open,
@@ -39,8 +44,8 @@ export function KafkaFilterDialog({
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Message filters</DialogTitle>
           <DialogDescription className="font-mono text-xs">
-            Each condition tests one JSON path in the message value. They apply both to the loaded messages and to a
-            topic scan.
+            Each condition tests the record key, one of its headers, or a JSON path in its value. They apply both to
+            the loaded messages and to a topic scan.
           </DialogDescription>
         </DialogHeader>
 
@@ -71,20 +76,51 @@ export function KafkaFilterDialog({
               <span className="w-8 shrink-0 font-mono text-[11px] text-muted-foreground">
                 {index === 0 ? '' : mode === 'or' ? 'or' : 'and'}
               </span>
+              <Select
+                value={conditionTarget(condition)}
+                onValueChange={(value) => update(index, { target: value as KafkaMatchTarget })}
+              >
+                <SelectTrigger
+                  className="h-8 w-24 shrink-0 font-mono text-xs"
+                  aria-label={`Where condition ${index + 1} looks`}
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="value" className="font-mono text-xs">
+                    value
+                  </SelectItem>
+                  <SelectItem value="key" className="font-mono text-xs">
+                    key
+                  </SelectItem>
+                  <SelectItem value="header" className="font-mono text-xs">
+                    header
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              {/* The key is a single value with no name to give, so the field
+                  box has nothing to hold for it. */}
               <input
-                value={condition.field}
+                value={conditionTarget(condition) === 'key' ? '' : condition.field}
                 onChange={(event) => update(index, { field: event.target.value })}
-                placeholder="JSON path (e.g. events[].name)"
-                aria-label={`JSON field path for condition ${index + 1}`}
+                placeholder={
+                  conditionTarget(condition) === 'header'
+                    ? 'header name'
+                    : conditionTarget(condition) === 'key'
+                      ? 'the record key'
+                      : 'JSON path (e.g. events[].name)'
+                }
+                aria-label={`Field for condition ${index + 1}`}
+                disabled={conditionTarget(condition) === 'key'}
                 spellCheck={false}
                 autoComplete="off"
-                className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50"
+                className="h-8 w-56 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50 disabled:cursor-not-allowed disabled:opacity-50"
               />
               <Button
                 type="button"
                 size="sm"
                 variant="outline"
-                className="h-8 w-8 shrink-0 p-0"
+                className={cn('h-8 w-8 shrink-0 p-0', conditionTarget(condition) !== 'value' && 'invisible')}
                 onClick={() => onPickField(index)}
                 title="Browse sampled messages and pick a field"
                 aria-label={`Choose field for condition ${index + 1}`}
@@ -99,20 +135,23 @@ export function KafkaFilterDialog({
                   <SelectItem value="eq" className="font-mono text-xs">
                     equals
                   </SelectItem>
+                  <SelectItem value="contains" className="font-mono text-xs">
+                    contains
+                  </SelectItem>
                   <SelectItem value="exists" className="font-mono text-xs">
-                    has field
+                    {conditionTarget(condition) === 'value' ? 'has field' : 'is set'}
                   </SelectItem>
                   <SelectItem value="missing" className="font-mono text-xs">
-                    no field
+                    {conditionTarget(condition) === 'value' ? 'no field' : 'is unset'}
                   </SelectItem>
                 </SelectContent>
               </Select>
               <input
-                value={condition.op === 'eq' ? condition.value : ''}
+                value={takesValue(condition.op) ? condition.value : ''}
                 onChange={(event) => update(index, { value: event.target.value })}
-                placeholder={condition.op === 'eq' ? 'equals value' : 'not used'}
+                placeholder={takesValue(condition.op) ? 'compared value' : 'not used'}
                 aria-label={`Expected value for condition ${index + 1}`}
-                disabled={condition.op !== 'eq'}
+                disabled={!takesValue(condition.op)}
                 spellCheck={false}
                 autoComplete="off"
                 className="h-8 w-44 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none placeholder:text-muted-foreground focus:border-orange-500/50 disabled:cursor-not-allowed disabled:opacity-50"
