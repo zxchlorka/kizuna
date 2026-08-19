@@ -37,6 +37,10 @@ type fakeRedisClient struct {
 	xRevRangeMessages []goredis.XMessage
 	hscanPairs        []string
 	hlenResult        int64
+	renameNXResult    bool
+	renameNXErr       error
+	renameNXFrom      string
+	renameNXTo        string
 }
 
 type fakeScanClient struct {
@@ -185,6 +189,18 @@ func (f *fakeRedisClient) Exists(context.Context, ...string) *goredis.IntCmd {
 
 func (f *fakeRedisClient) Rename(context.Context, string, string) *goredis.StatusCmd {
 	return goredis.NewStatusResult("OK", nil)
+}
+
+// renameNXResult/renameNXErr let a test stand in for the two answers that decide
+// the rename path: false means the target name is taken, an error carrying
+// CROSSSLOT sends the rename down the copy-and-delete route.
+func (f *fakeRedisClient) RenameNX(_ context.Context, key, newKey string) *goredis.BoolCmd {
+	f.renameNXFrom = key
+	f.renameNXTo = newKey
+	if f.renameNXErr != nil {
+		return goredis.NewBoolResult(false, f.renameNXErr)
+	}
+	return goredis.NewBoolResult(f.renameNXResult, nil)
 }
 
 func (f *fakeRedisClient) Expire(_ context.Context, _ string, expiration time.Duration) *goredis.BoolCmd {

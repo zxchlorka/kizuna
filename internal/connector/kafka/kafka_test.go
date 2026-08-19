@@ -423,9 +423,9 @@ func TestParseMatchQueryMultipleConditions(t *testing.T) {
 		t.Fatalf("mode = %q, want or", query.mode)
 	}
 	want := []contentFilter{
-		{field: "user.id", value: "42", op: matchOpEquals},
-		{field: "event", value: "signup", op: matchOpEquals},
-		{field: "trace", op: matchOpMissing},
+		{field: "user.id", value: "42", op: matchOpEquals, target: matchTargetValue},
+		{field: "event", value: "signup", op: matchOpEquals, target: matchTargetValue},
+		{field: "trace", op: matchOpMissing, target: matchTargetValue},
 	}
 	if !reflect.DeepEqual(query.filters, want) {
 		t.Fatalf("filters = %+v, want %+v", query.filters, want)

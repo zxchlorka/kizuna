@@ -1,5 +1,5 @@
-import { useEffect } from 'react'
-import { useParams } from 'react-router-dom'
+import { useEffect, useRef } from 'react'
+import { useParams, useSearchParams } from 'react-router-dom'
 import { AlertTriangle, Loader2, RefreshCw } from 'lucide-react'
 import { Sidebar } from '@/components/Sidebar'
 import { TabBar } from '@/components/TabBar'
@@ -19,6 +19,8 @@ import { KafkaTopicView } from '@/components/kafka/KafkaTopicView'
 import { isRedisObjectType } from '@/lib/objectTypes'
 import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
 import { Button } from '@/components/ui/button'
+import { decodeObjectDeepLink, encodeObjectDeepLink } from '@/lib/objectDeepLink'
+import { useDataStore } from '@/stores/data'
 
 export default function DataViewPage() {
   const { id } = useParams<{ id: string }>()
@@ -44,9 +46,54 @@ export default function DataViewPage() {
     connectionTabs[connectionTabs.length - 1] ??
     null
 
+  const [searchParams, setSearchParams] = useSearchParams()
+  const openLinkedTab = useWorkspaceStore((state) => state.openLinkedTab)
+  const activeFilters = useDataStore((state) =>
+    activeTab ? state.tabs[activeTab.id]?.opts.filters : undefined
+  )
+  // The last query string this page and the URL agreed on. Anything else in the
+  // address bar came from outside — first load, a pasted link, browser Back —
+  // and has to be opened rather than overwritten.
+  const syncedQueryRef = useRef<string | null>(null)
+
   useEffect(() => {
     hydrateHealth()
   }, [hydrateHealth])
+
+  // Both directions live in one effect so their order is fixed: an address that
+  // arrived from outside is always consumed before the open tab is mirrored
+  // back out. Split in two, the mirror would race the arrival on first paint and
+  // overwrite the incoming link with whatever tab was restored from storage.
+  useEffect(() => {
+    if (!id) {
+      return
+    }
+
+    const incoming = searchParams.toString()
+    if (incoming !== syncedQueryRef.current) {
+      syncedQueryRef.current = incoming
+      const link = decodeObjectDeepLink(searchParams)
+      if (link) {
+        openLinkedTab(id, link.object, link.objectType, link.filters)
+        return
+      }
+    }
+
+    const outgoing = encodeObjectDeepLink(
+      activeTab && activeTab.kind === 'object'
+        ? {
+            object: activeTab.object,
+            objectType: activeTab.objectType,
+            filters: activeFilters ?? activeTab.initialFilters ?? [],
+          }
+        : null
+    ).toString()
+
+    if (outgoing !== incoming) {
+      syncedQueryRef.current = outgoing
+      setSearchParams(outgoing, { replace: true })
+    }
+  }, [activeFilters, activeTab, id, openLinkedTab, searchParams, setSearchParams])
 
   // Keep the global activeTabId in sync with the resolved tab so TabBar (which
   // reads activeTabId) highlights the correct tab after a connection switch.

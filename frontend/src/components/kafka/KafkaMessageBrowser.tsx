@@ -21,6 +21,7 @@ import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparato
 import { extractMessageField, linkSourceLabel, linkSummary, linkTargetLabel } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import {
+  activeConditions,
   filterLoadedMessages,
   MAX_SCAN_MATCHES,
   type KafkaDirection,
@@ -221,12 +222,21 @@ export function KafkaMessageBrowser({
     }))
   }, [linkPicker, links, reverseLinks, allConnectionLinks, connectionName, onOpenLink, onOpenReverse])
 
+  // Clearing means the query is gone, dialog included — the Filters badge
+  // counts what the dialog holds, so a leftover draft read as a filter that was
+  // still on.
+  const resetDraft = (clear: () => void) => () => {
+    clear()
+    setConditions([{ ...emptyCondition }])
+    setMode('and')
+  }
+
   const openMenu = (event: MouseEvent, message: KafkaMessageRow) => {
     event.preventDefault()
     setMenu({ x: event.clientX, y: event.clientY, message })
   }
 
-  const readyConditions = conditions.filter((condition) => condition.field.trim() !== '')
+  const readyConditions = activeConditions(conditions)
   const canFilter = readyConditions.length > 0 && !searchActive && messages.length > 0
   const canSearch = readyConditions.length > 0 && !scanning
 
@@ -368,7 +378,13 @@ export function KafkaMessageBrowser({
           <span>
             Filtered {messages.length.toLocaleString()} loaded messages · {visibleMessages.length.toLocaleString()} matches
           </span>
-          <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onClearFilter}>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+            onClick={resetDraft(onClearFilter)}
+          >
             <X className="h-3 w-3" />
             Clear filter
           </Button>
@@ -404,7 +420,13 @@ export function KafkaMessageBrowser({
               Cancel
             </Button>
           ) : (
-            <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-1.5 font-mono text-[11px]" onClick={onClearSearch}>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+              onClick={resetDraft(onClearSearch)}
+            >
               <X className="h-3 w-3" />
               Clear search
             </Button>
