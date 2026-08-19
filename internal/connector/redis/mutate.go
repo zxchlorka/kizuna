@@ -36,6 +36,16 @@ func (c *RedisConnector) Mutate(ctx context.Context, op connector.MutateOp) (*co
 		}
 	}
 
+	if op.Type == "rename" {
+		destination, _ := op.Data["destination"].(string)
+		destination = strings.TrimSpace(destination)
+		if err := c.renameKeyTo(ctx, op.Object, destination); err != nil {
+			return nil, err
+		}
+		c.invalidateKeyMeta(op.Object, destination)
+		return &connector.MutateResult{RowsAffected: 1}, nil
+	}
+
 	if op.Type == "copy" {
 		destination, _ := op.Data["destination"].(string)
 		if err := c.copyKey(ctx, op.Object, strings.TrimSpace(destination)); err != nil {
@@ -163,6 +173,48 @@ func (c *RedisConnector) renameKey(ctx context.Context, from, to string) error {
 	}
 	if err := c.client.Rename(ctx, from, to).Err(); err != nil {
 		return normalizeRedisError(err)
+	}
+	return nil
+}
+
+// renameKeyTo renames a key without overwriting anything.
+//
+// RENAMENX, not RENAME: Redis's RENAME silently discards whatever already sits
+// under the target name, and a rename box is exactly where a typo lands on a key
+// that matters. NX also makes the check atomic — testing with EXISTS first would
+// leave a window between the two commands.
+//
+// In cluster mode a key can only be renamed within its own hash slot, and a new
+// name usually hashes somewhere else; Redis answers CROSSSLOT. Since that covers
+// most renames worth making on a cluster, the key is copied to the new slot and
+// the old one dropped, over the same DUMP/RESTORE path duplication uses. Those
+// two steps are not one atomic operation: the copy happens first, so an
+// interruption leaves the original key untouched rather than losing it.
+func (c *RedisConnector) renameKeyTo(ctx context.Context, from, to string) error {
+	if to == "" {
+		return fmt.Errorf("%w: new key name is required", connector.ErrBadRequest)
+	}
+	if to == from {
+		return fmt.Errorf("%w: the new name must differ from the current one", connector.ErrBadRequest)
+	}
+
+	renamed, err := c.client.RenameNX(ctx, from, to).Result()
+	switch {
+	case err == nil && renamed:
+		return nil
+	case err == nil:
+		return fmt.Errorf("%w: key %q already exists", connector.ErrBadRequest, to)
+	case strings.Contains(strings.ToLower(err.Error()), "no such key"):
+		return fmt.Errorf("%w: key %q not found", connector.ErrRelationNotFound, from)
+	case !strings.Contains(strings.ToLower(err.Error()), "crossslot"):
+		return normalizeRedisError(err)
+	}
+
+	if err := c.copyKey(ctx, from, to); err != nil {
+		return err
+	}
+	if err := c.client.Del(ctx, from).Err(); err != nil {
+		return fmt.Errorf("key copied to %q but %q could not be removed: %w", to, from, normalizeRedisError(err))
 	}
 	return nil
 }

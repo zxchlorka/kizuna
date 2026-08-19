@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import { DeleteKeyDialog } from '@/components/redis/DeleteKeyDialog'
+import { RenameKeyDialog } from '@/components/redis/RenameKeyDialog'
 import { SetTTLDialog } from '@/components/redis/SetTTLDialog'
 import { HashEditor } from '@/components/redis/editors/HashEditor'
 import { JsonEditor } from '@/components/redis/editors/JsonEditor'
@@ -112,6 +113,32 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
   const [copying, setCopying] = useState(false)
+  const [renameOpen, setRenameOpen] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+
+  // The key under this tab stops existing, so the tab has to follow it: the new
+  // name is opened first and the old tab closed after, which leaves the new one
+  // active instead of dropping the user onto a neighbouring tab.
+  const renameKey = async (destination: string) => {
+    if (renaming) {
+      return
+    }
+    setRenaming(true)
+    try {
+      await mutate(connId, { type: 'rename', object, schema: '', where: {}, data: { destination } }, tabId, {
+        reload: false,
+      })
+      setRenameOpen(false)
+      pushToast({ tone: 'success', title: 'Key renamed', message: destination })
+      openTab(connId, destination, objectType)
+      closeTab(tabId)
+      await refreshTree(connId)
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Rename failed', message: (error as Error).message })
+    } finally {
+      setRenaming(false)
+    }
+  }
 
   // The copy is made server-side from the stored value, so the new key is a
   // faithful duplicate of whatever type this is — no reading the contents into
@@ -799,6 +826,17 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                       <CopyIcon className="h-3.5 w-3.5" />
                       Duplicate
                     </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-8 gap-1.5"
+                      onClick={() => setRenameOpen(true)}
+                      disabled={saving || renaming}
+                    >
+                      <PenLine className="h-3.5 w-3.5" />
+                      Rename
+                    </Button>
                   <Button type="button" variant="destructive" size="sm" className="h-8 gap-1.5" onClick={() => setDeleteDialogOpen(true)} disabled={saving}>
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete key
@@ -878,6 +916,14 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           </div>
         </DialogContent>
       </Dialog>
+
+      <RenameKeyDialog
+        open={renameOpen}
+        keyName={object}
+        saving={renaming}
+        onOpenChange={setRenameOpen}
+        onConfirm={renameKey}
+      />
 
       <DeleteKeyDialog
         open={deleteDialogOpen}

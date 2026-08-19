@@ -34,6 +34,7 @@ type redisClient interface {
 	Scan(ctx context.Context, cursor uint64, match string, count int64) *goredis.ScanCmd
 	Exists(ctx context.Context, keys ...string) *goredis.IntCmd
 	Rename(ctx context.Context, key, newKey string) *goredis.StatusCmd
+	RenameNX(ctx context.Context, key, newKey string) *goredis.BoolCmd
 	Expire(ctx context.Context, key string, expiration time.Duration) *goredis.BoolCmd
 	Persist(ctx context.Context, key string) *goredis.BoolCmd
 	HGetAll(ctx context.Context, key string) *goredis.MapStringStringCmd
