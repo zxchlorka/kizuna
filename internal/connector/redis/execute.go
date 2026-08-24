@@ -282,7 +282,7 @@ func (c *RedisConnector) formatExecResult(command string, args []string, value a
 		result.Rows = [][]any{{nil}}
 	case string:
 		columnType := "string"
-		if isJSONText(typed) {
+		if isJSONDocument(typed) {
 			columnType = "json"
 		}
 		result.Columns = []string{"value"}
@@ -291,7 +291,7 @@ func (c *RedisConnector) formatExecResult(command string, args []string, value a
 	case []byte:
 		text := string(typed)
 		columnType := "string"
-		if isJSONText(text) {
+		if isJSONDocument(text) {
 			columnType = "json"
 		}
 		result.Columns = []string{"value"}
@@ -547,7 +547,20 @@ func makeMapRows(values map[string]any) [][]any {
 	return rows
 }
 
-func isJSONText(text string) bool {
+// isJSONDocument reports whether a stored value is a JSON object or array —
+// the only shapes the UI has anything to pretty-print.
+//
+// Deliberately not "does this parse as JSON": a bare scalar does too, and a
+// snowflake id stored as a plain string (2091885016401416192) is a valid JSON
+// number. Flagging that turned the string viewer into a JSON viewer, which
+// pretty-printed the value through JSON.parse and showed — and on save would
+// have written — 2091885016401416200. Same rule as deserializePayload in the
+// Kafka connector.
+func isJSONDocument(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	if len(trimmed) == 0 || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return false
+	}
 	var value any
-	return json.Unmarshal([]byte(strings.TrimSpace(text)), &value) == nil
+	return json.Unmarshal([]byte(trimmed), &value) == nil
 }

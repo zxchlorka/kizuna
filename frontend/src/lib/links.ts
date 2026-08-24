@@ -1,5 +1,6 @@
 import type { ColumnMeta, LinkRecord, TableRow } from '@/types/api'
 import { parsePath, traverse } from '@/lib/jsonPaths'
+import { parseJsonLossless } from '@/lib/json'
 
 // extractMessageField parses a Kafka message JSON value and returns the scalar
 // at a canonical path (e.g. "user_id", "user.id", "items[].id",
@@ -14,7 +15,10 @@ export function extractMessageField(value: string, field: string): string | null
   }
   let parsed: unknown
   try {
-    parsed = JSON.parse(value)
+    // Lossless: the extracted scalar becomes a lookup key (profile:<id>), so an
+    // id rounded by a plain JSON.parse would send the user to a key that does
+    // not exist.
+    parsed = parseJsonLossless(value)
   } catch {
     return null
   }

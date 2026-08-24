@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"sort"
 	"strconv"
 	"strings"
@@ -1836,8 +1837,14 @@ func messageMatchesField(row map[string]any, field string, want string, op match
 	if !ok {
 		return false
 	}
+	// UseNumber so a snowflake id keeps its digits: decoded as float64 it reads
+	// back as a different id, and a "contains" search on it would compare
+	// against digits nobody produced. Mirrors parseJsonLossless() on the
+	// frontend, which keeps the same literals as strings.
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
 	var parsed any
-	if json.Unmarshal([]byte(raw), &parsed) != nil {
+	if decoder.Decode(&parsed) != nil {
 		return false
 	}
 	segments := parseJSONPath(field)
@@ -2032,6 +2039,8 @@ func jsonLeafText(leaf any) string {
 		return "null"
 	case bool:
 		return strconv.FormatBool(typed)
+	case json.Number:
+		return string(typed)
 	case float64:
 		return strconv.FormatFloat(typed, 'f', -1, 64)
 	case string:
@@ -2041,12 +2050,45 @@ func jsonLeafText(leaf any) string {
 	}
 }
 
+// isLossyNumberLiteral reports whether a number literal denotes a value a
+// float64 cannot hold — an id past 2^53, or a decimal with more significant
+// digits than a double keeps. It is the Go half of isLossyNumber() in
+// frontend/src/lib/json.ts, and the two must agree: the same query is answered
+// by this scan on the server and by the filter over already-loaded rows in the
+// browser. Both compare values rather than spellings, so 1.0 and 1 are equal.
+func isLossyNumberLiteral(s string) bool {
+	literal, ok := new(big.Rat).SetString(s)
+	if !ok {
+		return true
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return true
+	}
+	shortest, ok := new(big.Rat).SetString(strconv.FormatFloat(f, 'g', -1, 64))
+	return !ok || literal.Cmp(shortest) != 0
+}
+
 func jsonLeafEquals(leaf any, want string) bool {
 	switch typed := leaf.(type) {
 	case nil:
 		return want == "null"
 	case bool:
 		return strconv.FormatBool(typed) == want
+	case json.Number:
+		// An id too large for a double compares digit for digit; comparing it
+		// numerically would make a search for 2091885016401416200 match the
+		// stored 2091885016401416192. Everything a double holds exactly still
+		// compares numerically, so "1.0" keeps matching 1.
+		if isLossyNumberLiteral(string(typed)) {
+			return string(typed) == want
+		}
+		value, err := typed.Float64()
+		if err != nil {
+			return string(typed) == want
+		}
+		parsed, perr := strconv.ParseFloat(want, 64)
+		return perr == nil && parsed == value
 	case float64:
 		parsed, err := strconv.ParseFloat(want, 64)
 		return err == nil && parsed == typed

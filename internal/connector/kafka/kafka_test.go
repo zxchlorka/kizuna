@@ -521,6 +521,13 @@ func TestMessageMatchesField(t *testing.T) {
 		{name: "nested object never matches", row: jsonRow(`{"user":{"id":1}}`), field: "user", want: "anything", match: false},
 		{name: "non-json never matches", row: map[string]any{"format": "text", "value": "product_id=123"}, field: "product_id", want: "123", match: false},
 		{name: "empty field matches all", row: jsonRow(`{"a":1}`), field: "", want: "", match: true},
+		// Ids past 2^53 compare digit for digit. Decoded as float64 both of
+		// these would land on the same double, so the near miss below would
+		// match a message it has nothing to do with.
+		{name: "int64 id exact", row: jsonRow(`{"profile_id":2091885016401416192}`), field: "profile_id", want: "2091885016401416192", match: true},
+		{name: "int64 id rounded", row: jsonRow(`{"profile_id":2091885016401416192}`), field: "profile_id", want: "2091885016401416200", match: false},
+		// Spelling still does not matter for values a double holds exactly.
+		{name: "trailing zero decimal", row: jsonRow(`{"rate":1.0}`), field: "rate", want: "1", match: true},
 	}
 
 	for _, tc := range tests {

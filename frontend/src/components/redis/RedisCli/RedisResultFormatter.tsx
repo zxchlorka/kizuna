@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { RedisResultTable } from '@/components/redis/RedisCli/RedisResultTable'
+import { formatJson } from '@/lib/json'
 import type { ExecResult } from '@/types/api'
 
 interface RedisResultFormatterProps {
@@ -16,11 +17,7 @@ function renderValue(value: unknown, prettyJson: boolean) {
     if (!prettyJson) {
       return value
     }
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2)
-    } catch {
-      return value
-    }
+    return formatJson(value) ?? value
   }
   if (typeof value === 'object') {
     return JSON.stringify(value, null, 2)

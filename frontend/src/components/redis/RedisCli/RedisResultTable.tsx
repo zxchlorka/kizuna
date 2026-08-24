@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { formatJson } from '@/lib/json'
 import { cn } from '@/lib/utils'
 import type { ExecResult } from '@/types/api'
 
@@ -22,11 +23,7 @@ function formatExpanded(value: unknown): string {
     return '(nil)'
   }
   if (typeof value === 'string') {
-    try {
-      return JSON.stringify(JSON.parse(value), null, 2)
-    } catch {
-      return value
-    }
+    return formatJson(value) ?? value
   }
   if (typeof value === 'object') {
     return JSON.stringify(value, null, 2)
