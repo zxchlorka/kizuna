@@ -1,3 +1,4 @@
+import { formatJson } from '@/lib/json'
 import type { ObjectType, RedisObjectType } from '@/types/api'
 
 const REDIS_TYPE_LABELS: Record<string, string> = {
@@ -76,22 +77,13 @@ export function getRedisTTLStyle(ttlSeconds?: number | null): string {
   return 'border-emerald-500/20 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
 }
 
-export function tryParseJson(value: string): { isJson: boolean; text: string; parsed?: unknown } {
-  const trimmed = value.trim()
-  if (trimmed === '') {
-    return { isJson: false, text: value }
-  }
-
-  try {
-    const parsed = JSON.parse(trimmed)
-    return {
-      isJson: true,
-      parsed,
-      text: JSON.stringify(parsed, null, 2),
-    }
-  } catch {
-    return { isJson: false, text: value }
-  }
+// Pretty-printed form of a stored value, or the value itself when it is not
+// JSON. formatJson re-indents the text instead of round-tripping it through
+// JSON.parse, so a stored int64 keeps its digits — and the editor's Save, which
+// writes back exactly what is on screen, cannot round a value it only displayed.
+export function tryParseJson(value: string): { isJson: boolean; text: string } {
+  const pretty = value.trim() === '' ? null : formatJson(value)
+  return pretty === null ? { isJson: false, text: value } : { isJson: true, text: pretty }
 }
 
 export function stringifyRedisValue(value: unknown): string {

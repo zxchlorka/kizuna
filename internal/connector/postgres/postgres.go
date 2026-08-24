@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/zxchlorka/kizuna/internal/config"
@@ -196,6 +197,10 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 		return nil, normalizePostgresError(err)
 	}
 	poolConfig.ConnConfig.ConnectTimeout = 5 * time.Second
+	poolConfig.AfterConnect = func(_ context.Context, conn *pgx.Conn) error {
+		registerJSONAsText(conn.TypeMap())
+		return nil
+	}
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
 	if err != nil {

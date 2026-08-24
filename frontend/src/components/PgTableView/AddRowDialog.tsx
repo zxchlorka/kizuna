@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { isLossyNumber } from '@/lib/json'
 import type { ColumnMeta } from '@/types/api'
 
 interface AddRowDialogProps {
@@ -67,15 +68,16 @@ function parseFormValue(raw: string, column: ColumnMeta): { include: boolean; va
   }
 
   if (INTEGER_TYPES.has(dt)) {
-    const parsed = Number(trimmed)
-    if (!Number.isInteger(parsed)) return { include: false, error: 'Integer expected' }
-    return { include: true, value: parsed }
+    if (!/^[+-]?\d+$/.test(trimmed)) return { include: false, error: 'Integer expected' }
+    // See EditableCell: a bigint past 2^53 travels as digits, not as a rounded
+    // JS number.
+    return { include: true, value: isLossyNumber(trimmed) ? trimmed : Number(trimmed) }
   }
 
   if (NUMERIC_TYPES.has(dt)) {
-    const parsed = Number(trimmed)
-    if (Number.isNaN(parsed)) return { include: false, error: 'Numeric value expected' }
-    return { include: true, value: parsed }
+    if (Number.isNaN(Number(trimmed))) return { include: false, error: 'Numeric value expected' }
+    // See EditableCell: arbitrary-precision digits travel as text.
+    return { include: true, value: isLossyNumber(trimmed) ? trimmed : Number(trimmed) }
   }
 
   if (UUID_TYPES.has(dt)) {
@@ -86,10 +88,12 @@ function parseFormValue(raw: string, column: ColumnMeta): { include: boolean; va
 
   if (JSON_TYPES.has(dt)) {
     try {
-      return { include: true, value: JSON.parse(raw) }
+      // Validation only; the text itself is what gets stored.
+      JSON.parse(raw)
     } catch {
       return { include: false, error: 'Invalid JSON' }
     }
+    return { include: true, value: raw }
   }
 
   return { include: true, value: raw }

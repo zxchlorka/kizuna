@@ -1,3 +1,5 @@
+import { parseJsonLossless } from '@/lib/json'
+
 const DEFAULT_TIMEOUT_MS = 8000
 
 // The backend requires this header on every write. It is not a secret and grants
@@ -13,10 +15,24 @@ function withClientHeader(init?: RequestInit): RequestInit {
   return { ...init, headers }
 }
 
+// The browser's own Response.json() is JSON.parse, which rounds every integer
+// above 2^53 — a Postgres bigint, a snowflake id in a Kafka payload or a Redis
+// JSON document arrives corrupted before a single line of our code sees it.
+// Shadowing .json() on the instance puts the exact-digits parse (lib/json.ts)
+// on every API response at the one place they are all created, instead of at
+// the ~50 call sites — where the next one written would silently miss it.
+//
+// This is why every API call must go through apiFetch or fetchWithTimeout.
+function losslessJson(res: Response): Response {
+  const readText = res.text.bind(res)
+  res.json = async () => parseJsonLossless(await readText())
+  return res
+}
+
 // Plain fetch for API calls that manage their own lifetime (long-running SQL,
 // requests already wrapped in their own abort handling).
 export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  return fetch(input, withClientHeader(init))
+  return fetch(input, withClientHeader(init)).then(losslessJson)
 }
 
 // Every API error response is `{"error": "...", "code": N}` (see writeError on
@@ -78,10 +94,12 @@ export async function fetchWithTimeout(
   }
 
   try {
-    return await fetch(input, {
-      ...withClientHeader(init),
-      signal: controller.signal,
-    })
+    return losslessJson(
+      await fetch(input, {
+        ...withClientHeader(init),
+        signal: controller.signal,
+      })
+    )
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') {
       // An external cancel and the internal timeout both abort the same

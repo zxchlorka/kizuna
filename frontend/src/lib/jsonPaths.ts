@@ -22,6 +22,8 @@
 // a legacy suffix-matching affordance for hand-typed search queries, but that
 // is deliberately NOT part of this canonical traversal.
 
+import { parseJsonLossless } from '@/lib/json'
+
 // PathSegment is one step of a parsed path: either an object key or an array
 // element wildcard.
 export type PathSegment = { type: 'key'; key: string } | { type: 'index' }
@@ -183,6 +185,12 @@ export function traversePath(value: unknown, path: string): unknown[] {
 // leafEquals compares a decoded JSON scalar leaf to an entered string, mirroring
 // the Go jsonLeafEquals semantics: null matches only the literal "null", numbers
 // compare numerically ("123" matches 123), and objects/arrays never match.
+//
+// An integer too large for a double arrives here as a string of its exact
+// digits (parseJsonLossless), so it lands in the 'string' branch and compares
+// digit for digit. That is deliberate: comparing it as a number would make
+// 2091885016401416200 match the stored 2091885016401416192. Go's json.Number
+// branch splits the same way.
 export function leafEquals(leaf: unknown, want: string): boolean {
   if (leaf === null) return want === 'null'
   switch (typeof leaf) {
@@ -222,7 +230,7 @@ export function matchFieldContains(rawValue: string, path: string, want: string)
   if (path === '') return true
   let parsed: unknown
   try {
-    parsed = JSON.parse(rawValue)
+    parsed = parseJsonLossless(rawValue)
   } catch {
     return false
   }
@@ -242,7 +250,7 @@ export function matchField(rawValue: string, path: string, want: string): boolea
   if (path === '') return true
   let parsed: unknown
   try {
-    parsed = JSON.parse(rawValue)
+    parsed = parseJsonLossless(rawValue)
   } catch {
     return false
   }
@@ -286,7 +294,7 @@ export function fieldPresence(rawValue: string, path: string, wantPresent: boole
   if (trimmed === '') return true
   let parsed: unknown
   try {
-    parsed = JSON.parse(rawValue)
+    parsed = parseJsonLossless(rawValue)
   } catch {
     return false
   }

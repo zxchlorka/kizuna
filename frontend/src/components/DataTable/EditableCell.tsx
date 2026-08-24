@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react'
 import { Expand, Pencil } from 'lucide-react'
+import { isLossyNumber } from '@/lib/json'
 import { cn } from '@/lib/utils'
 import type { ColumnMeta } from '@/types/api'
 import { FkLinkCell } from '@/components/DataTable/FkLinkCell'
@@ -94,15 +95,18 @@ function parseValue(raw: string, dataType: string, nullable: boolean): { value?:
   }
 
   if (INTEGER_TYPES.has(dt)) {
-    const parsed = Number(trimmed)
-    if (!Number.isInteger(parsed)) return { error: 'Integer expected' }
-    return { value: parsed }
+    if (!/^[+-]?\d+$/.test(trimmed)) return { error: 'Integer expected' }
+    // A bigint past 2^53 has no exact JS number. Send the digits instead and
+    // let the backend parse them (coerceInt takes a string via ParseInt), so a
+    // hand-typed id is stored as typed rather than rounded.
+    return { value: isLossyNumber(trimmed) ? trimmed : Number(trimmed) }
   }
 
   if (NUMERIC_TYPES.has(dt)) {
-    const parsed = Number(trimmed)
-    if (Number.isNaN(parsed)) return { error: 'Numeric value expected' }
-    return { value: parsed }
+    if (Number.isNaN(Number(trimmed))) return { error: 'Numeric value expected' }
+    // numeric/decimal are arbitrary precision in Postgres; a double is not.
+    // Digits that no JS number can hold travel as text, same as a large bigint.
+    return { value: isLossyNumber(trimmed) ? trimmed : Number(trimmed) }
   }
 
   if (BOOL_TYPES.has(dt)) {
@@ -118,10 +122,13 @@ function parseValue(raw: string, dataType: string, nullable: boolean): { value?:
 
   if (JSON_TYPES.has(dt)) {
     try {
-      return { value: JSON.parse(raw) }
+      // Validation only — the document is stored as the typed text so that any
+      // int64 inside it is written exactly (see LargeValueModal.handleSave).
+      JSON.parse(raw)
     } catch {
       return { error: 'Invalid JSON' }
     }
+    return { value: raw }
   }
 
   return { value: raw }
