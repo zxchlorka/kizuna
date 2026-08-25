@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { formatJson } from '@/lib/json'
 
 interface LargeValueModalProps {
   open: boolean
@@ -14,9 +15,13 @@ interface LargeValueModalProps {
   readOnly?: boolean
 }
 
-function stringifyValue(value: unknown): string {
+function stringifyValue(value: unknown, isJson: boolean): string {
   if (value === null || value === undefined) return ''
   if (typeof value === 'object') return JSON.stringify(value, null, 2)
+  // A json/jsonb column arrives as text (see the ::text cast in the Postgres
+  // data path) so that large integers inside it survive the trip. Indent it
+  // here rather than through a parse, for the same reason.
+  if (isJson && typeof value === 'string') return formatJson(value) ?? value
   return String(value)
 }
 
@@ -39,40 +44,33 @@ export function LargeValueModal({
 
   useEffect(() => {
     if (open) {
-      setText(stringifyValue(initialValue))
+      setText(stringifyValue(initialValue, isJson))
       setError(null)
     }
-  }, [open, initialValue])
-
-  const parsedValue = useMemo(() => {
-    if (!isJson) return text
-    if (text.trim() === '') return ''
-    try {
-      return JSON.parse(text)
-    } catch {
-      return null
-    }
-  }, [isJson, text])
+  }, [open, initialValue, isJson])
 
   if (!open) return null
 
   const handleSave = () => {
+    // JSON goes to the API as the edited text, not as a re-serialized parse of
+    // it: JSON.parse rounds any integer above 2^53, so saving a document that
+    // holds an int64 id would silently rewrite that id. The backend's coerceJSON
+    // validates a string and stores it verbatim, so the text is the exact thing
+    // written. JSON.parse here only decides whether it is valid.
     if (isJson) {
       if (text.trim() === '') {
         setError('JSON value cannot be empty')
         return
       }
       try {
-        const parsed = JSON.parse(text)
-        onSave(parsed)
-        onClose()
+        JSON.parse(text)
       } catch {
         setError('Invalid JSON')
+        return
       }
-      return
     }
 
-    onSave(parsedValue)
+    onSave(text)
     onClose()
   }
 

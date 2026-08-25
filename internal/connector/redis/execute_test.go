@@ -244,7 +244,7 @@ func TestGetDataUsesBracketPathsForSpecialJSONKeys(t *testing.T) {
 
 	foundLeaf := false
 	for _, row := range result.Rows {
-		if row["path"] == `$["mountain bikes"]["wheel.size"]` && row["value"] == float64(29) {
+		if row["path"] == `$["mountain bikes"]["wheel.size"]` && row["value"] == json.Number("29") {
 			foundLeaf = true
 			break
 		}
@@ -252,6 +252,37 @@ func TestGetDataUsesBracketPathsForSpecialJSONKeys(t *testing.T) {
 	if !foundLeaf {
 		t.Fatalf("expected bracket-escaped path, got %#v", result.Rows)
 	}
+}
+
+// A JSON document is decoded with UseNumber, so an id past 2^53 keeps every
+// digit instead of being re-encoded from a float64 as …200.
+func TestGetJSONDataKeepsLargeIntegersExact(t *testing.T) {
+	t.Parallel()
+
+	conn := newTestRedisConnectorWithClient(&fakeRedisClient{
+		typeValue: "json",
+		doResult:  `[{"profile_id":2091885016401416192}]`,
+	})
+
+	result, err := conn.GetData(context.Background(), "profile:1", connector.DataOpts{})
+	if err != nil {
+		t.Fatalf("get json data: %v", err)
+	}
+
+	for _, row := range result.Rows {
+		if row["path"] != "$.profile_id" {
+			continue
+		}
+		encoded, err := json.Marshal(row["value"])
+		if err != nil {
+			t.Fatalf("marshal leaf: %v", err)
+		}
+		if string(encoded) != "2091885016401416192" {
+			t.Fatalf("leaf reaches the client as %s, want 2091885016401416192", encoded)
+		}
+		return
+	}
+	t.Fatalf("profile_id leaf not found in %#v", result.Rows)
 }
 
 func TestGetDataSupportsStreamCursorPaging(t *testing.T) {

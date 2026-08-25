@@ -3,6 +3,7 @@ import { Copy, Maximize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
+import { formatJson } from '@/lib/json'
 import { useToastStore } from '@/stores/toast'
 import type { KafkaMessageRow } from '@/stores/kafka'
 
@@ -10,11 +11,7 @@ function prettyValue(value: string, format: string, pretty: boolean): string {
   if (!pretty || format !== 'json') {
     return value
   }
-  try {
-    return JSON.stringify(JSON.parse(value), null, 2)
-  } catch {
-    return value
-  }
+  return formatJson(value) ?? value
 }
 
 interface KafkaMessageDetailProps {

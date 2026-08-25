@@ -2,7 +2,6 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -69,8 +68,7 @@ func (c *RedisConnector) getStringData(ctx context.Context, key string, ttl int6
 	}
 
 	meta := redisMeta("string", ttl)
-	var parsed any
-	if json.Unmarshal([]byte(value), &parsed) == nil {
+	if isJSONDocument(value) {
 		meta["is_json"] = true
 	}
 

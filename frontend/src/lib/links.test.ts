@@ -29,6 +29,14 @@ describe('extractMessageField', () => {
     expect(extractMessageField('{"ok":true}', 'ok')).toBe('true')
   })
 
+  // The extracted scalar becomes a lookup key. Through a plain JSON.parse this
+  // id comes back as …200, and the link lands on a key that does not exist.
+  it('keeps an int64 id exact', () => {
+    expect(extractMessageField('{"profile_id":2091885016401416192}', 'profile_id')).toBe(
+      '2091885016401416192'
+    )
+  })
+
   it('returns null for a missing path', () => {
     expect(extractMessageField('{"user":{"id":1}}', 'user.name')).toBeNull()
   })
