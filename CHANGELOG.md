@@ -3,6 +3,35 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.8.1 — 2026-08-25
+
+### Fixed
+
+- Values too large for a double are shown as they are stored, everywhere.
+  An int64 id — a Postgres `bigint`, a snowflake in a Redis value or a Kafka
+  payload — used to be rounded on its way to the screen: `2091885016401416192`
+  read as `2091885016401416200`, an id matching no row and no key. Copying one
+  out of Kizuna and looking it up found nothing.
+- The rounding had several doors, all now closed. Every API response is parsed
+  without putting numbers through a JavaScript `Number`, so a `bigint` column
+  arrives with its digits intact. Postgres `json`/`jsonb` is read as the text
+  Postgres renders instead of being decoded into a Go map, where each number
+  became a float64 before it ever reached the browser — this covers the SQL
+  console as well as the table view. A `numeric` amount keeps every digit in
+  both directions, rather than losing the tail past the seventeenth.
+- Pretty-printing re-indents the text instead of re-serializing a parse of it.
+  The old path rounded any large integer inside the document, and in an editor
+  it saved the rounded value back — so opening a value and pressing Save could
+  change it.
+- A Redis string is no longer treated as JSON just because it parses as JSON. A
+  bare number is valid JSON, which is what turned the string viewer for a
+  snowflake id into a JSON viewer and pulled it through the rounding above.
+- Following a link out of a JSON field builds the key from the exact value, so a
+  link on an id field lands on the key that exists.
+- Searching Kafka by a field holding a large id compares digit for digit. A
+  query for a rounded id no longer matches the message that stores a different
+  one, and a `contains` search over such a field reads the real digits.
+
 ## v0.8.0 — 2026-08-19
 
 ### Postgres
