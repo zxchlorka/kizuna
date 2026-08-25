@@ -16,8 +16,14 @@ func (c *RedisConnector) getJSONData(ctx context.Context, key string, ttl int64,
 		return nil, normalizeRedisError(err)
 	}
 
+	// UseNumber, not Unmarshal: decoding into `any` turns every number into a
+	// float64, so an int64 id inside the document would be re-encoded rounded
+	// on the way to the browser. json.Number keeps the literal and marshals
+	// back exactly as stored.
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
 	var value any
-	if err := json.Unmarshal([]byte(raw), &value); err != nil {
+	if err := decoder.Decode(&value); err != nil {
 		return nil, fmt.Errorf("%w: invalid JSON payload stored in %q", connector.ErrBadRequest, key)
 	}
 	if rootArray, ok := value.([]any); ok && len(rootArray) == 1 {

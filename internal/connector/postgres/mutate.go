@@ -385,7 +385,9 @@ func coerceValue(value any, col columnDef) (any, error) {
 	switch {
 	case strings.HasPrefix(udt, "int"):
 		return coerceInt(value, col.Name)
-	case udt == "numeric" || udt == "decimal" || udt == "float4" || udt == "float8":
+	case udt == "numeric" || udt == "decimal":
+		return coerceDecimal(value, col.Name)
+	case udt == "float4" || udt == "float8":
 		return coerceFloat(value, col.Name)
 	case udt == "bool":
 		return coerceBool(value, col.Name)
@@ -439,6 +441,25 @@ func coerceInt(v any, col string) (int64, error) {
 	default:
 		return 0, fmt.Errorf("%w: column %q expects integer", connector.ErrBadRequest, col)
 	}
+}
+
+// coerceDecimal handles numeric/decimal, which Postgres stores at arbitrary
+// precision. A digit string is handed to pgx untouched instead of being routed
+// through a float64, so a numeric(30,2) written from the UI keeps every digit
+// the user typed — the frontend sends one whenever the value has more precision
+// than a JS number holds.
+func coerceDecimal(v any, col string) (any, error) {
+	if s, ok := v.(string); ok {
+		s = strings.TrimSpace(s)
+		if _, err := strconv.ParseFloat(s, 64); err != nil {
+			return nil, fmt.Errorf("%w: column %q expects numeric", connector.ErrBadRequest, col)
+		}
+		return s, nil
+	}
+	if n, ok := v.(json.Number); ok {
+		return coerceDecimal(n.String(), col)
+	}
+	return coerceFloat(v, col)
 }
 
 func coerceFloat(v any, col string) (float64, error) {
