@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Database, Loader2, RefreshCw } from 'lucide-react'
+import { RedisSlotMap, type RedisSlotNode } from '@/components/redis/RedisSlotMap'
 import { Button } from '@/components/ui/button'
 import { fetchWithTimeout } from '@/lib/http'
 import { formatBytes, formatDurationSeconds, formatExactCount } from '@/lib/numberFormat'
@@ -11,13 +12,7 @@ interface RedisOverviewProps {
   connId: string
 }
 
-interface RedisNodeStat {
-  address: string
-  keys: number
-  used_memory: number
-  maxmemory: number
-  connected_clients: number
-}
+type RedisNodeStat = RedisSlotNode
 
 // INFO reports every field as a string; a missing field and an unparseable one
 // are the same thing here — a number we do not have and must not invent.
@@ -309,6 +304,12 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
                 </div>
               </div>
             )}
+
+            {/* Directly under Masters rather than behind a tab: both are built
+                from the same poll, and the table's "which node is bigger"
+                only becomes actionable once you can see which slots to move.
+                Renders itself away when the server gave no slot ranges. */}
+            <RedisSlotMap nodes={nodeRows} />
           </>
         )}
       </div>

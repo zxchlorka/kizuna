@@ -71,6 +71,9 @@ type redisScanClient interface {
 // key tree can be scanned node-by-node with resumable cursors.
 type clusterTopology interface {
 	Masters(ctx context.Context) ([]string, error)
+	// SlotOwnership maps a master address to the slots it answers for. See
+	// slots.go — it is what turns the Masters table into a map of the keyspace.
+	SlotOwnership(ctx context.Context) (map[string]slotOwnership, error)
 	NodeScanClient(addr string) (redisScanClient, error)
 	Close() error
 }
@@ -232,6 +235,12 @@ func (c *RedisConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, erro
 			extra["node_used_memory"] = stats.usedMemory / int64(stats.nodes)
 			extra["node_maxmemory"] = stats.maxMemory / int64(stats.nodes)
 			extra["nodes"] = stats.nodeStats
+			// Slots the cluster is actually serving. Anything short of 16384
+			// means part of the keyspace answers to nobody, which the per-node
+			// figures cannot show — every node present looks healthy.
+			if stats.slotsAssigned > 0 {
+				extra["slots_assigned"] = stats.slotsAssigned
+			}
 		}
 		// Reported per node by Redis; over a cluster the honest aggregate is the
 		// ratio of the totals rather than one node's figure.
@@ -304,6 +313,9 @@ type clusterStats struct {
 	// node at 95% starts refusing writes for that node's slots while the summary
 	// still looks calm.
 	nodeStats []redisNodeStat
+	// slotsAssigned totals the slots the masters claim between them, 16384 on a
+	// whole cluster.
+	slotsAssigned int
 }
 
 type redisNodeStat struct {
@@ -313,6 +325,12 @@ type redisNodeStat struct {
 	MaxMemory  int64  `json:"maxmemory"`
 	Clients    int64  `json:"connected_clients"`
 	Uptime     string `json:"uptime_in_seconds,omitempty"`
+	// Slot ownership, absent when CLUSTER SLOTS could not be read. Replicas
+	// carries no omitempty on purpose: zero replicas is the value worth seeing,
+	// and omitting it would hide the one node nobody is covering.
+	Slots      int                `json:"slots,omitempty"`
+	SlotRanges []clusterSlotRange `json:"slot_ranges,omitempty"`
+	Replicas   int                `json:"replicas"`
 }
 
 func statsFromInfo(parsed map[string]string) clusterStats {
@@ -401,6 +419,16 @@ func (c *RedisConnector) collectStats(ctx context.Context, parsed map[string]str
 		total.peak += node.peak
 		total.clients += node.clients
 	}
+
+	// One extra round trip for the whole cluster, and it is allowed to fail:
+	// the node totals above are already useful, so a server that will not answer
+	// CLUSTER SLOTS costs the slot map, not the Overview.
+	if owned, err := c.topology.SlotOwnership(ctx); err != nil {
+		slog.Warn("failed to read redis slot ownership", "error", err)
+	} else {
+		total.nodeStats, total.slotsAssigned = attachSlotOwnership(total.nodeStats, owned)
+	}
+
 	return total, nil
 }
 
