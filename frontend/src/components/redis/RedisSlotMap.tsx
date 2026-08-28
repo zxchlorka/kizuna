@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { formatBytes, formatExactCount } from '@/lib/numberFormat'
+import { formatExactCount } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
 
 // Redis Cluster hashes every key into one of these, and only ever rebalances by
@@ -46,7 +46,7 @@ const HEAT_CLASSES = [
   'bg-red-500/85 dark:bg-red-500/75',
 ]
 
-function heatIndex(value: number, average: number): number {
+export function heatIndex(value: number, average: number): number {
   if (average <= 0) return 0
   const ratio = value / average
   if (ratio < 1.25) return 0
@@ -123,17 +123,27 @@ export function buildSegments(nodes: RedisSlotNode[]): Segment[] {
 
 // A near-empty cluster has well under one key per slot, and rounding that to
 // "0" reads as "this node is empty" next to a keys column that says otherwise.
-function formatDensity(density: number): string {
+export function formatDensity(density: number): string {
   if (density >= 10) return formatExactCount(Math.round(density))
   return density.toFixed(2)
 }
 
-function formatRanges(ranges: RedisSlotRange[] | undefined): string {
+// Cluster-wide keys per slot, the yardstick every row is coloured against.
+// Exported so the Masters table marks the same rows hot as the ribbon does —
+// two thresholds drifting apart would be worse than none.
+export function averageDensity(nodes: RedisSlotNode[]): number {
+  const withSlots = nodes.filter((node) => (node.slots ?? 0) > 0)
+  const slots = withSlots.reduce((sum, node) => sum + (node.slots ?? 0), 0)
+  if (slots === 0) return 0
+  return withSlots.reduce((sum, node) => sum + node.keys, 0) / slots
+}
+
+export function formatRanges(ranges: RedisSlotRange[] | undefined): string {
   if (!ranges || ranges.length === 0) return '—'
   return ranges.map((range) => (range.start === range.end ? `${range.start}` : `${range.start}–${range.end}`)).join(', ')
 }
 
-export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
+export function RedisSlotRibbon({ nodes }: { nodes: RedisSlotNode[] }) {
   const [mode, setMode] = useState<ColourMode>('owner')
 
   const mapped = useMemo(() => nodes.filter((node) => (node.slots ?? 0) > 0), [nodes])
@@ -149,10 +159,6 @@ export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
       avgDensity: totalSlots > 0 ? totalKeys / totalSlots : 0,
       avgMemoryPerSlot: totalSlots > 0 ? totalMemory / totalSlots : 0,
       unassigned: TOTAL_SLOTS - totalSlots,
-      // The bars compare nodes to each other, so the biggest one fills the
-      // track. Scaling them to 100% of the cluster instead would leave every
-      // bar a sliver on a cluster of any size.
-      maxKeys: mapped.reduce((max, node) => Math.max(max, node.keys), 0),
     }
   }, [mapped])
 
@@ -189,11 +195,11 @@ export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
   }
 
   return (
-    <div className="rounded-sm border border-border">
-      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border px-3 py-2">
-        <div>
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Slot map</div>
-          <div className="mt-1 font-mono text-[11px] text-muted-foreground">
+    <div className="border-b border-border">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
+        <div className="flex flex-wrap items-baseline gap-x-3">
+          <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Slot map</span>
+          <span className="font-mono text-[11px] text-muted-foreground">
             {formatExactCount(TOTAL_SLOTS)} slots · {mapped.length} masters
             {stats.unassigned > 0 && (
               <span className="text-red-600 dark:text-red-400">
@@ -201,7 +207,7 @@ export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
                 · {formatExactCount(stats.unassigned)} owned by no one
               </span>
             )}
-          </div>
+          </span>
         </div>
 
         <div className="flex items-center gap-2">
@@ -227,7 +233,7 @@ export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
         </div>
       </div>
 
-      <div className="flex flex-col gap-3 p-3">
+      <div className="flex flex-col gap-3 px-3 pb-3">
         <div>
           <div className="flex h-11 overflow-hidden rounded-sm border border-border">
             {segments.map((segment) => (
@@ -287,65 +293,6 @@ export function RedisSlotMap({ nodes }: { nodes: RedisSlotNode[] }) {
           </div>
         )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full font-mono text-xs">
-            <thead>
-              <tr className="border-b border-border text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                <th className="px-2 py-2 text-left font-normal">Master</th>
-                <th className="px-2 py-2 text-left font-normal">Slot ranges</th>
-                <th className="px-2 py-2 text-right font-normal">Slots</th>
-                <th className="px-2 py-2 text-right font-normal">Keys</th>
-                <th className="px-2 py-2 text-right font-normal">Keys / slot</th>
-                <th className="px-2 py-2 text-right font-normal">Share of keys</th>
-                <th className="px-2 py-2 text-right font-normal">Memory</th>
-                <th className="px-2 py-2 text-right font-normal">Replicas</th>
-              </tr>
-            </thead>
-            <tbody>
-              {mapped.map((node) => {
-                const slots = node.slots ?? 0
-                const density = slots > 0 ? node.keys / slots : 0
-                const share = stats.totalKeys > 0 ? (node.keys / stats.totalKeys) * 100 : 0
-                const hot = heatIndex(density, stats.avgDensity) >= 2
-                return (
-                  <tr key={node.address} className="border-b border-border/50 last:border-b-0">
-                    <td className="px-2 py-1.5">{node.address}</td>
-                    <td className="px-2 py-1.5 text-muted-foreground">{formatRanges(node.slot_ranges)}</td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{formatExactCount(slots)}</td>
-                    <td className={cn('px-2 py-1.5 text-right tabular-nums', hot && 'text-red-600 dark:text-red-400')}>
-                      {formatExactCount(node.keys)}
-                    </td>
-                    <td className={cn('px-2 py-1.5 text-right tabular-nums', hot && 'text-red-600 dark:text-red-400')}>
-                      {formatDensity(density)}
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">
-                      <span className="flex items-center justify-end gap-2">
-                        <span className="h-1.5 w-16 overflow-hidden rounded-[1px] bg-muted">
-                          <span
-                            className={cn('block h-full', hot ? 'bg-red-500/80' : 'bg-slate-400/70')}
-                            style={{ width: `${stats.maxKeys > 0 ? (node.keys / stats.maxKeys) * 100 : 0}%` }}
-                          />
-                        </span>
-                        {share.toFixed(1)}%
-                      </span>
-                    </td>
-                    <td className="px-2 py-1.5 text-right tabular-nums">{formatBytes(node.used_memory)}</td>
-                    {/* Zero replicas is the line nobody looks for until the
-                        night it matters, so it is coloured like a fault. */}
-                    <td
-                      className={cn(
-                        'px-2 py-1.5 text-right tabular-nums',
-                        (node.replicas ?? 0) === 0 && 'text-red-600 dark:text-red-400'
-                      )}
-                    >
-                      {node.replicas ?? 0}
-                    </td>
-                  </tr>
-                )
-              })}
-            </tbody>
-          </table>
-        </div>
       </div>
     </div>
   )
