@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
 import { KafkaFilterDialog, emptyCondition } from '@/components/kafka/KafkaFilterDialog'
-import { KafkaSeekControl } from '@/components/kafka/KafkaSeekControl'
+import { KafkaSeekControl, localInputToRfc3339 } from '@/components/kafka/KafkaSeekControl'
 import { EmptyState } from '@/components/EmptyState'
 import {
   LINK_MENU_CAP,
@@ -50,6 +50,12 @@ interface KafkaMessageBrowserProps {
   searchMode: KafkaMatchMode
   scanning: boolean
   scanned: number
+  // Record time the scan has reached, '' before the first step. Turns a bare
+  // count into a position: on a topic of billions, "scanned 3.7M" says nothing
+  // about whether the thing you want is still ahead.
+  scanReached: string
+  // Retained messages across every partition, for the share the scan covered.
+  topicMessages: number
   scanPartial: boolean
   // The search stopped because it filled up on matches, not because the log ran
   // out. Continuing is not offered: there is nowhere to put more rows.
@@ -63,7 +69,9 @@ interface KafkaMessageBrowserProps {
   // also changes the paging button's wording.
   direction: KafkaDirection
   onPartitionChange: (partition: number | null) => void
-  onSeekChange: (seek: KafkaSeek) => void
+  // Awaited by the search dialog, which must not start scanning until the
+  // anchor has moved.
+  onSeekChange: (seek: KafkaSeek) => void | Promise<void>
   onDirectionChange: (direction: KafkaDirection) => void
   onRefresh: () => void
   onLoadOlder: () => void
@@ -93,6 +101,40 @@ interface KafkaMessageBrowserProps {
 
 const allPartitions = '__all__'
 
+// A scan is blind when the topic is far larger than one pass can cover and
+// nothing says where to start. The threshold is the point where a single step's
+// 5000 records stop being a meaningful sample — below it a full walk is still
+// plausible and the warning would only be noise.
+const BLIND_SCAN_MESSAGES = 10_000_000
+
+export function seekIsBlind(topicMessages: number, seek: KafkaSeek): boolean {
+  const anchored = seek.offset.trim() !== '' || seek.timestamp.trim() !== ''
+  return !anchored && topicMessages >= BLIND_SCAN_MESSAGES
+}
+
+// Share of the topic a scan has covered. Below a tenth of a percent the figure
+// rounds to "0.0%", which reads as "nothing happened" while the scan is in fact
+// working — so anything that small is named as such instead.
+export function formatScanShare(scanned: number, total: number): string {
+  if (total <= 0) return ''
+  const percent = (scanned / total) * 100
+  if (percent < 0.1) return '<0.1% of the topic'
+  return `${percent.toFixed(percent < 10 ? 1 : 0)}% of the topic`
+}
+
+// Local wall-clock, because that is the clock the reader compares against when
+// they say "it happened around two". Seconds are kept: a scan crosses a minute
+// in far less than a minute.
+function formatReached(rfc: string): string {
+  const parsed = new Date(rfc)
+  if (Number.isNaN(parsed.getTime())) return rfc
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return (
+    `${pad(parsed.getDate())}.${pad(parsed.getMonth() + 1)} ` +
+    `${pad(parsed.getHours())}:${pad(parsed.getMinutes())}:${pad(parsed.getSeconds())}`
+  )
+}
+
 function valuePreview(value: string): string {
   const collapsed = value.replace(/\s+/g, ' ').trim()
   return collapsed.length > 120 ? `${collapsed.slice(0, 120)}…` : collapsed
@@ -114,6 +156,8 @@ export function KafkaMessageBrowser({
   searchMode,
   scanning,
   scanned,
+  scanReached,
+  topicMessages,
   scanPartial,
   scanLimitReached,
   seek,
@@ -156,6 +200,8 @@ export function KafkaMessageBrowser({
   const [pickerIndex, setPickerIndex] = useState(0)
   const [menu, setMenu] = useState<{ x: number; y: number; message: KafkaMessageRow } | null>(null)
   const [confirmOpen, setConfirmOpen] = useState(false)
+  // Optional anchor for the scan about to start; empty means "from the newest".
+  const [startFrom, setStartFrom] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   // The message is captured alongside the group: opening the dialog closes the
   // floating menu, and the topic/reverse lists resolve their values from it.
@@ -395,8 +441,16 @@ export function KafkaMessageBrowser({
         <div className="flex flex-wrap items-center gap-2 font-mono text-[11px] text-muted-foreground">
           {scanning && <Loader2 className="h-3 w-3 animate-spin text-orange-500" />}
           <span>
-            {scanning || deepScanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()} ·{' '}
+            {scanning || deepScanning ? 'Scanning… ' : ''}Scanned {scanned.toLocaleString()}
+            {/* The share is what makes the count mean something. A quarter of a
+                percent reads very differently from a quarter of the topic, and
+                the number alone cannot tell them apart. */}
+            {topicMessages > 0 && ` (${formatScanShare(scanned, topicMessages)})`} ·{' '}
             {messages.length.toLocaleString()} matches
+            {/* Where the walk has got to. The searcher usually knows roughly
+                when the record was written, so this is the one figure that says
+                whether to keep going or to seek and start again. */}
+            {scanReached !== '' && ` · reached ${formatReached(scanReached)}`}
             {!scanning && !deepScanning && deepScanCanceled && hasMore && ' · canceled'}
             {/* The match ceiling outranks the budget note: both mean "stopped
                 early", but this one also explains why there is no way to
@@ -721,6 +775,40 @@ export function KafkaMessageBrowser({
             they are found. Each step is a request that can take several seconds. Continue deeper with “Scan more”,
             and cancel a running step anytime.
           </p>
+
+          {/* Said before the scan starts, not after an hour of it. A budgeted
+              walk over a topic this size covers a sliver, and a search with no
+              starting point spends that sliver on the newest records — which is
+              the wrong end unless what you want happened just now. The seek is
+              already in the toolbar; the reader just has to be told it matters
+              here. */}
+          {seekIsBlind(topicMessages, seek) && (
+            <div className="flex items-start gap-2 rounded-sm border border-amber-500/35 bg-amber-500/[0.08] px-3 py-2 text-xs leading-relaxed">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-500" />
+              <span className="text-muted-foreground">
+                This topic holds about {topicMessages.toLocaleString()} messages, and one pass covers a small
+                fraction of it. If you know roughly when the record was written, set{' '}
+                <span className="text-foreground">From → Time</span> in the toolbar and seek there first — the
+                search continues from wherever the seek put you.
+              </span>
+            </div>
+          )}
+
+          {/* The anchor offered where the decision is made, rather than as a
+              separate errand in the toolbar. Setting it here also flips the
+              walk to run forwards: a time is the point you want to start FROM,
+              and searching backwards from it would leave the record behind. */}
+          <label className="flex flex-wrap items-center gap-2 pt-1 text-xs text-muted-foreground">
+            <span className="uppercase tracking-[0.14em] text-[10px]">Start from</span>
+            <input
+              type="datetime-local"
+              value={startFrom}
+              onChange={(event) => setStartFrom(event.target.value)}
+              className="h-8 rounded-sm border border-border bg-background px-2 font-mono text-xs outline-none focus:border-orange-500/50"
+            />
+            <span>optional — leave empty to start at the newest records</span>
+          </label>
+
           <div className="flex justify-end gap-2 pt-2">
             <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmOpen(false)}>
               Cancel
@@ -729,8 +817,17 @@ export function KafkaMessageBrowser({
               type="button"
               size="sm"
               onClick={() => {
-                setConfirmOpen(false)
-                onSearchTopic(readyConditions, mode)
+                void (async () => {
+                  setConfirmOpen(false)
+                  const anchor = localInputToRfc3339(startFrom)
+                  if (anchor !== '') {
+                    // Awaited: the scan must start from the new anchor, and
+                    // firing both in the same tick races the seek that moves it.
+                    onDirectionChange('oldest')
+                    await onSeekChange({ offset: '', timestamp: anchor })
+                  }
+                  onSearchTopic(readyConditions, mode)
+                })()
               }}
             >
               Search topic
