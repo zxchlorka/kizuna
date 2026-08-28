@@ -124,11 +124,16 @@ func (f *fakeRedisClient) Pipelined(_ context.Context, fn func(goredis.Pipeliner
 type fakeClusterTopology struct {
 	masters []string
 	clients map[string]redisScanClient
+	owned   map[string]slotOwnership
 	closed  bool
 }
 
 func (t *fakeClusterTopology) Masters(context.Context) ([]string, error) {
 	return t.masters, nil
+}
+
+func (t *fakeClusterTopology) SlotOwnership(context.Context) (map[string]slotOwnership, error) {
+	return t.owned, nil
 }
 
 func (t *fakeClusterTopology) NodeScanClient(addr string) (redisScanClient, error) {
