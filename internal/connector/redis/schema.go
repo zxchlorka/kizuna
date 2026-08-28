@@ -173,5 +173,12 @@ func (c *RedisConnector) keyMemoryUsage(ctx context.Context, key string) (int64,
 	if err != nil {
 		return 0, false
 	}
+	// Zero means "this server does not really answer this", not "this key is
+	// free". Redis never reports 0 for a key that exists, but Dragonfly does for
+	// small values — and a badge reading "0 B" next to a key holding data is a
+	// wrong number, which is worse than no badge at all.
+	if bytes <= 0 {
+		return 0, false
+	}
 	return bytes, true
 }
