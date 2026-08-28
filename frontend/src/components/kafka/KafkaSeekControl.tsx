@@ -18,10 +18,12 @@ interface KafkaSeekControlProps {
 
 type SeekMode = 'timestamp' | 'offset'
 
+// Exported so the search dialog's own time field converts identically — the
+// zone must be applied in one place or the two anchors disagree.
 // <input type="datetime-local"> speaks local wall-clock with no zone, e.g.
 // "2026-07-27T08:41". The API wants RFC3339, so the two conversions below are
 // the only place the browser's zone is applied — everything else stays RFC3339.
-function localInputToRfc3339(local: string): string {
+export function localInputToRfc3339(local: string): string {
   if (!local) return ''
   const parsed = new Date(local)
   return Number.isNaN(parsed.getTime()) ? '' : parsed.toISOString()
