@@ -315,7 +315,14 @@ func (h *DataHandler) CopyObject(w http.ResponseWriter, r *http.Request) {
 // must not do.
 func (h *DataHandler) ExportObject(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	object := chi.URLParam(r, "name")
+	// Unescaped like every other {name} route: chi hands back the raw path
+	// segment, so a Redis key reaches here as "profile%3A123" and would be
+	// looked up under that literal name.
+	object, err := url.PathUnescape(chi.URLParam(r, "name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid object name")
+		return
+	}
 	if strings.TrimSpace(object) == "" {
 		writeError(w, http.StatusBadRequest, "object is required")
 		return
