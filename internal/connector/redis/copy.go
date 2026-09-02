@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -32,55 +33,90 @@ import (
 // whole copy with it.
 const writeChunk = 500
 
-// keyWrites is the command sequence that recreates source under destination.
-// Each element is a full argument list, ready for Do.
-func (c *RedisConnector) keyWrites(ctx context.Context, source, destination string) ([][]any, error) {
-	meta, err := c.getKeyMeta(ctx, source)
+// keyContent is a key read out in full, before anything decides what to do
+// with it. Two renderers hang off this — write commands for a copy, a JSON
+// document for the clipboard — and they share one read so the type switch
+// cannot drift between them.
+type keyContent struct {
+	Type   string
+	TTLMs  int64
+	String string
+	Hash   map[string]string
+	Items  []string
+	ZSet   []goredis.Z
+	Stream []goredis.XMessage
+	JSON   string
+}
+
+func (c *RedisConnector) readKey(ctx context.Context, key string) (*keyContent, error) {
+	meta, err := c.getKeyMeta(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 
-	var writes [][]any
+	content := &keyContent{Type: meta.keyType}
+	if meta.ttl > 0 {
+		content.TTLMs = meta.ttl * 1000
+	}
+
 	switch meta.keyType {
 	case "string":
-		value, err := c.client.Get(ctx, source).Result()
-		if err != nil {
-			return nil, normalizeRedisError(err)
-		}
-		writes = append(writes, []any{"SET", destination, value})
+		content.String, err = c.client.Get(ctx, key).Result()
+	case "hash":
+		content.Hash, _, err = c.scanHashFields(ctx, key, "")
+	case "list":
+		content.Items, err = c.client.LRange(ctx, key, 0, -1).Result()
+	case "set":
+		content.Items, _, err = c.scanSetMembers(ctx, key, "")
+	case "zset":
+		content.ZSet, err = c.client.ZRangeWithScores(ctx, key, 0, -1).Result()
+	case "stream":
+		content.Stream, err = c.client.XRangeN(ctx, key, "-", "+", maxScanKeys).Result()
+	case "json":
+		var raw string
+		raw, err = c.client.Do(ctx, "JSON.GET", key, "$").Text()
+		content.JSON = unwrapJSONRoot(raw)
+	default:
+		return nil, unsupportedRedisOperation("read " + meta.keyType + " key")
+	}
+	if err != nil {
+		return nil, normalizeRedisError(err)
+	}
+	return content, nil
+}
+
+// keyWrites is the command sequence that recreates source under destination.
+// Each element is a full argument list, ready for Do.
+func (c *RedisConnector) keyWrites(ctx context.Context, source, destination string) ([][]any, error) {
+	content, err := c.readKey(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	return writesFor(content, source, destination)
+}
+
+func writesFor(content *keyContent, source, destination string) ([][]any, error) {
+	var writes [][]any
+	switch content.Type {
+	case "string":
+		writes = append(writes, []any{"SET", destination, content.String})
 
 	case "hash":
-		fields, _, err := c.scanHashFields(ctx, source, "")
-		if err != nil {
-			return nil, err
-		}
-		args := make([]any, 0, len(fields)*2)
-		for field, value := range fields {
+		args := make([]any, 0, len(content.Hash)*2)
+		for field, value := range content.Hash {
 			args = append(args, field, value)
 		}
 		writes = appendChunked(writes, "HSET", destination, args, 2)
 
 	case "list":
-		values, err := c.client.LRange(ctx, source, 0, -1).Result()
-		if err != nil {
-			return nil, normalizeRedisError(err)
-		}
-		writes = appendChunked(writes, "RPUSH", destination, anySlice(values), 1)
+		writes = appendChunked(writes, "RPUSH", destination, anySlice(content.Items), 1)
 
 	case "set":
-		members, _, err := c.scanSetMembers(ctx, source, "")
-		if err != nil {
-			return nil, err
-		}
-		writes = appendChunked(writes, "SADD", destination, anySlice(members), 1)
+		writes = appendChunked(writes, "SADD", destination, anySlice(content.Items), 1)
 
 	case "zset":
-		members, err := c.client.ZRangeWithScores(ctx, source, 0, -1).Result()
-		if err != nil {
-			return nil, normalizeRedisError(err)
-		}
-		args := make([]any, 0, len(members)*2)
-		for _, member := range members {
+		args := make([]any, 0, len(content.ZSet)*2)
+		for _, member := range content.ZSet {
 			// Score first, member second — ZADD's argument order, not the
 			// display order the viewer uses.
 			args = append(args, strconv.FormatFloat(member.Score, 'f', -1, 64), member.Member)
@@ -88,11 +124,7 @@ func (c *RedisConnector) keyWrites(ctx context.Context, source, destination stri
 		writes = appendChunked(writes, "ZADD", destination, args, 2)
 
 	case "stream":
-		entries, err := c.client.XRangeN(ctx, source, "-", "+", maxScanKeys).Result()
-		if err != nil {
-			return nil, normalizeRedisError(err)
-		}
-		for _, entry := range entries {
+		for _, entry := range content.Stream {
 			// The original id is given explicitly so the copy keeps the stream's
 			// ordering and its time component. Consumer groups are NOT copied:
 			// they are server state about readers, not content, and inventing
@@ -105,21 +137,17 @@ func (c *RedisConnector) keyWrites(ctx context.Context, source, destination stri
 		}
 
 	case "json":
-		raw, err := c.client.Do(ctx, "JSON.GET", source, "$").Text()
-		if err != nil {
-			return nil, normalizeRedisError(err)
-		}
-		writes = append(writes, []any{"JSON.SET", destination, "$", unwrapJSONRoot(raw)})
+		writes = append(writes, []any{"JSON.SET", destination, "$", content.JSON})
 
 	default:
-		return nil, unsupportedRedisOperation("copy " + meta.keyType + " key")
+		return nil, unsupportedRedisOperation("copy " + content.Type + " key")
 	}
 
 	if len(writes) == 0 {
 		return nil, fmt.Errorf("%w: key %q is empty and cannot be copied", connector.ErrBadRequest, source)
 	}
-	if meta.ttl > 0 {
-		writes = append(writes, []any{"PEXPIRE", destination, meta.ttl * 1000})
+	if content.TTLMs > 0 {
+		writes = append(writes, []any{"PEXPIRE", destination, content.TTLMs})
 	}
 	return writes, nil
 }
@@ -266,4 +294,67 @@ func retargetWrites(writes [][]any, key string) [][]any {
 		out = append(out, retargeted)
 	}
 	return out
+}
+
+// ExportDocument renders a key as JSON — the shape a person pastes into a chat
+// or a file, not the shape Redis stores.
+//
+// Read whole, server-side, on purpose. The viewer pages large collections, so
+// building this in the browser from what happens to be on screen would quietly
+// hand someone the first fifty fields of a thousand-field hash and call it the
+// key. Reading is all this does, which is why it works on a read-only
+// connection: nothing about copying a key out requires the right to change it.
+func (c *RedisConnector) ExportDocument(ctx context.Context, key string) (map[string]any, error) {
+	content, err := c.readKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+
+	doc := map[string]any{"key": key, "type": content.Type}
+	if content.TTLMs > 0 {
+		doc["ttl_ms"] = content.TTLMs
+	}
+
+	switch content.Type {
+	case "string":
+		doc["value"] = content.String
+	case "hash":
+		doc["value"] = content.Hash
+	case "list", "set":
+		// Never null: an empty collection reads as [] in the pasted document,
+		// which is a fact, while null is a question.
+		items := content.Items
+		if items == nil {
+			items = []string{}
+		}
+		doc["value"] = items
+	case "zset":
+		members := make([]map[string]any, 0, len(content.ZSet))
+		for _, member := range content.ZSet {
+			members = append(members, map[string]any{"member": member.Member, "score": member.Score})
+		}
+		doc["value"] = members
+	case "stream":
+		entries := make([]map[string]any, 0, len(content.Stream))
+		for _, entry := range content.Stream {
+			entries = append(entries, map[string]any{"id": entry.ID, "fields": entry.Values})
+		}
+		doc["value"] = entries
+	case "json":
+		// Already a JSON document; embedded raw so it nests as a value rather
+		// than arriving as a string of escaped JSON.
+		doc["value"] = jsoniterRaw(content.JSON)
+	}
+
+	return doc, nil
+}
+
+// jsoniterRaw hands an already-serialized document to the encoder untouched.
+// Falls back to the plain string if what Redis returned is not valid JSON,
+// which is better than failing the whole export over one odd key.
+func jsoniterRaw(raw string) any {
+	if json.Valid([]byte(raw)) {
+		return json.RawMessage(raw)
+	}
+	return raw
 }

@@ -307,3 +307,37 @@ func (h *DataHandler) CopyObject(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{"object": target, "type": export.Type})
 }
+
+// ExportObject renders one object as a JSON document for the clipboard.
+//
+// Deliberately a read: it is offered on read-only connections, where copying a
+// key OUT is exactly what someone needs and changing it is exactly what they
+// must not do.
+func (h *DataHandler) ExportObject(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	object := chi.URLParam(r, "name")
+	if strings.TrimSpace(object) == "" {
+		writeError(w, http.StatusBadRequest, "object is required")
+		return
+	}
+
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	exporter, ok := conn.(connector.KeyCopier)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "this source cannot export an object")
+		return
+	}
+
+	doc, err := exporter.ExportDocument(r.Context(), object)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, doc)
+}

@@ -341,4 +341,7 @@ type KeyCopier interface {
 	// and ordinary write commands are produced instead.
 	ExportKey(ctx context.Context, key string, plain bool) (*KeyExport, error)
 	ImportKey(ctx context.Context, key string, export *KeyExport) error
+	// ExportDocument renders the object for a human to paste elsewhere. Reads
+	// only, so it stays available on a read-only connection.
+	ExportDocument(ctx context.Context, key string) (map[string]any, error)
 }
