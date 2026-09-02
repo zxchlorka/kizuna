@@ -312,3 +312,33 @@ type HistoryEntry struct {
 	ExecutedAt   string `json:"executed_at"`
 	Canceled     bool   `json:"canceled,omitempty"` // stopped by an explicit Cancel, not a failure
 }
+
+// KeyExport is one object packaged so another connection of the same kind can
+// recreate it.
+//
+// Two representations, because two things can be forbidden independently. Dump
+// is the source's serialized form — exact, atomic, and the preferred one. Writes
+// is the same object as ordinary write commands, for a destination that will not
+// run RESTORE. A source that cannot DUMP fills Writes instead; a destination
+// that cannot RESTORE asks for a second export that has them.
+//
+// Writes carry the object name at index 1 by construction, which is where every
+// Redis write command puts its key. The importer rewrites that one argument, so
+// the same export can land under any name.
+type KeyExport struct {
+	Type   string
+	TTLMs  int64
+	Dump   string
+	Writes [][]any
+}
+
+// KeyCopier moves a single object between two connections of the same kind.
+// Implemented by connectors where that is meaningful; the API asks for it with a
+// type assertion rather than widening Connector, since "copy this key over
+// there" has no sensible reading for a Postgres table or a Kafka topic.
+type KeyCopier interface {
+	// ExportKey reads the object. With plain set, the serialized form is skipped
+	// and ordinary write commands are produced instead.
+	ExportKey(ctx context.Context, key string, plain bool) (*KeyExport, error)
+	ImportKey(ctx context.Context, key string, export *KeyExport) error
+}

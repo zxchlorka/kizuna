@@ -63,6 +63,8 @@ import {
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import { useLinksStore } from '@/stores/links'
@@ -101,6 +103,17 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
+  // Where the copy lands. Defaults to this connection, which makes the dialog a
+  // plain duplicate; picking another turns the same action into a transfer.
+  const [copyTarget, setCopyTarget] = useState(connId)
+
+  // Derived from copyTarget, so they must come after it: reading a useState
+  // binding above its declaration is a temporal dead zone, and the whole view
+  // renders as a blank page.
+  // Only Redis: a key has no meaning on a Postgres or Kafka connection.
+  const redisConnections = connections.filter((item) => item.type === 'redis')
+  const targetConnection = connections.find((item) => item.id === copyTarget)
+  const targetIsProduction = Boolean(targetConnection?.tags?.includes('production'))
   const [copying, setCopying] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -137,14 +150,34 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     if (!destination || copying) {
       return
     }
+    const sameConnection = copyTarget === connId
     setCopying(true)
     try {
-      await mutate(connId, { type: 'copy', object, schema: '', where: {}, data: { destination } }, tabId, { reload: false })
+      if (sameConnection) {
+        await mutate(connId, { type: 'copy', object, schema: '', where: {}, data: { destination } }, tabId, { reload: false })
+      } else {
+        // Both connections are already configured here, so the key never leaves
+        // the server side: the two connectors hand it over between themselves.
+        const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/copy-to`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ object, target_conn_id: copyTarget, target_object: destination }),
+        })
+        await throwOnApiError(res)
+      }
       setCopyOpen(false)
-      pushToast({ tone: 'success', title: 'Key duplicated', message: destination })
-      openTab(connId, destination, objectType)
+      pushToast({
+        tone: 'success',
+        title: sameConnection ? 'Key duplicated' : 'Key copied',
+        message: sameConnection ? destination : `${destination} on ${targetConnection?.name ?? 'the other connection'}`,
+      })
+      openTab(copyTarget, destination, objectType)
     } catch (error) {
-      pushToast({ tone: 'error', title: 'Duplicate failed', message: (error as Error).message })
+      pushToast({
+        tone: 'error',
+        title: sameConnection ? 'Duplicate failed' : 'Copy failed',
+        message: (error as Error).message,
+      })
     } finally {
       setCopying(false)
     }
@@ -895,11 +928,38 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-mono text-sm">Duplicate key</DialogTitle>
+            <DialogTitle className="font-mono text-sm">Copy key</DialogTitle>
             <DialogDescription className="font-mono text-xs">
-              Copies the contents and TTL of {object} to a new key.
+              Copies the contents and TTL of {object}. Pick another connection to send it there instead of
+              duplicating it here.
             </DialogDescription>
           </DialogHeader>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">To connection</span>
+            <Select value={copyTarget} onValueChange={setCopyTarget}>
+              <SelectTrigger className="h-8 font-mono text-xs" aria-label="Destination connection">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {redisConnections.map((item) => (
+                  <SelectItem key={item.id} value={item.id} className="font-mono text-xs">
+                    {item.name}
+                    {item.id === connId ? ' (this one)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* The tag exists precisely so a boxed warning can appear here. Writing
+              to production from a key you were only reading is the mistake this
+              dialog is most likely to be used for by accident. */}
+          {targetIsProduction && copyTarget !== connId && (
+            <div className="rounded-sm border border-red-500/40 bg-red-500/[0.08] px-3 py-2 font-mono text-[11px] text-red-600 dark:text-red-400">
+              {targetConnection?.name} is tagged production. This writes a new key to live data.
+            </div>
+          )}
           <Input
             value={copyName}
             onChange={(event) => setCopyName(event.target.value)}
@@ -919,7 +979,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               Cancel
             </Button>
             <Button type="button" size="sm" disabled={copying || copyName.trim() === ''} onClick={() => void duplicateKey()}>
-              {copying ? 'Duplicating…' : 'Duplicate'}
+              {copying ? 'Copying…' : copyTarget === connId ? 'Duplicate' : 'Copy'}
             </Button>
           </div>
         </DialogContent>

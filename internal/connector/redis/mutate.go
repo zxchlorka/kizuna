@@ -460,6 +460,12 @@ func (c *RedisConnector) copyKey(ctx context.Context, source, destination string
 		if errors.Is(err, goredis.Nil) {
 			return fmt.Errorf("%w: key %q not found", connector.ErrRelationNotFound, source)
 		}
+		// DUMP is its own ACL permission, and a user allowed to read and write
+		// keys is often not allowed it. Rebuilding the key by hand is what that
+		// user can still do — see copy.go.
+		if errors.Is(normalizeRedisError(err), connector.ErrForbidden) {
+			return c.copyKeyByWrites(ctx, source, destination)
+		}
 		return normalizeRedisError(err)
 	}
 
@@ -474,7 +480,24 @@ func (c *RedisConnector) copyKey(ctx context.Context, source, destination string
 	}
 
 	if err := c.client.Do(ctx, "RESTORE", destination, ttl, payload).Err(); err != nil {
+		// The permission that actually bites in practice: RESTORE is separate
+		// from write access, so a connection that can create keys all day still
+		// answers NOPERM here. Falling back rather than failing turns
+		// "Duplicate failed" into a duplicate.
+		if errors.Is(normalizeRedisError(err), connector.ErrForbidden) {
+			return c.copyKeyByWrites(ctx, source, destination)
+		}
 		return normalizeRedisError(err)
 	}
 	return nil
+}
+
+// copyKeyByWrites rebuilds the key with ordinary commands. Slower and not
+// atomic, so it runs only after RESTORE has been refused.
+func (c *RedisConnector) copyKeyByWrites(ctx context.Context, source, destination string) error {
+	writes, err := c.keyWrites(ctx, source, destination)
+	if err != nil {
+		return err
+	}
+	return c.runWrites(ctx, writes)
 }
