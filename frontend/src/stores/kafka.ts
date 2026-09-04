@@ -57,6 +57,10 @@ interface KafkaTopicTabState {
   searchActive: boolean
   scanning: boolean
   scanned: number
+  // Record time the scan has walked to, RFC3339, '' before the first step.
+  // Always the frontier of the LAST step, never a maximum: the scan moves in
+  // one direction, so the newest answer is the one that describes where it is.
+  scanReached: string
   // A scan STEP hit its backend budget before finishing its window (meta
   // partial_scan). Deliberately SEPARATE from the browse-coverage `partial`
   // field below so the two "partial" concepts never smear into one ambiguous
@@ -248,6 +252,7 @@ function defaultTabState(): KafkaTopicTabState {
     searchActive: false,
     scanning: false,
     scanned: 0,
+    scanReached: '',
     scanPartial: false,
     scanLimitReached: false,
     partial: false,
@@ -367,6 +372,7 @@ interface MessagesResponse {
     scanning?: boolean
     scanned?: number
     matched?: number
+    scan_reached?: string
     partial_scan?: boolean
   }
 }
@@ -508,6 +514,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
               ? {
                   messages: [],
                   scanned: 0,
+                  scanReached: '',
                   scanPartial: false,
                   scanLimitReached: false,
                   nextCursor: null,
@@ -553,6 +560,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
               ...tab,
               messages: capped,
               scanned: (reset ? 0 : tab.scanned) + (data.meta?.scanned ?? 0),
+              scanReached: (data.meta?.scan_reached as string | undefined) ?? (reset ? '' : tab.scanReached),
               scanPartial: Boolean(data.meta?.partial_scan),
               // "The cap stopped us", which is not the same as "we happen to
               // hold exactly the cap". Landing on MAX_SCAN_MATCHES with the log
@@ -840,6 +848,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             deepScanCanceled: false,
             scanning: false,
             scanned: 0,
+            scanReached: '',
             scanPartial: false,
             scanLimitReached: false,
             partial: false,
@@ -873,6 +882,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             hasMore: false,
             scanning: false,
             scanned: 0,
+            scanReached: '',
             scanPartial: false,
             scanLimitReached: false,
             partial: false,
@@ -906,6 +916,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             hasMore: false,
             scanning: false,
             scanned: 0,
+            scanReached: '',
             scanPartial: false,
             scanLimitReached: false,
             partial: false,
@@ -1061,6 +1072,7 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
             deepScanCanceled: false,
             scanning: false,
             scanned: 0,
+            scanReached: '',
             scanPartial: false,
             scanLimitReached: false,
             messages: [],

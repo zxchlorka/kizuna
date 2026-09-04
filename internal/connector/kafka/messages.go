@@ -458,6 +458,15 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	if scanning {
 		meta["scanning"] = true
 		meta["scanned"] = len(rows)
+		// Where the scan has actually walked to, in record time.
+		//
+		// "Scanned 3 770 403" on a topic of twelve billion answers nothing worth
+		// knowing: not how much is left, and not whether what you are looking for
+		// is still ahead. A timestamp answers both, because the searcher almost
+		// always knows roughly when the thing happened.
+		if reached, ok := scanFrontier(rows, direction); ok {
+			meta["scan_reached"] = reached
+		}
 		if consumed.timedOut {
 			meta["partial_scan"] = true
 		}
@@ -1070,6 +1079,35 @@ func rowIsNewer(left, right map[string]any) bool {
 	leftPartition, _ := left["partition"].(int32)
 	rightPartition, _ := right["partition"].(int32)
 	return leftPartition > rightPartition
+}
+
+// scanFrontier is the record time this step reached: the oldest candidate when
+// walking backwards from the newest end, the newest when walking forwards from
+// the oldest. Either way it is the edge the next step continues from.
+//
+// Timestamps are parsed rather than compared as text. RFC3339Nano drops a
+// trailing zero fraction, so "…13Z" and "…13.5Z" compare in the wrong order as
+// strings — 'Z' sorts above '.', which would report a frontier half a second
+// ahead of the truth every time a whole-second record appeared.
+func scanFrontier(rows []map[string]any, direction readDirection) (string, bool) {
+	var (
+		best    time.Time
+		bestRaw string
+	)
+	for _, row := range rows {
+		raw, _ := row["timestamp"].(string)
+		if raw == "" {
+			continue
+		}
+		stamp, err := time.Parse(time.RFC3339Nano, raw)
+		if err != nil {
+			continue
+		}
+		if bestRaw == "" || direction.oldestFirst() == stamp.After(best) {
+			best, bestRaw = stamp, raw
+		}
+	}
+	return bestRaw, bestRaw != ""
 }
 
 // rawCandidateRow captures the minimal, undeserialized candidate produced during

@@ -46,6 +46,16 @@ export function KafkaFilterDialog({
           <DialogDescription className="font-mono text-xs">
             Each condition tests the record key, one of its headers, or a JSON path in its value. They apply both to
             the loaded messages and to a topic scan.
+            {/* Two conditions over the same array read as "one element that
+                satisfies both", and they do not mean that. Each is answered on
+                its own, so a message matches when some element has the name and
+                some element has the id — not necessarily the same one. Cheaper
+                to say than to change, and a wrong assumption here sends people
+                hunting a message the filter never promised to find. */}
+            <span className="mt-2 block text-muted-foreground">
+              A condition with <span className="text-foreground">[]</span> in its path is satisfied by any element of
+              that array. Two such conditions are answered separately, so they need not land on the same element.
+            </span>
           </DialogDescription>
         </DialogHeader>
 
