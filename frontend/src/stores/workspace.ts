@@ -128,6 +128,10 @@ interface WorkspaceStore {
   openRedisCliTab: (connId: string) => void
   openOverviewTab: (connId: string) => void
   closeTab: (tabId: string) => void
+  // Bulk closes, all expressed against one anchor tab so the menu that offers
+  // them can sit on that tab. `scope` picks which of the others go.
+  closeTabsExcept: (tabId: string, scope: 'others' | 'right') => void
+  closeAllTabs: () => void
   setActiveTab: (tabId: string) => void
   openConnection: (connId: string) => void
   closeConnection: (connId: string) => void
@@ -281,6 +285,25 @@ function purgeTabsWhere(state: WorkspaceStore, isConnDead: (connId: string) => b
     visibleSchemasByConnection: dropDeadKeys(state.visibleSchemasByConnection),
     treeConnByPage: nextTreeConnByPage,
   }
+}
+
+// Shared tail of every bulk close: keep `kept`, make `active` the current tab,
+// and drop every navigation trace that pointed at a tab that is now gone.
+function withoutClosedTabs(kept: WorkspaceTab[], active: string | null) {
+  const alive = new Set(kept.map((tab) => tab.id))
+  return (state: { navigationHistory: NavigationEntry[] }) => ({
+    tabs: kept.map((tab) => {
+      if (tab.kind !== 'object' || !tab.navigationTrail) return tab
+      const trail = tab.navigationTrail.filter((item) => alive.has(item.tabId))
+      // An emptied trail becomes the tab itself, as closeTab does: a breadcrumb
+      // with nothing in it renders as a tab that came from nowhere.
+      return { ...tab, navigationTrail: trail.length > 0 ? trail : [{ tabId: tab.id, label: tab.object }] }
+    }),
+    activeTabId: active,
+    navigationHistory: state.navigationHistory.filter(
+      (entry) => alive.has(entry.fromTabId) && alive.has(entry.toTabId)
+    ),
+  })
 }
 
 export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
@@ -955,6 +978,26 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
       activeTabId: nextActive,
       navigationHistory: state.navigationHistory.filter((entry) => entry.fromTabId !== tabId && entry.toTabId !== tabId),
     }))
+  },
+
+  // A session on one connection accumulates tabs faster than anyone closes them
+  // one at a time. These drop them in bulk without touching the anchor.
+  //
+  // Navigation trails and history are rebuilt the same way closeTab does it: an
+  // entry pointing at a tab that no longer exists would make Back jump to
+  // nothing.
+  closeTabsExcept: (tabId: string, scope: 'others' | 'right') => {
+    const { tabs } = get()
+    const anchor = tabs.findIndex((tab) => tab.id === tabId)
+    if (anchor === -1) return
+    const kept = tabs.filter((tab, index) => tab.id === tabId || (scope === 'right' && index < anchor))
+    if (kept.length === tabs.length) return
+    set(withoutClosedTabs(kept, tabId))
+  },
+
+  closeAllTabs: () => {
+    if (get().tabs.length === 0) return
+    set(withoutClosedTabs([], null))
   },
 
   setActiveTab: (tabId: string) => {
