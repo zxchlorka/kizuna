@@ -264,6 +264,8 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             deepScanCanceled={tab?.deepScanCanceled ?? false}
             scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
+            scanReached={tab?.scanReached ?? ''}
+            topicMessages={totalMessages}
             scanPartial={tab?.scanPartial ?? false}
             scanLimitReached={tab?.scanLimitReached ?? false}
             seek={{ offset: tab?.seekOffset ?? '', timestamp: tab?.seekTimestamp ?? '' }}
