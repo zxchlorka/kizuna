@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Database, Loader2, RefreshCw } from 'lucide-react'
+import {
+  RedisSlotRibbon,
+  averageDensity,
+  formatDensity,
+  formatRanges,
+  heatIndex,
+  type RedisSlotNode,
+} from '@/components/redis/RedisSlotMap'
 import { Button } from '@/components/ui/button'
 import { fetchWithTimeout } from '@/lib/http'
 import { formatBytes, formatDurationSeconds, formatExactCount } from '@/lib/numberFormat'
@@ -11,13 +19,7 @@ interface RedisOverviewProps {
   connId: string
 }
 
-interface RedisNodeStat {
-  address: string
-  keys: number
-  used_memory: number
-  maxmemory: number
-  connected_clients: number
-}
+type RedisNodeStat = RedisSlotNode
 
 // INFO reports every field as a string; a missing field and an unparseable one
 // are the same thing here — a number we do not have and must not invent.
@@ -142,6 +144,10 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
   // whole cluster's — which on 24 masters understated it twenty-four fold.
   const clusterNote = nodes > 1 ? `Summed across ${nodes} masters` : undefined
   const nodeRows = Array.isArray(extra?.nodes) ? (extra.nodes as RedisNodeStat[]) : []
+  // Slot columns appear only when the server answered CLUSTER SLOTS. Without
+  // them the table is exactly what it was before the slot map existed.
+  const hasSlots = nodeRows.some((node) => (node.slots ?? 0) > 0)
+  const clusterDensity = averageDensity(nodeRows)
 
   return (
     <div className="flex-1 overflow-auto p-4">
@@ -261,25 +267,66 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
                     What each holds. The totals above cannot show an uneven one.
                   </div>
                 </div>
+                {/* The ribbon sits above the table it summarises, inside the
+                    same box. It used to be a second panel with a second table,
+                    which repeated the address, keys and memory of every row —
+                    two tables of the same nodes, disagreeing about nothing and
+                    asking to be cross-read for no reason. */}
+                <RedisSlotRibbon nodes={nodeRows} />
+
                 <div className="overflow-x-auto">
                   <table className="w-full font-mono text-xs">
                     <thead>
                       <tr className="border-b border-border text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
                         <th className="px-3 py-2 text-left font-normal">Node</th>
+                        {hasSlots && <th className="px-3 py-2 text-left font-normal">Slot ranges</th>}
+                        {hasSlots && <th className="px-3 py-2 text-right font-normal">Slots</th>}
                         <th className="px-3 py-2 text-right font-normal">Keys</th>
+                        {hasSlots && <th className="px-3 py-2 text-right font-normal">Keys / slot</th>}
                         <th className="px-3 py-2 text-right font-normal">Used</th>
                         <th className="px-3 py-2 text-right font-normal">Limit</th>
                         <th className="px-3 py-2 text-right font-normal">Used %</th>
                         <th className="px-3 py-2 text-right font-normal">Clients</th>
+                        {hasSlots && <th className="px-3 py-2 text-right font-normal">Replicas</th>}
                       </tr>
                     </thead>
                     <tbody>
                       {nodeRows.map((node) => {
                         const pct = node.maxmemory > 0 ? (100 * node.used_memory) / node.maxmemory : null
+                        const slots = node.slots ?? 0
+                        const density = slots > 0 ? node.keys / slots : 0
+                        // Same threshold the ribbon paints with, so a row and
+                        // its segment never disagree about what counts as hot.
+                        const hot = slots > 0 && heatIndex(density, clusterDensity) >= 2
                         return (
                           <tr key={node.address} className="border-b border-border/50 last:border-b-0">
                             <td className="px-3 py-1.5">{node.address}</td>
-                            <td className="px-3 py-1.5 text-right tabular-nums">{formatExactCount(node.keys)}</td>
+                            {hasSlots && (
+                              <td className="px-3 py-1.5 text-muted-foreground">{formatRanges(node.slot_ranges)}</td>
+                            )}
+                            {hasSlots && (
+                              <td className="px-3 py-1.5 text-right tabular-nums">
+                                {slots > 0 ? formatExactCount(slots) : '—'}
+                              </td>
+                            )}
+                            <td
+                              className={cn(
+                                'px-3 py-1.5 text-right tabular-nums',
+                                hot && 'text-red-600 dark:text-red-400'
+                              )}
+                            >
+                              {formatExactCount(node.keys)}
+                            </td>
+                            {hasSlots && (
+                              <td
+                                className={cn(
+                                  'px-3 py-1.5 text-right tabular-nums',
+                                  hot && 'text-red-600 dark:text-red-400'
+                                )}
+                              >
+                                {slots > 0 ? formatDensity(density) : '—'}
+                              </td>
+                            )}
                             <td className="px-3 py-1.5 text-right tabular-nums">{formatBytes(node.used_memory)}</td>
                             <td className="px-3 py-1.5 text-right tabular-nums">
                               {node.maxmemory > 0 ? formatBytes(node.maxmemory) : 'none'}
@@ -301,6 +348,19 @@ export function RedisOverview({ connId }: RedisOverviewProps) {
                             <td className="px-3 py-1.5 text-right tabular-nums">
                               {formatExactCount(node.connected_clients)}
                             </td>
+                            {/* Zero replicas is the line nobody looks for until
+                                the night it matters, so it is coloured like a
+                                fault rather than left as a plain number. */}
+                            {hasSlots && (
+                              <td
+                                className={cn(
+                                  'px-3 py-1.5 text-right tabular-nums',
+                                  (node.replicas ?? 0) === 0 && 'text-red-600 dark:text-red-400'
+                                )}
+                              >
+                                {node.replicas ?? 0}
+                              </td>
+                            )}
                           </tr>
                         )
                       })}
