@@ -491,10 +491,14 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
           <Search className={cn('h-3.5 w-3.5', scanning && 'animate-pulse')} />
           {scanning ? 'Scanning…' : 'Scan more keys'}
         </Button>
-        <div className="px-1 text-[11px] text-muted-foreground">
-          {formatCount(rootItems.length)} loaded{keyPattern ? ` matching ${keyPattern}` : ''} — the scan stopped on
-          its budget, not at the end of the keyspace.
-        </div>
+        {/* Suppressed at zero, where the empty state above already says the
+            scan came up short — "0 loaded" under it reads as a second finding. */}
+        {rootItems.length > 0 && (
+          <div className="px-1 text-[11px] text-muted-foreground">
+            {formatCount(rootItems.length)} loaded{keyPattern ? ` matching ${keyPattern}` : ''} — the scan stopped on
+            its budget, not at the end of the keyspace.
+          </div>
+        )}
       </div>
     )
   }
@@ -582,19 +586,40 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   }
 
   if (!rootLoading && !rootError && rootLoaded && rootItems.length === 0) {
+    // A cursor means the scan ran out of budget rather than reaching the end of
+    // the keyspace, so "no keys" is only true of the slice that was scanned.
+    // The continue control lives in the main render below, which this early
+    // return never reaches — and a selective filter that matches nothing in the
+    // first page is exactly when it is needed, so it is offered here too.
+    // Without this, the rarer the key, the more certainly the button vanished.
+    const scanIncomplete = isRedisConnection && Boolean(treeCursors[rootKey])
+
     return (
-      <EmptyState
-        variant="no_tables"
-        compact
-        title={isRedisConnection ? 'No Redis keys loaded' : isKafkaConnection ? 'No topics' : undefined}
-        description={
-          isRedisConnection
-            ? 'The Redis connector has not returned any namespace or key nodes yet.'
-            : isKafkaConnection
-              ? 'The cluster has no non-internal topics yet.'
-              : undefined
-        }
-      />
+      <div className="space-y-3">
+        <EmptyState
+          variant="no_tables"
+          compact
+          title={
+            scanIncomplete
+              ? 'No match in the scanned range'
+              : isRedisConnection
+                ? 'No Redis keys loaded'
+                : isKafkaConnection
+                  ? 'No topics'
+                  : undefined
+          }
+          description={
+            scanIncomplete
+              ? 'Nothing matched in the part of the keyspace scanned so far. Keep scanning to look further.'
+              : isRedisConnection
+                ? 'The Redis connector has not returned any namespace or key nodes yet.'
+                : isKafkaConnection
+                  ? 'The cluster has no non-internal topics yet.'
+                  : undefined
+          }
+        />
+        {scanIncomplete && renderScanMore()}
+      </div>
     )
   }
 
