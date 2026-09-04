@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Binary, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, Braces, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -63,6 +63,9 @@ import {
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
+import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import { useLinksStore } from '@/stores/links'
@@ -101,6 +104,22 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
   const [copyOpen, setCopyOpen] = useState(false)
   const [copyName, setCopyName] = useState('')
+  // Where the copy lands. Defaults to this connection, which makes the dialog a
+  // plain duplicate; picking another turns the same action into a transfer.
+  const [copyTarget, setCopyTarget] = useState(connId)
+  const [exporting, setExporting] = useState(false)
+
+  // Derived from copyTarget, so they must come after it: reading a useState
+  // binding above its declaration is a temporal dead zone, and the whole view
+  // renders as a blank page.
+  // Only Redis: a key has no meaning on a Postgres or Kafka connection. A
+  // read-only source is excluded from its own destination list — duplicating in
+  // place needs write access here, while sending the key elsewhere does not.
+  const redisConnections = connections.filter(
+    (item) => item.type === 'redis' && !(item.read_only && item.id === connId)
+  )
+  const targetConnection = connections.find((item) => item.id === copyTarget)
+  const targetIsProduction = Boolean(targetConnection?.tags?.includes('production'))
   const [copying, setCopying] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
@@ -132,19 +151,63 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // The copy is made server-side from the stored value, so the new key is a
   // faithful duplicate of whatever type this is — no reading the contents into
   // the browser and writing them back field by field.
+  // Reads the whole key on the server rather than assembling what is on screen:
+  // the viewer pages large collections, and a document built from the visible
+  // rows would be a truncated key wearing a full key's name.
+  const copyAsJson = async () => {
+    if (exporting) {
+      return
+    }
+    setExporting(true)
+    try {
+      const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/export`)
+      await throwOnApiError(res)
+      const doc = await res.json()
+      const text = JSON.stringify(doc, null, 2)
+      if (!(await writeClipboardText(text))) {
+        throw new Error(clipboardFailureMessage())
+      }
+      pushToast({ tone: 'success', title: 'Copied as JSON', message: `${object} — ${text.length.toLocaleString()} chars` })
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Copy as JSON failed', message: (error as Error).message })
+    } finally {
+      setExporting(false)
+    }
+  }
+
   const duplicateKey = async () => {
     const destination = copyName.trim()
     if (!destination || copying) {
       return
     }
+    const sameConnection = copyTarget === connId
     setCopying(true)
     try {
-      await mutate(connId, { type: 'copy', object, schema: '', where: {}, data: { destination } }, tabId, { reload: false })
+      if (sameConnection) {
+        await mutate(connId, { type: 'copy', object, schema: '', where: {}, data: { destination } }, tabId, { reload: false })
+      } else {
+        // Both connections are already configured here, so the key never leaves
+        // the server side: the two connectors hand it over between themselves.
+        const res = await fetchWithTimeout(`/api/connections/${connId}/objects/${encodeURIComponent(object)}/copy-to`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ object, target_conn_id: copyTarget, target_object: destination }),
+        })
+        await throwOnApiError(res)
+      }
       setCopyOpen(false)
-      pushToast({ tone: 'success', title: 'Key duplicated', message: destination })
-      openTab(connId, destination, objectType)
+      pushToast({
+        tone: 'success',
+        title: sameConnection ? 'Key duplicated' : 'Key copied',
+        message: sameConnection ? destination : `${destination} on ${targetConnection?.name ?? 'the other connection'}`,
+      })
+      openTab(copyTarget, destination, objectType)
     } catch (error) {
-      pushToast({ tone: 'error', title: 'Duplicate failed', message: (error as Error).message })
+      pushToast({
+        tone: 'error',
+        title: sameConnection ? 'Duplicate failed' : 'Copy failed',
+        message: (error as Error).message,
+      })
     } finally {
       setCopying(false)
     }
@@ -823,25 +886,43 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     <Lock className="h-3 w-3" />
                     Read-only
                   </span>
-                ) : (
+                ) : null}
+
+                {/* Both of these only READ this key, so they stay on a
+                    read-only connection. Hiding them there was the mistake:
+                    taking a key off production is the one thing you are allowed
+                    to do with it, and it was the one thing not offered. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => void copyAsJson()}
+                  disabled={exporting}
+                  title="Copy as JSON"
+                  aria-label="Copy key as JSON"
+                >
+                  <Braces className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => {
+                    setCopyName(readOnly ? object : `${object}-copy`)
+                    setCopyTarget(readOnly ? (redisConnections[0]?.id ?? connId) : connId)
+                    setCopyOpen(true)
+                  }}
+                  disabled={saving || redisConnections.length === 0}
+                  title={readOnly ? 'Copy to another connection' : 'Duplicate or copy elsewhere'}
+                  aria-label="Copy key"
+                >
+                  <CopyIcon className="h-3.5 w-3.5" />
+                </Button>
+
+                {readOnly ? null : (
                   <>
-                    {/* Duplicating beats recreating by hand: the contents are
-                        already right, only the name is new. */}
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      className="h-8 w-8 p-0"
-                      onClick={() => {
-                        setCopyName(`${object}-copy`)
-                        setCopyOpen(true)
-                      }}
-                      disabled={saving}
-                      title="Duplicate"
-                      aria-label="Duplicate key"
-                    >
-                      <CopyIcon className="h-3.5 w-3.5" />
-                    </Button>
                     <Button
                       type="button"
                       variant="destructive"
@@ -895,11 +976,39 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
       <Dialog open={copyOpen} onOpenChange={setCopyOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="font-mono text-sm">Duplicate key</DialogTitle>
+            <DialogTitle className="font-mono text-sm">Copy key</DialogTitle>
             <DialogDescription className="font-mono text-xs">
-              Copies the contents and TTL of {object} to a new key.
+              {readOnly
+                ? `${object} is on a read-only connection, so it can only be copied to another one.`
+                : `Copies the contents and TTL of ${object}. Pick another connection to send it there instead of duplicating it here.`}
             </DialogDescription>
           </DialogHeader>
+
+          <div className="flex flex-col gap-1.5">
+            <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">To connection</span>
+            <Select value={copyTarget} onValueChange={setCopyTarget}>
+              <SelectTrigger className="h-8 font-mono text-xs" aria-label="Destination connection">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {redisConnections.map((item) => (
+                  <SelectItem key={item.id} value={item.id} className="font-mono text-xs">
+                    {item.name}
+                    {item.id === connId ? ' (this one)' : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* The tag exists precisely so a boxed warning can appear here. Writing
+              to production from a key you were only reading is the mistake this
+              dialog is most likely to be used for by accident. */}
+          {targetIsProduction && copyTarget !== connId && (
+            <div className="rounded-sm border border-red-500/40 bg-red-500/[0.08] px-3 py-2 font-mono text-[11px] text-red-600 dark:text-red-400">
+              {targetConnection?.name} is tagged production. This writes a new key to live data.
+            </div>
+          )}
           <Input
             value={copyName}
             onChange={(event) => setCopyName(event.target.value)}
@@ -919,7 +1028,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
               Cancel
             </Button>
             <Button type="button" size="sm" disabled={copying || copyName.trim() === ''} onClick={() => void duplicateKey()}>
-              {copying ? 'Duplicating…' : 'Duplicate'}
+              {copying ? 'Copying…' : copyTarget === connId ? 'Duplicate' : 'Copy'}
             </Button>
           </div>
         </DialogContent>

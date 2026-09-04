@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { Activity, Braces, CircleDot, Database, Eye, Folder, Gauge, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { cn } from '@/lib/utils'
 import { ConnectionLinksButton } from '@/components/links/ConnectionLinksButton'
 import { useConnectionStore } from '@/stores/connections'
@@ -54,8 +56,19 @@ function tabIcon(kind: 'sql' | 'redis-cli' | 'overview' | ObjectType) {
 }
 
 export function TabBar({ connId }: TabBarProps) {
-  const { tabs, activeTabId, setActiveTab, closeTab, openSqlTab, openRedisCliTab, openOverviewTab } =
-    useWorkspaceStore()
+  const {
+    tabs,
+    activeTabId,
+    setActiveTab,
+    closeTab,
+    closeTabsExcept,
+    closeAllTabs,
+    openSqlTab,
+    openRedisCliTab,
+    openOverviewTab,
+  } = useWorkspaceStore()
+  // Where the bulk-close menu is anchored, or null when it is shut.
+  const [menuTab, setMenuTab] = useState<{ id: string; x: number; y: number } | null>(null)
   const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
   const isRedis = connection?.type === 'redis'
   const isKafka = connection?.type === 'kafka'
@@ -68,6 +81,13 @@ export function TabBar({ connId }: TabBarProps) {
           <div
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
+            // Right-click is where every editor keeps these, and a session on
+            // one connection piles up tabs far faster than the little X clears
+            // them.
+            onContextMenu={(event) => {
+              event.preventDefault()
+              setMenuTab({ id: tab.id, x: event.clientX, y: event.clientY })
+            }}
             className={cn(
               'group flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border px-3 py-2 text-sm',
               tab.id === activeTabId
@@ -97,6 +117,31 @@ export function TabBar({ connId }: TabBarProps) {
           </div>
         ))}
       </div>
+      {menuTab && (
+        <FloatingMenu x={menuTab.x} y={menuTab.y} onClose={() => setMenuTab(null)}>
+          <FloatingMenuLabel>
+            {tabs.find((tab) => tab.id === menuTab.id)?.label ?? 'Tab'}
+          </FloatingMenuLabel>
+          <FloatingMenuItem onClick={() => { closeTab(menuTab.id); setMenuTab(null) }}>Close</FloatingMenuItem>
+          <FloatingMenuItem
+            disabled={visibleTabs.length < 2}
+            onClick={() => { closeTabsExcept(menuTab.id, 'others'); setMenuTab(null) }}
+          >
+            Close others
+          </FloatingMenuItem>
+          <FloatingMenuItem
+            disabled={visibleTabs.findIndex((tab) => tab.id === menuTab.id) >= visibleTabs.length - 1}
+            onClick={() => { closeTabsExcept(menuTab.id, 'right'); setMenuTab(null) }}
+          >
+            Close to the right
+          </FloatingMenuItem>
+          <FloatingMenuSeparator />
+          <FloatingMenuItem onClick={() => { closeAllTabs(); setMenuTab(null) }}>
+            Close all
+          </FloatingMenuItem>
+        </FloatingMenu>
+      )}
+
       {isKafka ? null : isRedis ? (
         <>
           {/* Which server this is, and how it is wired, belong to the
