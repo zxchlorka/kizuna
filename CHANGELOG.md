@@ -3,6 +3,66 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.9.0 — 2026-09-04
+
+### Redis
+
+- A cluster's Overview shows which slots each master owns. The Masters table
+  already said how much a node held; it could not say which part of the keyspace
+  to move off it, and moving slots is the only way a cluster is rebalanced. A
+  ribbon over the whole 16384-slot space sits above the table, colourable by
+  owner, by keys per slot, or by memory, and a slot nobody claims appears in the
+  position it is missing from — the per-node figures cannot show that, because
+  every node they list is present and healthy. The table gained the ranges, the
+  slot count, the density and the replica count, the last of which is coloured
+  like a fault when it is zero.
+- Slot ownership is matched to a node by its cluster id rather than by the
+  address it announces. Behind a proxy, inside Docker, or with
+  `cluster-announce-ip` set, the announced address is not the address a client
+  dialled, and matching those strings left every slot column empty while every
+  other figure was right.
+- Duplicating a key works on a connection that is not allowed to run `RESTORE`.
+  `DUMP`/`RESTORE` remains the path taken first — it is atomic, one round trip
+  per side, and the only one that carries a stream's entry ids exactly — but
+  both are separate ACL permissions, and a user who creates keys all day is
+  routinely refused them. Refused, the key is now rebuilt with the ordinary
+  write commands that user does have.
+- A key can be copied to another connection. Both ends are resolved on the
+  server, so the contents never make a round trip through the browser and no
+  exchange format had to be invented. A destination tagged production says so
+  before the copy is made.
+- Copying a key out of a read-only connection is offered, because it only reads
+  it. Both the transfer and the new "copy as JSON" were hidden there, which
+  removed the one thing that connection is for.
+- A key can be copied as a JSON document for a chat or a file, in every type.
+  It is read whole on the server: the viewer pages large collections, and a
+  document assembled from the visible rows would be a truncated key wearing a
+  full key's name.
+- The "Scan more keys" control stays reachable when a filter matches nothing.
+  It was rendered below an early return for "no keys", so it disappeared in the
+  one case it exists for — a selective filter that found nothing in the first
+  budgeted page. The rarer the key, the more certainly the button vanished.
+- A key's memory badge is omitted rather than reading "0 B" when the server
+  answers zero. Redis never does that for a key that exists; Dragonfly does, for
+  small values.
+
+### Kafka
+
+- A topic scan says where it has got to: the share of the topic covered and the
+  record time it has reached. A bare "scanned 3 770 403" on a topic of twelve
+  billion answers neither how much is left nor whether the record being looked
+  for is still ahead.
+- Starting a scan on a very large topic warns that one pass covers a fraction of
+  it, and offers a starting time in the same dialog. Setting one also turns the
+  walk to run forwards, since a time is the point you want to begin from.
+- The filter dialog says what two conditions over the same array mean: each is
+  answered on its own, so they need not land on the same element.
+
+### Workspace
+
+- Tabs can be closed in bulk — close others, close to the right, or close all —
+  from a right-click on any tab.
+
 ## v0.8.1 — 2026-08-25
 
 ### Fixed
