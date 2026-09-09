@@ -53,3 +53,21 @@ describe('conditions without a joiner keep the old flat modes', () => {
     expect(filterLoadedMessages([row], flat, 'or')).toHaveLength(1)
   })
 })
+
+// Mirrors TestNotEqualsMatchesMessagesWithoutTheField in Go: the negation is
+// strict, so a message that never carried the field counts as "not batch".
+describe('not equals is the strict negation', () => {
+  const notBatch: KafkaMatchCondition[] = [{ field: 'event_type', value: 'batch', op: 'not_eq' }]
+
+  it('matches another value', () => {
+    expect(filterLoadedMessages([message('{"event_type":"single"}')], notBatch, 'and')).toHaveLength(1)
+  })
+
+  it('matches a message without the field', () => {
+    expect(filterLoadedMessages([message('{"src":{}}')], notBatch, 'and')).toHaveLength(1)
+  })
+
+  it('rejects the excluded value', () => {
+    expect(filterLoadedMessages([message('{"event_type":"batch"}')], notBatch, 'and')).toHaveLength(0)
+  })
+})
