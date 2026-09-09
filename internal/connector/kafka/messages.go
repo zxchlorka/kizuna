@@ -1397,6 +1397,13 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 
 // matchOp is what a message must satisfy for the searched field.
 //
+// The negative forms are the strict negation of their positive twin, which
+// means a message MISSING the field satisfies them: "event_type is not batch"
+// is true of a record that has no event_type at all. That is the reading
+// "exclude the batch ones" needs, and the SQL reading — where a comparison
+// against a missing value is neither true nor false — would force everyone to
+// write "not batch OR no field" every single time.
+//
 // matchOpExists/matchOpMissing answer "does this field occur at all", which is
 // the only way to look for a field whose values you do not know yet — a newly
 // rolled-out optional field, for instance. matchOpEquals is the original
@@ -1404,10 +1411,12 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 type matchOp string
 
 const (
-	matchOpEquals   matchOp = "eq"
-	matchOpContains matchOp = "contains"
-	matchOpExists   matchOp = "exists"
-	matchOpMissing  matchOp = "missing"
+	matchOpEquals      matchOp = "eq"
+	matchOpNotEquals   matchOp = "not_eq"
+	matchOpContains    matchOp = "contains"
+	matchOpNotContains matchOp = "not_contains"
+	matchOpExists      matchOp = "exists"
+	matchOpMissing     matchOp = "missing"
 )
 
 // matchTarget is the part of the record a condition reads.
@@ -1534,6 +1543,10 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 				at(index).op = matchOpMissing
 			case matchOpContains:
 				at(index).op = matchOpContains
+			case matchOpNotContains:
+				at(index).op = matchOpNotContains
+			case matchOpNotEquals:
+				at(index).op = matchOpNotEquals
 			case matchOpEquals:
 				at(index).op = matchOpEquals
 			}
@@ -1905,6 +1918,10 @@ func stringMatches(value string, present bool, want string, op matchOp) bool {
 		return !present
 	case matchOpContains:
 		return present && strings.Contains(value, want)
+	case matchOpNotContains:
+		return !(present && strings.Contains(value, want))
+	case matchOpNotEquals:
+		return !(present && value == want)
 	default:
 		return present && value == want
 	}
@@ -1961,6 +1978,10 @@ func messageMatchesField(row map[string]any, field string, want string, op match
 		return !jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
 	case matchOpContains:
 		return jsonPathMatchesAnywhere(parsed, segments, containsLeaf(want))
+	case matchOpNotContains:
+		return !jsonPathMatchesAnywhere(parsed, segments, containsLeaf(want))
+	case matchOpNotEquals:
+		return !jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
 	default:
 		return jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
 	}

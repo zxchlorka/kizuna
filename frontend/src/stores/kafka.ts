@@ -90,7 +90,10 @@ interface KafkaTopicTabState {
 // What the searched field must satisfy. 'eq' is the original value search;
 // 'exists'/'missing' answer "does this field occur at all", which is the only
 // way to look for a field whose values are not known yet.
-export type KafkaMatchOp = 'eq' | 'contains' | 'exists' | 'missing'
+// The negative forms are the strict negation of their positive twin, so a
+// message MISSING the field satisfies them — "event_type is not batch" holds for
+// a record with no event_type at all. Mirrors matchOp in messages.go.
+export type KafkaMatchOp = 'eq' | 'not_eq' | 'contains' | 'not_contains' | 'exists' | 'missing'
 
 // Which part of the record a condition reads. The payload is the default; a key
 // or header holds the correlation id, tenant or event type, and is readable even
@@ -302,6 +305,12 @@ function conditionMatches(row: KafkaMessageRow, condition: KafkaMatchCondition):
   if (condition.op === 'contains') {
     return matchFieldContains(row.value, path, condition.value)
   }
+  if (condition.op === 'not_contains') {
+    return !matchFieldContains(row.value, path, condition.value)
+  }
+  if (condition.op === 'not_eq') {
+    return !matchField(row.value, path, condition.value)
+  }
   return matchField(row.value, path, condition.value)
 }
 
@@ -313,6 +322,10 @@ function stringMatches(value: string, present: boolean, want: string, op: KafkaM
       return !present
     case 'contains':
       return present && value.includes(want)
+    case 'not_contains':
+      return !(present && value.includes(want))
+    case 'not_eq':
+      return !(present && value === want)
     default:
       return present && value === want
   }

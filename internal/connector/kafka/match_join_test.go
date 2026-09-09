@@ -127,3 +127,58 @@ func TestConditionsAreOrderedByTheirNumber(t *testing.T) {
 		t.Fatalf("conditions came out as %v, want [a b c]", got)
 	}
 }
+
+// "not equals" is the strict negation, so a message that never carried the
+// field satisfies it. Without that reading, "show me non-batch events" has to
+// be written as "not batch OR no field" every time — and the field is exactly
+// what a message of another shape is missing.
+func TestNotEqualsMatchesMessagesWithoutTheField(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Op: "eq", Value: "event_type"},
+		{Column: "match_value", Op: "eq", Value: "batch"},
+		{Column: "match_op", Op: "eq", Value: "not_eq"},
+	})
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "another value", value: `{"event_type":"single"}`, want: true},
+		{name: "no field at all", value: `{"src":{}}`, want: true},
+		{name: "the excluded value", value: `{"event_type":"batch"}`, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			row := map[string]any{"format": "json", "value": tc.value}
+			if got := messageMatchesQuery(row, query); got != tc.want {
+				t.Fatalf("matched = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNotContainsOnAKey(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_target", Op: "eq", Value: "key"},
+		{Column: "match_value", Op: "eq", Value: "abc"},
+		{Column: "match_op", Op: "eq", Value: "not_contains"},
+	})
+
+	if !messageMatchesQuery(map[string]any{"key": "xyz"}, query) {
+		t.Fatal("a key without the substring must match")
+	}
+	if messageMatchesQuery(map[string]any{"key": "xxabcxx"}, query) {
+		t.Fatal("a key containing the substring must not match")
+	}
+	if !messageMatchesQuery(map[string]any{}, query) {
+		t.Fatal("a record with no key must match, the same way a missing field does")
+	}
+}
