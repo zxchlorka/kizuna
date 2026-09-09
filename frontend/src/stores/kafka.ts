@@ -104,6 +104,9 @@ export interface KafkaMatchCondition {
   field: string
   value: string
   op: KafkaMatchOp
+  // How this condition joins the previous one. Absent on the first, and on
+  // conditions saved before joiners existed — both fall back to the flat mode.
+  join?: 'and' | 'or'
   // Absent means the payload, which is what the backend assumes for a request
   // that carries no match_target — so an old condition keeps its meaning and
   // produces the same request it always did.
@@ -318,6 +321,22 @@ function stringMatches(value: string, present: boolean, want: string, op: KafkaM
 // filterLoadedMessages narrows the rows already on screen — no network. It
 // mirrors the backend scan predicate (messages.go) so that "Filter loaded" and
 // "Search topic" never disagree about what matches.
+/**
+ * Answers the condition list with OR binding tighter than AND, mirroring
+ * messageMatchesQuery in internal/connector/kafka/messages.go.
+ *
+ * The list is cut into AND-groups at every "and" joiner; a group holds if any
+ * of its members does; the message must satisfy every group. So
+ *
+ *   event_type ≠ batch · and name = a · or name = b
+ *
+ * reads as "not a batch, and one of those two names".
+ *
+ * The two implementations must agree: this one answers "Filter loaded" in the
+ * browser and the Go one answers "Search topic" on the server, and the same
+ * conditions producing different rows depending on which button was pressed
+ * would be worse than either being wrong on its own.
+ */
 export function filterLoadedMessages(
   messages: KafkaMessageRow[],
   conditions: KafkaMatchCondition[],
@@ -325,11 +344,32 @@ export function filterLoadedMessages(
 ): KafkaMessageRow[] {
   const active = activeConditions(conditions)
   if (active.length === 0) return messages
-  return messages.filter((row) =>
-    mode === 'or'
-      ? active.some((condition) => conditionMatches(row, condition))
-      : active.every((condition) => conditionMatches(row, condition))
-  )
+  return messages.filter((row) => matchesConditions(row, active, mode))
+}
+
+// A condition's joiner, falling back to the flat mode for rows that predate
+// per-row joiners.
+export function conditionJoin(condition: KafkaMatchCondition, mode: KafkaMatchMode): 'and' | 'or' {
+  return condition.join ?? mode
+}
+
+function matchesConditions(
+  row: KafkaMessageRow,
+  active: KafkaMatchCondition[],
+  mode: KafkaMatchMode
+): boolean {
+  let groupMatched = false
+  for (let index = 0; index < active.length; index += 1) {
+    const matched = conditionMatches(row, active[index])
+    if (index > 0 && conditionJoin(active[index], mode) === 'or') {
+      groupMatched = groupMatched || matched
+      continue
+    }
+    // A new group starts here, so the one just finished has to have held.
+    if (index > 0 && !groupMatched) return false
+    groupMatched = matched
+  }
+  return groupMatched
 }
 
 interface MessagesResponse {
@@ -461,6 +501,10 @@ async function requestMessages(
       // and leaving it out keeps the request identical to what it was before.
       if (condition.target !== undefined && condition.target !== 'value') {
         filters.push({ column: `match_target${suffix}`, op: 'eq', value: condition.target })
+      }
+      // The first condition joins nothing, so its joiner would only be noise.
+      if (index > 0) {
+        filters.push({ column: `match_join${suffix}`, op: 'eq', value: conditionJoin(condition, search.mode) })
       }
     })
     filters.push({ column: 'match_mode', op: 'eq', value: search.mode })
