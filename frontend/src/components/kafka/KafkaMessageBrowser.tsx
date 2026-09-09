@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Download, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
-import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
+import { KafkaMessageDetail, messageEnvelope } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
 import { KafkaFilterDialog, emptyCondition } from '@/components/kafka/KafkaFilterDialog'
@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkSummary, linkTargetLabel } from '@/lib/links'
+import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import {
   activeConditions,
@@ -412,7 +413,6 @@ export function KafkaMessageBrowser({
         mode={mode}
         onOpenChange={setFilterDialogOpen}
         onConditionsChange={setConditions}
-        onModeChange={setMode}
         onPickField={(index) => {
           setPickerIndex(index)
           setPickerOpen(true)
@@ -459,6 +459,27 @@ export function KafkaMessageBrowser({
             {!scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && scanPartial && ' · stopped at scan budget'}
             {!scanning && !deepScanning && !scanLimitReached && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
+          {/* Matches already live in the browser — the scan put them there — so
+              this writes a file without asking the server for anything. One
+              JSON array rather than an archive: greppable, opens anywhere, and
+              needs no zip library to produce or to read. */}
+          {!scanning && !deepScanning && messages.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+              onClick={() => {
+                const name = `kafka-matches-${timestampForFilename()}.json`
+                const body = messages.map((message) => messageEnvelope(message).split('\n').join('\n  ')).join(',\n  ')
+                downloadTextFile(name, 'application/json', `[\n  ${body}\n]\n`)
+              }}
+              title={`Save all ${messages.length} matched messages as one JSON file`}
+            >
+              <Download className="h-3 w-3" />
+              Export matches
+            </Button>
+          )}
           {scanning || deepScanning ? (
             // Во время автопрохода эта кнопка обязана значить то же, что и
             // большая внизу: оборвать ВЕСЬ цикл. Иначе она гасила бы только

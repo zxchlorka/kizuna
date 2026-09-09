@@ -3,16 +3,17 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { conditionTarget } from '@/stores/kafka'
+import { conditionJoin, conditionTarget } from '@/stores/kafka'
 import type { KafkaMatchCondition, KafkaMatchMode, KafkaMatchOp, KafkaMatchTarget } from '@/stores/kafka'
 
 interface KafkaFilterDialogProps {
   open: boolean
   conditions: KafkaMatchCondition[]
+  // The fallback joiner for rows saved before per-row joiners existed. No longer
+  // shown as a control: a single mode cannot describe a list that mixes them.
   mode: KafkaMatchMode
   onOpenChange: (open: boolean) => void
   onConditionsChange: (conditions: KafkaMatchCondition[]) => void
-  onModeChange: (mode: KafkaMatchMode) => void
   // Opens the sampled-message field picker for one row.
   onPickField: (index: number) => void
 }
@@ -29,7 +30,6 @@ export function KafkaFilterDialog({
   mode,
   onOpenChange,
   onConditionsChange,
-  onModeChange,
   onPickField,
 }: KafkaFilterDialogProps) {
   const rows = conditions.length > 0 ? conditions : [emptyCondition]
@@ -53,39 +53,44 @@ export function KafkaFilterDialog({
                 to say than to change, and a wrong assumption here sends people
                 hunting a message the filter never promised to find. */}
             <span className="mt-2 block text-muted-foreground">
+              Each row after the first says how it joins the one above. <span className="text-foreground">or</span>{' '}
+              binds tighter than <span className="text-foreground">and</span>, so{' '}
+              <span className="text-foreground">a · and b · or c</span> reads as “a, and either b or c”.
+            </span>
+            <span className="mt-2 block text-muted-foreground">
               A condition with <span className="text-foreground">[]</span> in its path is satisfied by any element of
               that array. Two such conditions are answered separately, so they need not land on the same element.
             </span>
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Match</span>
-          {(['and', 'or'] as const).map((option) => (
-            <Button
-              key={option}
-              type="button"
-              size="sm"
-              variant={mode === option ? 'secondary' : 'outline'}
-              className="h-7 px-3 font-mono text-[11px]"
-              onClick={() => onModeChange(option)}
-              title={
-                option === 'and'
-                  ? 'A message must satisfy every condition'
-                  : 'A message must satisfy at least one condition'
-              }
-            >
-              {option === 'and' ? 'All conditions' : 'Any condition'}
-            </Button>
-          ))}
-        </div>
 
         <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto">
           {rows.map((condition, index) => (
             <div key={index} className="flex items-center gap-2">
-              <span className="w-8 shrink-0 font-mono text-[11px] text-muted-foreground">
-                {index === 0 ? '' : mode === 'or' ? 'or' : 'and'}
-              </span>
+              {index === 0 ? (
+                <span className="w-16 shrink-0" />
+              ) : (
+                <Select
+                  value={conditionJoin(condition, mode)}
+                  onValueChange={(value) => update(index, { join: value as 'and' | 'or' })}
+                >
+                  <SelectTrigger
+                    className="h-8 w-16 shrink-0 font-mono text-xs"
+                    aria-label={`How condition ${index + 1} joins the previous one`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="and" className="font-mono text-xs">
+                      and
+                    </SelectItem>
+                    <SelectItem value="or" className="font-mono text-xs">
+                      or
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Select
                 value={conditionTarget(condition)}
                 onValueChange={(value) => update(index, { target: value as KafkaMatchTarget })}

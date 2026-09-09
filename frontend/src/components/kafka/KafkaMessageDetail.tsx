@@ -1,11 +1,38 @@
 import { useState } from 'react'
-import { Copy, Maximize2 } from 'lucide-react'
+import { Copy, Download, Maximize2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { formatJson } from '@/lib/json'
+import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { useToastStore } from '@/stores/toast'
 import type { KafkaMessageRow } from '@/stores/kafka'
+
+/**
+ * A message as a file: the envelope that makes it findable again — partition,
+ * offset, timestamp, key, headers — with the payload embedded underneath.
+ *
+ * The payload is spliced in as text rather than parsed and re-serialized. A
+ * JSON.parse round trip would round every integer past 2^53, so the saved file
+ * would carry ids that never existed — the exact thing the viewer stopped doing.
+ */
+export function messageEnvelope(message: KafkaMessageRow): string {
+  const head = JSON.stringify(
+    {
+      partition: message.partition,
+      offset: message.offset,
+      timestamp: message.timestamp,
+      key: message.key,
+      headers: message.headers ?? {},
+      format: message.format,
+    },
+    null,
+    2
+  )
+  const value = message.format === 'json' ? (formatJson(message.value) ?? JSON.stringify(message.value)) : JSON.stringify(message.value)
+  // head ends in "\n}"; drop it, append the value, close the object again.
+  return `${head.slice(0, -2)},\n  "value": ${value.split('\n').join('\n  ')}\n}`
+}
 
 function prettyValue(value: string, format: string, pretty: boolean): string {
   if (!pretty || format !== 'json') {
@@ -33,6 +60,12 @@ export function KafkaMessageDetail({ message, onExpand, tall }: KafkaMessageDeta
     } else {
       pushToast({ tone: 'error', title: 'Copy failed', message: clipboardFailureMessage() })
     }
+  }
+
+  const saveToFile = () => {
+    const name = `kafka-${message.partition}-${message.offset}-${timestampForFilename()}.json`
+    downloadTextFile(name, 'application/json', messageEnvelope(message))
+    pushToast({ tone: 'success', title: 'Message saved', message: name })
   }
 
   const headers = Object.entries(message.headers ?? {})
@@ -87,6 +120,17 @@ export function KafkaMessageDetail({ message, onExpand, tall }: KafkaMessageDeta
           >
             <Copy className="h-3 w-3" />
             Copy
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            className="h-6 gap-1 px-2 font-mono text-[10px]"
+            onClick={saveToFile}
+            title="Save this message as a JSON file"
+          >
+            <Download className="h-3 w-3" />
+            Save
           </Button>
           {onExpand && (
             <Button type="button" size="sm" variant="ghost" className="h-6 gap-1 px-2 font-mono text-[10px]" onClick={onExpand}>
