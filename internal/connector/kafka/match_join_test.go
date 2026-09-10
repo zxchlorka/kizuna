@@ -269,3 +269,31 @@ func TestNegationOverAnArrayRequiresNoElementToMatch(t *testing.T) {
 		})
 	}
 }
+
+// The counterpart of the TypeScript "value matching searches nested paths"
+// suite: both sides try the path from the root and then from every nested
+// value, so one filter gets one answer whichever side runs it.
+func TestNestedPathsAnswerTheSameOnBothSides(t *testing.T) {
+	t.Parallel()
+
+	const nested = `{"event_type":"single","nested":{"event_type":"batch"}}`
+	row := map[string]any{"format": "json", "value": nested}
+
+	equals := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Op: "eq", Value: "event_type"},
+		{Column: "match_value", Op: "eq", Value: "batch"},
+		{Column: "match_op", Op: "eq", Value: "equals"},
+	})
+	if !messageMatchesQuery(row, equals) {
+		t.Fatal("a value nested below the root must be found")
+	}
+
+	notEquals := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Op: "eq", Value: "event_type"},
+		{Column: "match_value", Op: "eq", Value: "batch"},
+		{Column: "match_op", Op: "eq", Value: "not_eq"},
+	})
+	if messageMatchesQuery(row, notEquals) {
+		t.Fatal("negation must reject a message where the excluded value occurs anywhere")
+	}
+}

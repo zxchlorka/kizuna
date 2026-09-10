@@ -3,6 +3,7 @@ import {
   fieldPresence,
   formatPath,
   matchField,
+  matchFieldContains,
   parsePath,
   traversePath,
   type PathSegment,
@@ -11,7 +12,7 @@ import {
 // sharedFixtures MUST stay identical (documents/paths/wants/expectations) to
 // jsonPathSharedFixtures in internal/connector/kafka/kafka_test.go. This is the
 // cross-language proof that the Go matcher and the TS traversal agree on the
-// canonical grammar. Only full paths from the root are used (no legacy suffix
+// canonical grammar. Only full paths from the root are used (no suffix
 // paths).
 //
 // The implicit-array cases at the end used to be excluded from this matrix: the
@@ -210,5 +211,35 @@ describe('fieldPresence — поиск по наличию поля', () => {
     expect(fieldPresence('{"a":[{"b":1}]}', 'a.b', true)).toBe(true)
     expect(fieldPresence('{"events":[{"name":"Auth"}]}', 'events.name', true)).toBe(true)
     expect(fieldPresence('{"events":[{"name":"Auth"}]}', 'events[].name', true)).toBe(true)
+  })
+})
+
+// The path is tried from the root and then from every nested value, matching
+// Go's jsonPathMatchesAnywhere. While every operator was positive the old
+// root-anchored version only found less than the server; negation turned that
+// into two different answers to one filter.
+describe('value matching searches nested paths, as the server does', () => {
+  const nested = '{"event_type":"single","nested":{"event_type":"batch"}}'
+
+  it('finds a value nested below the root', () => {
+    expect(matchField(nested, 'event_type', 'batch')).toBe(true)
+  })
+
+  it('still finds the value at the root', () => {
+    expect(matchField(nested, 'event_type', 'single')).toBe(true)
+  })
+
+  it('does not invent a value that is nowhere', () => {
+    expect(matchField(nested, 'event_type', 'absent')).toBe(false)
+  })
+
+  it('applies to contains as well', () => {
+    expect(matchFieldContains(nested, 'event_type', 'atc')).toBe(true)
+  })
+
+  // The consequence that matters: "not equals" now rejects this message on both
+  // sides, because the excluded value does occur — just not at the top.
+  it('makes negation agree with the server', () => {
+    expect(!matchField(nested, 'event_type', 'batch')).toBe(false)
   })
 })

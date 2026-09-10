@@ -15,12 +15,12 @@
 //   - a key containing '.', '[', ']', a quote or whitespace uses bracket
 //     notation: ["the.key"]
 //
-// traverse() is strict and anchored at the root: a key descends objects only,
-// '[]' descends arrays only. It never falls back to the legacy "match anywhere
-// below the root" behaviour — full paths from the root are always correct, and
-// the picker only ever generates full paths. The Go matcher additionally keeps
-// a legacy suffix-matching affordance for hand-typed search queries, but that
-// is deliberately NOT part of this canonical traversal.
+// traverse() itself is strict and anchored at the root: a key descends objects
+// only, '[]' descends arrays only. The search predicates below do NOT use it
+// directly — they go through pathMatchesAnywhere, which retries the path from
+// every nested value, because the Go matcher does and the two must answer the
+// same question. Keeping traverse() strict is what lets the picker, which only
+// ever emits full paths, address exactly one place.
 
 import { parseJsonLossless } from '@/lib/json'
 
@@ -225,7 +225,7 @@ export function leafText(leaf: unknown): string {
 }
 
 // matchFieldContains is matchField with substring comparison — finding a trace
-// id inside a longer url or message.
+// id inside a longer url or message. Searches nested paths, see matchField.
 export function matchFieldContains(rawValue: string, path: string, want: string): boolean {
   if (path === '') return true
   let parsed: unknown
@@ -236,16 +236,21 @@ export function matchFieldContains(rawValue: string, path: string, want: string)
   }
   const segments = parsePath(path)
   if (segments.length === 0) return false
-  return traverse(parsed, segments).some((leaf) => leafText(leaf).includes(want))
+  return pathMatchesAnywhere(parsed, segments, (leaf) => leafText(leaf).includes(want))
 }
 
 // matchField reports whether the raw JSON string has a leaf at the canonical
-// path equal to want. It mirrors the Go messageMatchesField predicate for the
-// shared fixture set: an empty path matches everything, invalid JSON never
-// matches, and a path that resolves to no leaf never matches. (The Go matcher
-// additionally accepts legacy suffix paths that start below the root; that is a
-// hand-typed-query affordance and is intentionally outside this canonical
-// helper — full paths from the root agree in both languages.)
+// path equal to want. It mirrors the Go messageMatchesField predicate: an empty
+// path matches everything, invalid JSON never matches, and a path that resolves
+// to no leaf never matches.
+//
+// The path is tried from the root and then from every nested value, which is
+// what Go's jsonPathMatchesAnywhere does. This used to be root-anchored here
+// and suffix-searching there, and while every operator was positive the
+// divergence only meant "the server finds more". Negation turned it into two
+// different answers to one filter: on
+// {"event_type":"single","nested":{"event_type":"batch"}} the server rejected
+// "event_type not equals batch" and the browser accepted it.
 export function matchField(rawValue: string, path: string, want: string): boolean {
   if (path === '') return true
   let parsed: unknown
@@ -256,7 +261,7 @@ export function matchField(rawValue: string, path: string, want: string): boolea
   }
   const segments = parsePath(path)
   if (segments.length === 0) return false
-  return traverse(parsed, segments).some((leaf) => leafEquals(leaf, want))
+  return pathMatchesAnywhere(parsed, segments, (leaf) => leafEquals(leaf, want))
 }
 
 // pathExistsAnywhere reports whether the document contains the path at ANY
@@ -271,17 +276,25 @@ export function matchField(rawValue: string, path: string, want: string): boolea
 // Presence is about the path resolving at all: null, an empty object and an
 // empty array all count as present. matchField above stays strict and
 // root-anchored — this helper is additive and does not change value search.
-export function pathExistsAnywhere(value: unknown, segments: PathSegment[]): boolean {
-  if (traverse(value, segments).length > 0) {
+export function pathMatchesAnywhere(
+  value: unknown,
+  segments: PathSegment[],
+  predicate: (leaf: unknown) => boolean
+): boolean {
+  if (traverse(value, segments).some(predicate)) {
     return true
   }
   if (Array.isArray(value)) {
-    return value.some((child) => pathExistsAnywhere(child, segments))
+    return value.some((child) => pathMatchesAnywhere(child, segments, predicate))
   }
   if (isPlainObject(value)) {
-    return Object.values(value).some((child) => pathExistsAnywhere(child, segments))
+    return Object.values(value).some((child) => pathMatchesAnywhere(child, segments, predicate))
   }
   return false
+}
+
+export function pathExistsAnywhere(value: unknown, segments: PathSegment[]): boolean {
+  return pathMatchesAnywhere(value, segments, () => true)
 }
 
 // fieldPresence answers "does this message have that field at all", the search
