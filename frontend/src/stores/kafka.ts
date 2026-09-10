@@ -299,6 +299,17 @@ function conditionMatches(row: KafkaMessageRow, condition: KafkaMatchCondition):
     return stringMatches(row.headers?.[path] ?? '', present, condition.value, condition.op)
   }
 
+  // A payload that is not JSON satisfies NO value predicate, negatives
+  // included. It technically lacks the field, but so does every unrelated
+  // binary or text record, and "event_type not equals batch" returning all of
+  // them would bury what the search is about. messages.go states the same rule
+  // above messageMatchesField; until this guard existed the negatives negated a
+  // helper that returns false for unparseable payloads and quietly included
+  // them here while the server excluded them.
+  if (row.format !== 'json') {
+    return false
+  }
+
   if (condition.op === 'exists' || condition.op === 'missing') {
     return fieldPresence(row.value, path, condition.op === 'exists')
   }
@@ -339,7 +350,8 @@ function stringMatches(value: string, present: boolean, want: string, op: KafkaM
  * messageMatchesQuery in internal/connector/kafka/messages.go.
  *
  * The list is cut into AND-groups at every "and" joiner; a group holds if any
- * of its members does; the message must satisfy every group. So
+ * of its members does; the message must satisfy every group — an AND of OR
+ * groups, which is product-of-sums. So
  *
  *   event_type ≠ batch · and name = a · or name = b
  *
@@ -373,14 +385,18 @@ function matchesConditions(
 ): boolean {
   let groupMatched = false
   for (let index = 0; index < active.length; index += 1) {
-    const matched = conditionMatches(row, active[index])
-    if (index > 0 && conditionJoin(active[index], mode) === 'or') {
-      groupMatched = groupMatched || matched
+    const joinsWithOr = index > 0 && conditionJoin(active[index], mode) === 'or'
+    if (joinsWithOr) {
+      // Short-circuit: a satisfied OR group needs no further predicates, and
+      // each payload predicate parses the message again. The loop still walks
+      // to the next "and" to find where the group ends.
+      if (groupMatched) continue
+      groupMatched = conditionMatches(row, active[index])
       continue
     }
     // A new group starts here, so the one just finished has to have held.
     if (index > 0 && !groupMatched) return false
-    groupMatched = matched
+    groupMatched = conditionMatches(row, active[index])
   }
   return groupMatched
 }

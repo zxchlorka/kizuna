@@ -265,6 +265,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanning={tab?.scanning ?? false}
             scanned={tab?.scanned ?? 0}
             scanReached={tab?.scanReached ?? ''}
+            topic={topic}
             topicMessages={totalMessages}
             scanPartial={tab?.scanPartial ?? false}
             scanLimitReached={tab?.scanLimitReached ?? false}

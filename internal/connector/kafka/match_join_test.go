@@ -182,3 +182,90 @@ func TestNotContainsOnAKey(t *testing.T) {
 		t.Fatal("a record with no key must match, the same way a missing field does")
 	}
 }
+
+// The fixture that actually pins the precedence, and the one the first round of
+// tests was missing: with A and B false and C true,
+//
+//	A and B or C
+//
+// is FALSE under "or binds tighter" (A and (B or C) = false and true) and TRUE
+// under the conventional left-to-right reading ((A and B) or C = false or true).
+// Every earlier fixture agreed under both, so none of them would have noticed
+// the precedence quietly flipping.
+func TestPrecedenceDistinguishesOrTighterFromLeftToRight(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Op: "eq", Value: "a"},
+		{Column: "match_op", Op: "eq", Value: "exists"},
+		{Column: "match_field.1", Op: "eq", Value: "b"},
+		{Column: "match_op.1", Op: "eq", Value: "exists"},
+		{Column: "match_join.1", Op: "eq", Value: "and"},
+		{Column: "match_field.2", Op: "eq", Value: "c"},
+		{Column: "match_op.2", Op: "eq", Value: "exists"},
+		{Column: "match_join.2", Op: "eq", Value: "or"},
+	})
+
+	// Only c is present: A false, B false, C true.
+	row := map[string]any{"format": "json", "value": `{"c":1}`}
+	if messageMatchesQuery(row, query) {
+		t.Fatal("A and B or C must be false when only C holds — or binds tighter than and")
+	}
+}
+
+// A payload that is not JSON satisfies no value predicate, negatives included.
+// Negating a helper that fails on unparseable input is what made the browser
+// include these while the server excluded them.
+func TestNegativesRejectNonJSONPayloads(t *testing.T) {
+	t.Parallel()
+
+	for _, op := range []string{"not_eq", "not_contains"} {
+		op := op
+		t.Run(op, func(t *testing.T) {
+			t.Parallel()
+			query := parseMatchQuery([]connector.FilterExpr{
+				{Column: "match_field", Op: "eq", Value: "event_type"},
+				{Column: "match_value", Op: "eq", Value: "batch"},
+				{Column: "match_op", Op: "eq", Value: op},
+			})
+			row := map[string]any{"format": "text", "value": "plain log line, not json"}
+			if messageMatchesQuery(row, query) {
+				t.Fatalf("%s must not match a non-JSON payload", op)
+			}
+		})
+	}
+}
+
+// Negation over an array asks that NO element carries the excluded value, which
+// is not the same as "some element differs" — a message holding both the
+// excluded value and another one must be rejected.
+func TestNegationOverAnArrayRequiresNoElementToMatch(t *testing.T) {
+	t.Parallel()
+
+	query := parseMatchQuery([]connector.FilterExpr{
+		{Column: "match_field", Op: "eq", Value: "events[].name"},
+		{Column: "match_value", Op: "eq", Value: "batch"},
+		{Column: "match_op", Op: "eq", Value: "not_eq"},
+	})
+
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "no element carries it", value: `{"events":[{"name":"a"},{"name":"b"}]}`, want: true},
+		{name: "one element among others carries it", value: `{"events":[{"name":"a"},{"name":"batch"}]}`, want: false},
+		{name: "every element carries it", value: `{"events":[{"name":"batch"}]}`, want: false},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			row := map[string]any{"format": "json", "value": tc.value}
+			if got := messageMatchesQuery(row, query); got != tc.want {
+				t.Fatalf("matched = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

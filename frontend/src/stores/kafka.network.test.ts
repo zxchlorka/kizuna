@@ -963,3 +963,43 @@ describe('scanAll — автоцикл до начала лога', () => {
     expect(useKafkaStore.getState().tabs['tab-stuck'].deepScanning).toBe(false)
   })
 })
+
+// The joiner has to reach the server: it decides the answer, and a request that
+// drops it silently falls back to the flat mode — the browser would group the
+// conditions one way and the scan another.
+describe('Per-condition joiners on the wire', () => {
+  it('sends match_join for every condition after the first, and none for the first', async () => {
+    const fetchMock = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(
+        jsonResponse({
+          columns: [],
+          rows: [],
+          total: 0,
+          has_more: false,
+          meta: { scanning: true, scanned: 0, matched: 0, has_older: false },
+        })
+      )
+    )
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    await useKafkaStore
+      .getState()
+      .searchTopic('c1', 'topic', 'tab-joins', [
+        { field: 'event_type', value: 'batch', op: 'not_eq' },
+        { field: 'src.event_data.cp.name', value: 'Carousel_All', op: 'eq', join: 'and' },
+        { field: 'src.event_data.cp.name', value: 'CheckingItems', op: 'eq', join: 'or' },
+      ])
+
+    const url = String(fetchMock.mock.calls[0][0])
+    const raw = new URL(url, 'http://localhost').searchParams.get('filters')
+    const filters = (raw ? JSON.parse(raw) : []) as Array<{ column: string; value: string }>
+    const joins = filters.filter((filter) => filter.column.startsWith('match_join'))
+
+    expect(joins).toEqual([
+      { column: 'match_join.1', op: 'eq', value: 'and' },
+      { column: 'match_join.2', op: 'eq', value: 'or' },
+    ])
+    // The negative operator has to survive the trip too.
+    expect(filters).toContainEqual({ column: 'match_op', op: 'eq', value: 'not_eq' })
+  })
+})
