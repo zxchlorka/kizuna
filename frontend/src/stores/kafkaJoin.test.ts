@@ -71,3 +71,69 @@ describe('not equals is the strict negation', () => {
     expect(filterLoadedMessages([message('{"event_type":"batch"}')], notBatch, 'and')).toHaveLength(0)
   })
 })
+
+// The fixture that pins the precedence: with A and B false and C true,
+// "A and B or C" is false under "or binds tighter" and true under the
+// conventional left-to-right reading. Every other fixture agrees under both.
+describe('precedence is or-tighter, not left-to-right', () => {
+  it('A and B or C is false when only C holds', () => {
+    const conds: KafkaMatchCondition[] = [
+      { field: 'a', value: '', op: 'exists' },
+      { field: 'b', value: '', op: 'exists', join: 'and' },
+      { field: 'c', value: '', op: 'exists', join: 'or' },
+    ]
+    expect(filterLoadedMessages([message('{"c":1}')], conds, 'and')).toHaveLength(0)
+  })
+})
+
+// Mirrors TestNegativesRejectNonJSONPayloads. Negating a helper that fails on
+// unparseable input made these include records the server excluded.
+describe('negatives reject a payload that is not JSON', () => {
+  const textRow = { ...message('plain log line, not json'), format: 'text' } as KafkaMessageRow
+
+  it('not equals', () => {
+    const conds: KafkaMatchCondition[] = [{ field: 'event_type', value: 'batch', op: 'not_eq' }]
+    expect(filterLoadedMessages([textRow], conds, 'and')).toHaveLength(0)
+  })
+
+  it('not contains', () => {
+    const conds: KafkaMatchCondition[] = [{ field: 'event_type', value: 'bat', op: 'not_contains' }]
+    expect(filterLoadedMessages([textRow], conds, 'and')).toHaveLength(0)
+  })
+})
+
+// Mirrors TestNegationOverAnArrayRequiresNoElementToMatch.
+describe('negation over an array requires no element to match', () => {
+  const conds: KafkaMatchCondition[] = [{ field: 'events[].name', value: 'batch', op: 'not_eq' }]
+  const cases: Array<{ name: string; value: string; want: number }> = [
+    { name: 'no element carries it', value: '{"events":[{"name":"a"},{"name":"b"}]}', want: 1 },
+    { name: 'one element among others carries it', value: '{"events":[{"name":"a"},{"name":"batch"}]}', want: 0 },
+  ]
+  cases.forEach(({ name, value, want }) => {
+    it(name, () => {
+      expect(filterLoadedMessages([message(value)], conds, 'and')).toHaveLength(want)
+    })
+  })
+})
+
+// A satisfied OR group must not evaluate the rest: each payload predicate parses
+// the message again, which on a topic scan is the difference between one parse
+// and one per condition.
+describe('a satisfied or group short-circuits', () => {
+  it('stops after the first member that holds', () => {
+    let evaluated = 0
+    const counting = new Proxy(message('{"a":1}'), {
+      get(target, prop, receiver) {
+        if (prop === 'value') evaluated += 1
+        return Reflect.get(target, prop, receiver)
+      },
+    })
+    const conds: KafkaMatchCondition[] = [
+      { field: 'a', value: '', op: 'exists' },
+      { field: 'b', value: '', op: 'exists', join: 'or' },
+      { field: 'c', value: '', op: 'exists', join: 'or' },
+    ]
+    filterLoadedMessages([counting], conds, 'and')
+    expect(evaluated).toBe(1)
+  })
+})

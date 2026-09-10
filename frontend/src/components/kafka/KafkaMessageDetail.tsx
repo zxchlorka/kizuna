@@ -16,7 +16,7 @@ import type { KafkaMessageRow } from '@/stores/kafka'
  * JSON.parse round trip would round every integer past 2^53, so the saved file
  * would carry ids that never existed — the exact thing the viewer stopped doing.
  */
-export function messageEnvelope(message: KafkaMessageRow): string {
+export function messageEnvelope(message: KafkaMessageRow, indent = ''): string {
   const head = JSON.stringify(
     {
       partition: message.partition,
@@ -31,7 +31,8 @@ export function messageEnvelope(message: KafkaMessageRow): string {
   )
   const value = message.format === 'json' ? (formatJson(message.value) ?? JSON.stringify(message.value)) : JSON.stringify(message.value)
   // head ends in "\n}"; drop it, append the value, close the object again.
-  return `${head.slice(0, -2)},\n  "value": ${value.split('\n').join('\n  ')}\n}`
+  const text = `${head.slice(0, -2)},\n  "value": ${value.split('\n').join('\n  ')}\n}`
+  return indent === '' ? text : text.split('\n').join(`\n${indent}`)
 }
 
 function prettyValue(value: string, format: string, pretty: boolean): string {

@@ -1843,8 +1843,7 @@ func filterMatches(rows []map[string]any, query matchQuery) []map[string]any {
 //
 // Mechanically: the list is cut into AND-groups at every "and" joiner, each
 // group is satisfied by any one of its members, and the message must satisfy
-// every group. That is sum-of-products, which is what a rows-and-joiners UI can
-// express and all it needs to.
+// every group — an AND of OR groups, which is product-of-sums.
 func messageMatchesQuery(row map[string]any, query matchQuery) bool {
 	if len(query.filters) == 0 {
 		return true
@@ -1852,16 +1851,21 @@ func messageMatchesQuery(row map[string]any, query matchQuery) bool {
 
 	groupMatched := false
 	for index, filter := range query.filters {
-		matched := messageMatchesFilter(row, filter)
 		if index > 0 && filter.join.resolve(query.mode) == joinOr {
-			groupMatched = groupMatched || matched
+			// Short-circuit: a satisfied OR group needs no further predicates,
+			// and each payload predicate parses the record again. The loop still
+			// walks on to find where the group ends.
+			if groupMatched {
+				continue
+			}
+			groupMatched = messageMatchesFilter(row, filter)
 			continue
 		}
 		// A new group starts here, so the one just finished has to have held.
 		if index > 0 && !groupMatched {
 			return false
 		}
-		groupMatched = matched
+		groupMatched = messageMatchesFilter(row, filter)
 	}
 	return groupMatched
 }

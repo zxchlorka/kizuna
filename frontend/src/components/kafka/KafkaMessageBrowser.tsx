@@ -55,6 +55,8 @@ interface KafkaMessageBrowserProps {
   // count into a position: on a topic of billions, "scanned 3.7M" says nothing
   // about whether the thing you want is still ahead.
   scanReached: string
+  // Named in an exported file so it still says where it came from.
+  topic: string
   // Retained messages across every partition, for the share the scan covered.
   topicMessages: number
   scanPartial: boolean
@@ -113,6 +115,26 @@ export function seekIsBlind(topicMessages: number, seek: KafkaSeek): boolean {
   return !anchored && topicMessages >= BLIND_SCAN_MESSAGES
 }
 
+/**
+ * Matched messages as a file, wrapped in what the array alone could not say.
+ *
+ * A bare list is indistinguishable from a complete answer, and these lists are
+ * routinely not one: a scan gets cancelled, fills up on matches, or simply has
+ * not reached the end. Someone opening this file a week later has no other way
+ * to tell, so the wrapper names the topic it came from and whether the search
+ * that produced it had finished.
+ */
+export function matchesExport(topic: string, messages: KafkaMessageRow[], complete: boolean): string {
+  const head = JSON.stringify(
+    { topic, exported_at: new Date().toISOString(), matches: messages.length, scan_complete: complete },
+    null,
+    2
+  )
+  const body = messages.map((message) => messageEnvelope(message, '    ')).join(',\n    ')
+  const list = messages.length === 0 ? '[]' : `[\n    ${body}\n  ]`
+  return `${head.slice(0, -2)},\n  "messages": ${list}\n}\n`
+}
+
 // Share of the topic a scan has covered. Below a tenth of a percent the figure
 // rounds to "0.0%", which reads as "nothing happened" while the scan is in fact
 // working — so anything that small is named as such instead.
@@ -158,6 +180,7 @@ export function KafkaMessageBrowser({
   scanning,
   scanned,
   scanReached,
+  topic,
   topicMessages,
   scanPartial,
   scanLimitReached,
@@ -203,6 +226,9 @@ export function KafkaMessageBrowser({
   const [confirmOpen, setConfirmOpen] = useState(false)
   // Optional anchor for the scan about to start; empty means "from the newest".
   const [startFrom, setStartFrom] = useState('')
+  // A scan that was cancelled, filled up on matches, or still has log ahead of
+  // it did not answer the question in full, and the file has to say so.
+  const scanComplete = !scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && !scanPartial && !hasMore
   const [pickerOpen, setPickerOpen] = useState(false)
   // The message is captured alongside the group: opening the dialog closes the
   // floating menu, and the topic/reverse lists resolve their values from it.
@@ -471,10 +497,13 @@ export function KafkaMessageBrowser({
               className="h-6 gap-1 px-1.5 font-mono text-[11px]"
               onClick={() => {
                 const name = `kafka-matches-${timestampForFilename()}.json`
-                const body = messages.map((message) => messageEnvelope(message).split('\n').join('\n  ')).join(',\n  ')
-                downloadTextFile(name, 'application/json', `[\n  ${body}\n]\n`)
+                downloadTextFile(name, 'application/json', matchesExport(topic, messages, scanComplete))
               }}
-              title={`Save all ${messages.length} matched messages as one JSON file`}
+              title={
+                scanComplete
+                  ? `Save all ${messages.length} matched messages as one JSON file`
+                  : `Save the ${messages.length} matches found so far — the scan did not finish`
+              }
             >
               <Download className="h-3 w-3" />
               Export matches
