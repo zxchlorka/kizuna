@@ -488,8 +488,15 @@ export function KafkaMessageBrowser({
           {/* Matches already live in the browser — the scan put them there — so
               this writes a file without asking the server for anything. One
               JSON array rather than an archive: greppable, opens anywhere, and
-              needs no zip library to produce or to read. */}
-          {!scanning && !deepScanning && messages.length > 0 && (
+              needs no zip library to produce or to read.
+              
+              Offered while the scan is still running, too. It used to wait for
+              the scan to stop, on the grounds that a growing set makes for a
+              stale snapshot — but the file records scan_complete, which says
+              exactly that, and on a topic of twelve billion the scan never
+              stops on its own. All the gate did was make you press Cancel to
+              unlock a button. */}
+          {messages.length > 0 && (
             <Button
               type="button"
               size="sm"
