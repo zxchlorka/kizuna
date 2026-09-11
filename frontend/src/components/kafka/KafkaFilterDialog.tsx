@@ -3,16 +3,17 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import { conditionTarget } from '@/stores/kafka'
+import { conditionJoin, conditionTarget } from '@/stores/kafka'
 import type { KafkaMatchCondition, KafkaMatchMode, KafkaMatchOp, KafkaMatchTarget } from '@/stores/kafka'
 
 interface KafkaFilterDialogProps {
   open: boolean
   conditions: KafkaMatchCondition[]
+  // The fallback joiner for rows saved before per-row joiners existed. No longer
+  // shown as a control: a single mode cannot describe a list that mixes them.
   mode: KafkaMatchMode
   onOpenChange: (open: boolean) => void
   onConditionsChange: (conditions: KafkaMatchCondition[]) => void
-  onModeChange: (mode: KafkaMatchMode) => void
   // Opens the sampled-message field picker for one row.
   onPickField: (index: number) => void
 }
@@ -21,7 +22,8 @@ export const emptyCondition: KafkaMatchCondition = { field: '', value: '', op: '
 
 // Only equals and contains compare against typed text; presence ops read the
 // field alone.
-const takesValue = (op: KafkaMatchOp): boolean => op === 'eq' || op === 'contains'
+const takesValue = (op: KafkaMatchOp): boolean =>
+  op === 'eq' || op === 'not_eq' || op === 'contains' || op === 'not_contains'
 
 export function KafkaFilterDialog({
   open,
@@ -29,7 +31,6 @@ export function KafkaFilterDialog({
   mode,
   onOpenChange,
   onConditionsChange,
-  onModeChange,
   onPickField,
 }: KafkaFilterDialogProps) {
   const rows = conditions.length > 0 ? conditions : [emptyCondition]
@@ -43,49 +44,45 @@ export function KafkaFilterDialog({
       <DialogContent className="max-w-3xl [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Message filters</DialogTitle>
+          {/* One line. The two rules worth knowing — joiner precedence and how
+              [] fans out — are shown where they apply instead of up here: a
+              single-condition filter, which is most of them, needs neither and
+              was reading three paragraphs to learn that. */}
           <DialogDescription className="font-mono text-xs">
-            Each condition tests the record key, one of its headers, or a JSON path in its value. They apply both to
-            the loaded messages and to a topic scan.
-            {/* Two conditions over the same array read as "one element that
-                satisfies both", and they do not mean that. Each is answered on
-                its own, so a message matches when some element has the name and
-                some element has the id — not necessarily the same one. Cheaper
-                to say than to change, and a wrong assumption here sends people
-                hunting a message the filter never promised to find. */}
-            <span className="mt-2 block text-muted-foreground">
-              A condition with <span className="text-foreground">[]</span> in its path is satisfied by any element of
-              that array. Two such conditions are answered separately, so they need not land on the same element.
-            </span>
+            Tests the record key, a header, or a JSON path in the value.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex items-center gap-2">
-          <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Match</span>
-          {(['and', 'or'] as const).map((option) => (
-            <Button
-              key={option}
-              type="button"
-              size="sm"
-              variant={mode === option ? 'secondary' : 'outline'}
-              className="h-7 px-3 font-mono text-[11px]"
-              onClick={() => onModeChange(option)}
-              title={
-                option === 'and'
-                  ? 'A message must satisfy every condition'
-                  : 'A message must satisfy at least one condition'
-              }
-            >
-              {option === 'and' ? 'All conditions' : 'Any condition'}
-            </Button>
-          ))}
-        </div>
 
         <div className="flex max-h-[50vh] flex-col gap-2 overflow-y-auto">
           {rows.map((condition, index) => (
             <div key={index} className="flex items-center gap-2">
-              <span className="w-8 shrink-0 font-mono text-[11px] text-muted-foreground">
-                {index === 0 ? '' : mode === 'or' ? 'or' : 'and'}
-              </span>
+              {index === 0 ? (
+                // Not an empty spacer: the column has to hold the joiner width
+                // so the operators line up, and a blank one just looked like the
+                // row had been pushed off the left edge for no reason.
+                <span className="w-16 shrink-0 pl-1 font-mono text-[11px] text-muted-foreground">where</span>
+              ) : (
+                <Select
+                  value={conditionJoin(condition, mode)}
+                  onValueChange={(value) => update(index, { join: value as 'and' | 'or' })}
+                >
+                  <SelectTrigger
+                    className="h-8 w-16 shrink-0 font-mono text-xs"
+                    aria-label={`How condition ${index + 1} joins the previous one`}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="and" className="font-mono text-xs">
+                      and
+                    </SelectItem>
+                    <SelectItem value="or" className="font-mono text-xs">
+                      or
+                    </SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
               <Select
                 value={conditionTarget(condition)}
                 onValueChange={(value) => update(index, { target: value as KafkaMatchTarget })}
@@ -119,6 +116,11 @@ export function KafkaFilterDialog({
                     placeholder={
                       conditionTarget(condition) === 'header' ? 'header name' : 'JSON path (e.g. events[].name)'
                     }
+                    title={
+                      conditionTarget(condition) === 'header'
+                        ? undefined
+                        : '[] matches any element of that array. Two conditions over the same array are answered separately, so they need not land on the same element.'
+                    }
                     aria-label={`Field for condition ${index + 1}`}
                     spellCheck={false}
                     autoComplete="off"
@@ -151,8 +153,14 @@ export function KafkaFilterDialog({
                   <SelectItem value="eq" className="font-mono text-xs">
                     equals
                   </SelectItem>
+                  <SelectItem value="not_eq" className="font-mono text-xs">
+                    not equals
+                  </SelectItem>
                   <SelectItem value="contains" className="font-mono text-xs">
                     contains
+                  </SelectItem>
+                  <SelectItem value="not_contains" className="font-mono text-xs">
+                    not contains
                   </SelectItem>
                   <SelectItem value="exists" className="font-mono text-xs">
                     {conditionTarget(condition) === 'value' ? 'has field' : 'is set'}
@@ -196,6 +204,14 @@ export function KafkaFilterDialog({
             </div>
           ))}
         </div>
+
+        {/* Shown only once there is a joiner to misread. */}
+        {rows.length > 1 && (
+          <p className="font-mono text-[11px] text-muted-foreground">
+            <span className="text-foreground">or</span> binds tighter than{' '}
+            <span className="text-foreground">and</span>: “a · and b · or c” means a, and either b or c.
+          </p>
+        )}
 
         <div className="flex items-center justify-between gap-2">
           <Button
