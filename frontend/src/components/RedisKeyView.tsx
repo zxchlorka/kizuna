@@ -443,8 +443,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const meta = tabData?.meta ?? {}
 
   const metaType = typeof meta.type === 'string' ? meta.type : undefined
-  // Derived from meta, so it lives after it — reading either above its
-  // declaration is a temporal dead zone and renders the view as a blank page.
+  // Keep below meta: hoisting a derived const above it is a TDZ and blanks the view.
   const truncated = Boolean(meta.truncated)
   // Sampled by Redis on large collections, so it is an estimate — worth showing
   // because "which key is eating the memory" has no other answer in the UI.

@@ -1,15 +1,11 @@
 import { ArrowRight, Minus, Plus, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { isEmptyDelta, type RedisDelta, type RedisDeltaEntry } from '@/lib/redisDelta'
+import { isEmptyDelta, type RedisDelta } from '@/lib/redisDelta'
 
 // Enough entries to see what happened, few enough that the line stays a line.
 // A refresh that moved thirty fields is not read entry by entry anyway — the
 // counts above tell that story.
 const SHOWN = 6
-
-function label(entry: RedisDeltaEntry): string {
-  return entry.value === undefined || entry.value === '' ? entry.id : `${entry.id} · ${entry.value}`
-}
 
 /**
  * What moved since the last read of this key.
@@ -60,7 +56,7 @@ export function RedisChangeBanner({ delta, onDismiss }: { delta: RedisDelta; onD
         {delta.added.slice(0, SHOWN).map((entry) => (
           <div key={`a-${entry.id}`} className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
             <Plus className="h-3 w-3 shrink-0" />
-            <span className="truncate">{label(entry)}</span>
+            <span className="truncate">{entry.value ? `${entry.id} · ${entry.value}` : entry.id}</span>
           </div>
         ))}
         {delta.changed.slice(0, SHOWN).map((entry) => (
