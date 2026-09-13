@@ -73,7 +73,21 @@ function identify(type: RedisObjectType, row: TableRow): { id: string; value?: s
  * as "one insert" would need a sequence alignment, and being wrong about which
  * element moved is worse than being blunt about all of them.
  */
-export function describeDelta(type: RedisObjectType, before: TableRow[], after: TableRow[]): RedisDelta {
+export function describeDelta(
+  type: RedisObjectType,
+  before: TableRow[],
+  after: TableRow[],
+  /**
+   * Whether these rows are the whole key or a window onto it.
+   *
+   * This is the difference between "the field is gone" and "the field scrolled
+   * out of the page", and the two are indistinguishable from the rows alone. A
+   * stream is read as the last N entries, so every arrival pushes an older one
+   * out of view; without this the feature reported three deletions for every
+   * three appends, naming entries that are still in the stream.
+   */
+  complete = true
+): RedisDelta {
   const previous = new Map<string, string | undefined>()
   for (const row of before) {
     const entry = identify(type, row)
@@ -98,9 +112,15 @@ export function describeDelta(type: RedisObjectType, before: TableRow[], after: 
     }
   }
 
-  for (const [id] of previous) {
-    if (!seen.has(id)) {
-      delta.removed.push({ id })
+  // Only a complete view can tell a deletion from a row that left the window.
+  // ponytail: an element that moves INTO a windowed view — a zset member whose
+  // score climbs into the top page — still reports as added. Telling that from
+  // a real insert needs the rank it held before, which the rows do not carry.
+  if (complete) {
+    for (const [id] of previous) {
+      if (!seen.has(id)) {
+        delta.removed.push({ id })
+      }
     }
   }
 

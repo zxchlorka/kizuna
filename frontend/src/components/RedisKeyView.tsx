@@ -341,6 +341,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // because nothing about the other keys is kept.
   const baseline = useRef<{ signature: string; rows: TableRow[] } | null>(null)
   const [delta, setDelta] = useState<RedisDelta>(emptyDelta)
+  // Your own edit reloads the key down the same path a refresh does. Reporting
+  // it back as "what changed" is telling you what you just typed.
+  const selfInflicted = useRef(false)
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
 
   // Key-level links paired with the value they resolve to right now. A link
@@ -483,6 +486,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
         where: payload.where,
         data: payload.data,
       }, tabId, { reload: false })
+      // The reload below is ours, so the next delta is skipped and the baseline
+      // just moves on.
+      selfInflicted.current = true
       await fetchData(connId, object, tabId)
       await refreshTree(connId)
     } catch (mutationError) {
@@ -521,12 +527,17 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
     const previous = baseline.current
     baseline.current = { signature: fetchSignature, rows }
-    if (previous === null || previous.signature !== fetchSignature) {
+    if (previous === null || previous.signature !== fetchSignature || selfInflicted.current) {
+      selfInflicted.current = false
       setDelta(emptyDelta)
       return
     }
-    setDelta(describeDelta(normalizedType, previous.rows, rows))
-  }, [rows, fetchSignature, loading, truncated, normalizedType])
+    // Complete only when every row of the key is on screen. total comes from the
+    // server; a hash or set past the page size, and any stream long enough to be
+    // windowed, is not.
+    const complete = !truncated && rows.length >= total
+    setDelta(describeDelta(normalizedType, previous.rows, rows, complete))
+  }, [rows, fetchSignature, loading, truncated, normalizedType, total])
 
   const redisContent = (() => {
     if (normalizedType === 'redis_string') {
@@ -983,7 +994,10 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
           </div>
 
-          <RedisChangeBanner delta={delta} onDismiss={() => setDelta(emptyDelta)} />
+          {/* Keyed on the request: switching keys reuses this component
+              instance, and without it one frame renders the new key's header
+              above the old key's changes. */}
+          <RedisChangeBanner key={fetchSignature} delta={delta} onDismiss={() => setDelta(emptyDelta)} />
 
           {truncated && (
             <div className="rounded-sm border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">

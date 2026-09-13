@@ -56,7 +56,11 @@ export function RedisChangeBanner({ delta, onDismiss }: { delta: RedisDelta; onD
         {delta.added.slice(0, SHOWN).map((entry) => (
           <div key={`a-${entry.id}`} className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
             <Plus className="h-3 w-3 shrink-0" />
-            <span className="truncate">{entry.value ? `${entry.id} · ${entry.value}` : entry.id}</span>
+            {/* Not truthiness: "0" is a perfectly good flag value, and on it the
+                  field would have rendered with no value at all. */}
+              <span className="truncate">
+                {entry.value === undefined || entry.value === '' ? entry.id : `${entry.id} · ${entry.value}`}
+              </span>
           </div>
         ))}
         {delta.changed.slice(0, SHOWN).map((entry) => (

@@ -88,3 +88,36 @@ describe('describeDelta keeps large ids distinct', () => {
     expect(delta.changed[0].previous).toBe('2091885016401416192')
   })
 })
+
+// Found in review: two PAGES were being compared, not two keys, so anything that
+// left the window was announced as deleted. For a stream that broke the feature's
+// own scenario — it is read as the last N entries, and every arrival pushes an
+// older one out of sight.
+describe('a windowed view never claims a deletion', () => {
+  it('a stream reports arrivals and stays silent about what fell off the tail', () => {
+    const before = [{ id: '1700000000151-0' }, { id: '1700000000152-0' }]
+    const after = [{ id: '1700000000152-0' }, { id: '1700000000203-0' }]
+
+    const windowed = describeDelta('redis_stream', before, after, false)
+    expect(windowed.added).toEqual([{ id: '1700000000203-0', value: undefined }])
+    expect(windowed.removed).toEqual([])
+
+    // On a complete key the same disappearance is a real deletion.
+    const whole = describeDelta('redis_stream', before, after, true)
+    expect(whole.removed).toEqual([{ id: '1700000000151-0' }])
+  })
+
+  it('a paged hash does not bury the field that scrolled off', () => {
+    const before = hash({ f48: 'x', f49: 'y' })
+    const after = hash({ aaa: 'new', f48: 'x' })
+
+    const windowed = describeDelta('redis_hash', before, after, false)
+    expect(windowed.added).toEqual([{ id: 'aaa', value: 'new' }])
+    expect(windowed.removed).toEqual([])
+  })
+
+  it('changes are still reported on a windowed view — the row is in both', () => {
+    const delta = describeDelta('redis_hash', hash({ updated_at: '1' }), hash({ updated_at: '2' }), false)
+    expect(delta.changed).toEqual([{ id: 'updated_at', value: '2', previous: '1' }])
+  })
+})
