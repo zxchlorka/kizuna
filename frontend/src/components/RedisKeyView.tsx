@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Binary, Braces, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
@@ -63,7 +63,9 @@ import {
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
+import { RedisChangeBanner } from '@/components/redis/RedisChangeBanner'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { describeDelta, emptyDelta, type RedisDelta } from '@/lib/redisDelta'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
@@ -71,7 +73,7 @@ import { useDataStore } from '@/stores/data'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import type { ObjectType } from '@/types/api'
+import type { ObjectType, TableRow } from '@/types/api'
 
 interface RedisKeyViewProps {
   connId: string
@@ -330,6 +332,15 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
     [links, connId, object]
   )
   const rows = useMemo(() => tabData?.rows ?? [], [tabData?.rows])
+
+  // What moved since the previous read of this key.
+  //
+  // The baseline is one snapshot held in memory for as long as this view is
+  // mounted — no history, no storage, nothing to grow. That is the whole design
+  // constraint: a key with three hundred million neighbours costs nothing here
+  // because nothing about the other keys is kept.
+  const baseline = useRef<{ signature: string; rows: TableRow[] } | null>(null)
+  const [delta, setDelta] = useState<RedisDelta>(emptyDelta)
   const stringValue = useMemo(() => stringifyRedisValue(rows[0]?.value), [rows])
 
   // Key-level links paired with the value they resolve to right now. A link
@@ -432,6 +443,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const meta = tabData?.meta ?? {}
 
   const metaType = typeof meta.type === 'string' ? meta.type : undefined
+  // Derived from meta, so it lives after it — reading either above its
+  // declaration is a temporal dead zone and renders the view as a blank page.
+  const truncated = Boolean(meta.truncated)
   // Sampled by Redis on large collections, so it is an estimate — worth showing
   // because "which key is eating the memory" has no other answer in the UI.
   const memoryBytes = typeof meta.memory_bytes === 'number' ? meta.memory_bytes : null
@@ -486,6 +500,34 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
   const listOffset = opts?.offset ?? 0
   const listLimit = opts?.limit ?? 50
+
+  // A page of a large collection is a window, not the key: rows changing
+  // because you paged is not a change in the data. The signature pins the
+  // request that produced these rows, and a different one silently re-baselines
+  // instead of reporting a delta nobody made.
+  const fetchSignature = JSON.stringify({ object, opts: opts ?? null })
+
+  useEffect(() => {
+    if (loading) {
+      return
+    }
+    // A truncated read has only part of the key, so "this field is new" could
+    // as easily mean "it was on a page we did not have". Saying nothing beats
+    // inventing a delta.
+    if (truncated || normalizedType === 'unsupported' || normalizedType === 'namespace') {
+      baseline.current = null
+      setDelta(emptyDelta)
+      return
+    }
+
+    const previous = baseline.current
+    baseline.current = { signature: fetchSignature, rows }
+    if (previous === null || previous.signature !== fetchSignature) {
+      setDelta(emptyDelta)
+      return
+    }
+    setDelta(describeDelta(normalizedType, previous.rows, rows))
+  }, [rows, fetchSignature, loading, truncated, normalizedType])
 
   const redisContent = (() => {
     if (normalizedType === 'redis_string') {
@@ -942,7 +984,9 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
 
           </div>
 
-          {Boolean(meta.truncated) && (
+          <RedisChangeBanner delta={delta} onDismiss={() => setDelta(emptyDelta)} />
+
+          {truncated && (
             <div className="rounded-sm border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
               Partial view — this key is too large to load fully, so only the first scanned slice is shown
               {typeof meta.length === 'number' ? ` (${meta.length.toLocaleString()} items total)` : ''}. Use the
