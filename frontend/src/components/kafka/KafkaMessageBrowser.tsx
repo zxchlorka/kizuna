@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkSummary, linkTargetLabel } from '@/lib/links'
+import { columnLabel, columnValues, NO_VALUE } from '@/lib/kafkaColumns'
 import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import {
@@ -57,6 +58,10 @@ interface KafkaMessageBrowserProps {
   scanReached: string
   // Named in an exported file so it still says where it came from.
   topic: string
+  // Chosen JSON paths shown as their own columns, in order.
+  columns: string[]
+  onAddColumn: (path: string) => void
+  onRemoveColumn: (path: string) => void
   // Retained messages across every partition, for the share the scan covered.
   topicMessages: number
   scanPartial: boolean
@@ -181,6 +186,9 @@ export function KafkaMessageBrowser({
   scanned,
   scanReached,
   topic,
+  columns,
+  onAddColumn,
+  onRemoveColumn,
   topicMessages,
   scanPartial,
   scanLimitReached,
@@ -561,20 +569,59 @@ export function KafkaMessageBrowser({
           }
         />
       ) : (
-        <div className="rounded-sm border border-border/70">
+        <div className="overflow-x-auto rounded-sm border border-border/70">
           {/* Fixed layout: CSS ignores max-width on auto-layout table cells, so a
               single-line JSON value would otherwise stretch the table (and the
               expanded detail row with it) far past the viewport. */}
-          <table className="w-full table-fixed divide-y divide-border text-sm">
-            <thead className="bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+          <table className="w-full min-w-full table-fixed divide-y divide-border text-sm">
+            <thead className="group/head bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
               <tr>
                 <th className="w-8 px-2 py-2" />
                 <th className="w-14 px-3 py-2">Part</th>
                 <th className="w-32 px-3 py-2">Offset</th>
                 <th className="w-52 px-3 py-2">Timestamp</th>
                 <th className="w-48 px-3 py-2">Key</th>
-                <th className="px-3 py-2">Value</th>
+                {/* Chosen fields sit before Value: what you asked for reads
+                    first, and the raw payload stays as a tail that still shows
+                    when a message is not the shape you assumed. */}
+                {columns.map((path) => (
+                  <th
+                    key={path}
+                    className="w-40 px-3 py-2"
+                    title={`${path} — right-click to remove`}
+                    onContextMenu={(event) => {
+                      event.preventDefault()
+                      onRemoveColumn(path)
+                    }}
+                  >
+                    <span className="flex items-center gap-1 truncate normal-case">
+                      <span className="truncate">{columnLabel(path)}</span>
+                      <X
+                        className="h-3 w-3 shrink-0 cursor-pointer opacity-0 transition-opacity hover:text-foreground group-hover/head:opacity-60"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          onRemoveColumn(path)
+                        }}
+                      />
+                    </span>
+                  </th>
+                ))}
+                {/* Value keeps a floor rather than sharing the remainder: under
+                    table-fixed a few added columns drove it to zero width and
+                    the payload vanished from the table entirely. */}
+                <th className="w-[28rem] min-w-[16rem] px-3 py-2">Value</th>
                 <th className="w-20 px-3 py-2">Format</th>
+                <th className="w-10 px-2 py-2">
+                  <button
+                    type="button"
+                    onClick={() => { setPickerIndex(-1); setPickerOpen(true) }}
+                    title="Show a JSON field as its own column"
+                    aria-label="Add a column"
+                    className="rounded-sm border border-border px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
+                  >
+                    +
+                  </button>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
@@ -597,6 +644,15 @@ export function KafkaMessageBrowser({
                       <td className="truncate px-3 py-2 font-mono text-xs text-cyan-700 dark:text-cyan-300">
                         {message.key || <span className="text-muted-foreground">—</span>}
                       </td>
+                      {columnValues(message.value, message.format, columns).map((cell, at) => (
+                        <td
+                          key={columns[at]}
+                          className="truncate px-3 py-2 font-mono text-xs"
+                          title={cell === NO_VALUE ? `${columns[at]} is not in this message` : cell}
+                        >
+                          {cell === NO_VALUE ? <span className="text-muted-foreground">{cell}</span> : cell}
+                        </td>
+                      ))}
                       <td className="truncate px-3 py-2 font-mono text-xs">{valuePreview(message.value)}</td>
                       <td className="px-3 py-2">
                         <KafkaFormatBadge format={message.format} />
@@ -693,11 +749,17 @@ export function KafkaMessageBrowser({
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         messages={messages}
-        onUseField={(path) =>
+        onUseField={(path) => {
+          // Index -1 means the picker was opened by the table's "+", not by a
+          // condition row. One dialog, two callers, no second field tree.
+          if (pickerIndex < 0) {
+            onAddColumn(path)
+            return
+          }
           setConditions((current) =>
             current.map((condition, at) => (at === pickerIndex ? { ...condition, field: path } : condition))
           )
-        }
+        }}
       />
 
       <LinkPickerDialog
