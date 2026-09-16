@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Download, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
-import { KafkaMessageDetail } from '@/components/kafka/KafkaMessageDetail'
+import { KafkaMessageDetail, messageEnvelope } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
 import { JsonFieldPickerDialog } from '@/components/kafka/JsonFieldPickerDialog'
 import { KafkaFilterDialog, emptyCondition } from '@/components/kafka/KafkaFilterDialog'
@@ -19,6 +19,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
 import { extractMessageField, linkSourceLabel, linkSummary, linkTargetLabel } from '@/lib/links'
+import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import {
   activeConditions,
@@ -54,6 +55,8 @@ interface KafkaMessageBrowserProps {
   // count into a position: on a topic of billions, "scanned 3.7M" says nothing
   // about whether the thing you want is still ahead.
   scanReached: string
+  // Named in an exported file so it still says where it came from.
+  topic: string
   // Retained messages across every partition, for the share the scan covered.
   topicMessages: number
   scanPartial: boolean
@@ -112,6 +115,26 @@ export function seekIsBlind(topicMessages: number, seek: KafkaSeek): boolean {
   return !anchored && topicMessages >= BLIND_SCAN_MESSAGES
 }
 
+/**
+ * Matched messages as a file, wrapped in what the array alone could not say.
+ *
+ * A bare list is indistinguishable from a complete answer, and these lists are
+ * routinely not one: a scan gets cancelled, fills up on matches, or simply has
+ * not reached the end. Someone opening this file a week later has no other way
+ * to tell, so the wrapper names the topic it came from and whether the search
+ * that produced it had finished.
+ */
+export function matchesExport(topic: string, messages: KafkaMessageRow[], complete: boolean): string {
+  const head = JSON.stringify(
+    { topic, exported_at: new Date().toISOString(), matches: messages.length, scan_complete: complete },
+    null,
+    2
+  )
+  const body = messages.map((message) => messageEnvelope(message, '    ')).join(',\n    ')
+  const list = messages.length === 0 ? '[]' : `[\n    ${body}\n  ]`
+  return `${head.slice(0, -2)},\n  "messages": ${list}\n}\n`
+}
+
 // Share of the topic a scan has covered. Below a tenth of a percent the figure
 // rounds to "0.0%", which reads as "nothing happened" while the scan is in fact
 // working — so anything that small is named as such instead.
@@ -157,6 +180,7 @@ export function KafkaMessageBrowser({
   scanning,
   scanned,
   scanReached,
+  topic,
   topicMessages,
   scanPartial,
   scanLimitReached,
@@ -202,6 +226,9 @@ export function KafkaMessageBrowser({
   const [confirmOpen, setConfirmOpen] = useState(false)
   // Optional anchor for the scan about to start; empty means "from the newest".
   const [startFrom, setStartFrom] = useState('')
+  // A scan that was cancelled, filled up on matches, or still has log ahead of
+  // it did not answer the question in full, and the file has to say so.
+  const scanComplete = !scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && !scanPartial && !hasMore
   const [pickerOpen, setPickerOpen] = useState(false)
   // The message is captured alongside the group: opening the dialog closes the
   // floating menu, and the topic/reverse lists resolve their values from it.
@@ -412,7 +439,6 @@ export function KafkaMessageBrowser({
         mode={mode}
         onOpenChange={setFilterDialogOpen}
         onConditionsChange={setConditions}
-        onModeChange={setMode}
         onPickField={(index) => {
           setPickerIndex(index)
           setPickerOpen(true)
@@ -459,6 +485,37 @@ export function KafkaMessageBrowser({
             {!scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && scanPartial && ' · stopped at scan budget'}
             {!scanning && !deepScanning && !scanLimitReached && !hasMore && (direction === 'oldest' ? ' · reached end' : ' · reached beginning')}
           </span>
+          {/* Matches already live in the browser — the scan put them there — so
+              this writes a file without asking the server for anything. One
+              JSON array rather than an archive: greppable, opens anywhere, and
+              needs no zip library to produce or to read.
+              
+              Offered while the scan is still running, too. It used to wait for
+              the scan to stop, on the grounds that a growing set makes for a
+              stale snapshot — but the file records scan_complete, which says
+              exactly that, and on a topic of twelve billion the scan never
+              stops on its own. All the gate did was make you press Cancel to
+              unlock a button. */}
+          {messages.length > 0 && (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              className="h-6 gap-1 px-1.5 font-mono text-[11px]"
+              onClick={() => {
+                const name = `kafka-matches-${timestampForFilename()}.json`
+                downloadTextFile(name, 'application/json', matchesExport(topic, messages, scanComplete))
+              }}
+              title={
+                scanComplete
+                  ? `Save all ${messages.length} matched messages as one JSON file`
+                  : `Save the ${messages.length} matches found so far — the scan did not finish`
+              }
+            >
+              <Download className="h-3 w-3" />
+              Export matches
+            </Button>
+          )}
           {scanning || deepScanning ? (
             // Во время автопрохода эта кнопка обязана значить то же, что и
             // большая внизу: оборвать ВЕСЬ цикл. Иначе она гасила бы только

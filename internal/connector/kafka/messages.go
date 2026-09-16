@@ -1397,6 +1397,13 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 
 // matchOp is what a message must satisfy for the searched field.
 //
+// The negative forms are the strict negation of their positive twin, which
+// means a message MISSING the field satisfies them: "event_type is not batch"
+// is true of a record that has no event_type at all. That is the reading
+// "exclude the batch ones" needs, and the SQL reading — where a comparison
+// against a missing value is neither true nor false — would force everyone to
+// write "not batch OR no field" every single time.
+//
 // matchOpExists/matchOpMissing answer "does this field occur at all", which is
 // the only way to look for a field whose values you do not know yet — a newly
 // rolled-out optional field, for instance. matchOpEquals is the original
@@ -1404,10 +1411,12 @@ func parseCursorOffsets(filters []connector.FilterExpr, direction readDirection)
 type matchOp string
 
 const (
-	matchOpEquals   matchOp = "eq"
-	matchOpContains matchOp = "contains"
-	matchOpExists   matchOp = "exists"
-	matchOpMissing  matchOp = "missing"
+	matchOpEquals      matchOp = "eq"
+	matchOpNotEquals   matchOp = "not_eq"
+	matchOpContains    matchOp = "contains"
+	matchOpNotContains matchOp = "not_contains"
+	matchOpExists      matchOp = "exists"
+	matchOpMissing     matchOp = "missing"
 )
 
 // matchTarget is the part of the record a condition reads.
@@ -1439,6 +1448,31 @@ type contentFilter struct {
 	value  string
 	op     matchOp
 	target matchTarget
+	// join ties this condition to the previous one. Three-valued on purpose:
+	// unset means "whatever the query's flat mode says", which is how a request
+	// that predates per-condition joiners — and a query built in code without
+	// thinking about them — keeps behaving as it always did.
+	join joiner
+}
+
+// joiner is how one condition attaches to the one before it.
+type joiner uint8
+
+const (
+	joinDefault joiner = iota
+	joinAnd
+	joinOr
+)
+
+// resolve answers what this condition's joiner means under a given flat mode.
+func (j joiner) resolve(mode matchMode) joiner {
+	if j != joinDefault {
+		return j
+	}
+	if mode == matchModeOr {
+		return joinOr
+	}
+	return joinAnd
 }
 
 // addressable reports whether the condition names something to look at. A
@@ -1509,8 +1543,18 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 				at(index).op = matchOpMissing
 			case matchOpContains:
 				at(index).op = matchOpContains
+			case matchOpNotContains:
+				at(index).op = matchOpNotContains
+			case matchOpNotEquals:
+				at(index).op = matchOpNotEquals
 			case matchOpEquals:
 				at(index).op = matchOpEquals
+			}
+		case "match_join":
+			if strings.EqualFold(strings.TrimSpace(filter.Value), "or") {
+				at(index).join = joinOr
+			} else {
+				at(index).join = joinAnd
 			}
 		case "match_target":
 			switch matchTarget(strings.ToLower(strings.TrimSpace(filter.Value))) {
@@ -1524,15 +1568,33 @@ func parseMatchQuery(filters []connector.FilterExpr) matchQuery {
 		}
 	}
 
-	// Numeric order would need parsing and would change nothing: the conditions
-	// are combined by AND or OR, both commutative. First-seen order keeps the
-	// unnumbered condition first, where the caller put it.
+	// Sorted numerically, because order now decides the answer. While every
+	// condition was joined the same way the list was commutative and first-seen
+	// order was enough; with per-condition and/or, "A and B or C" and
+	// "A or B and C" are different questions, and the caller's numbering is the
+	// only record of which one was asked. The unnumbered condition is first.
+	sort.SliceStable(order, func(i, j int) bool { return conditionRank(order[i]) < conditionRank(order[j]) })
+
 	for _, index := range order {
 		if byIndex[index].addressable() {
 			query.filters = append(query.filters, *byIndex[index])
 		}
 	}
 	return query
+}
+
+// conditionRank orders "" (the unnumbered first condition) ahead of ".1", ".2"
+// and so on. An unparseable suffix sorts last rather than aborting the search:
+// a query that still answers most of what was asked beats an error page.
+func conditionRank(index string) int {
+	if index == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(index)
+	if err != nil {
+		return 1 << 30
+	}
+	return n + 1
 }
 
 // buildPaginationCursor turns one GetData call's per-partition frontier into the
@@ -1770,23 +1832,42 @@ func filterMatches(rows []map[string]any, query matchQuery) []map[string]any {
 // messageMatchesQuery combines the per-field results. An empty query matches
 // everything, which is what "no search" means; it is never reached in practice
 // because an inactive query skips the scan path entirely.
+// messageMatchesQuery answers the whole condition list, with OR binding tighter
+// than AND — the precedence everyone already reads into
+//
+//	event_type != batch  AND  name = a  OR  name = b
+//
+// which means "not a batch, and one of those two names". Written as a list of
+// rows joined by and/or, that is the only reading anyone intends, and the flat
+// all-or-nothing mode could express neither half of it.
+//
+// Mechanically: the list is cut into AND-groups at every "and" joiner, each
+// group is satisfied by any one of its members, and the message must satisfy
+// every group — an AND of OR groups, which is product-of-sums.
 func messageMatchesQuery(row map[string]any, query matchQuery) bool {
 	if len(query.filters) == 0 {
 		return true
 	}
-	for _, filter := range query.filters {
-		matched := messageMatchesFilter(row, filter)
-		if query.mode == matchModeOr {
-			if matched {
-				return true
+
+	groupMatched := false
+	for index, filter := range query.filters {
+		if index > 0 && filter.join.resolve(query.mode) == joinOr {
+			// Short-circuit: a satisfied OR group needs no further predicates,
+			// and each payload predicate parses the record again. The loop still
+			// walks on to find where the group ends.
+			if groupMatched {
+				continue
 			}
+			groupMatched = messageMatchesFilter(row, filter)
 			continue
 		}
-		if !matched {
+		// A new group starts here, so the one just finished has to have held.
+		if index > 0 && !groupMatched {
 			return false
 		}
+		groupMatched = messageMatchesFilter(row, filter)
 	}
-	return query.mode != matchModeOr
+	return groupMatched
 }
 
 // messageMatchesFilter routes a condition to the part of the record it reads.
@@ -1841,6 +1922,10 @@ func stringMatches(value string, present bool, want string, op matchOp) bool {
 		return !present
 	case matchOpContains:
 		return present && strings.Contains(value, want)
+	case matchOpNotContains:
+		return !(present && strings.Contains(value, want))
+	case matchOpNotEquals:
+		return !(present && value == want)
 	default:
 		return present && value == want
 	}
@@ -1897,6 +1982,10 @@ func messageMatchesField(row map[string]any, field string, want string, op match
 		return !jsonPathMatchesAnywhere(parsed, segments, anyLeaf)
 	case matchOpContains:
 		return jsonPathMatchesAnywhere(parsed, segments, containsLeaf(want))
+	case matchOpNotContains:
+		return !jsonPathMatchesAnywhere(parsed, segments, containsLeaf(want))
+	case matchOpNotEquals:
+		return !jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
 	default:
 		return jsonPathMatchesAnywhere(parsed, segments, equalsLeaf(want))
 	}
