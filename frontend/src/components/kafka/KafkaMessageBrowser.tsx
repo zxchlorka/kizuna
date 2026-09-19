@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type MouseEvent } from 'react'
-import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Download, Filter, Loader2, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, ChevronsDown, Download, Filter, Loader2, Plus, RefreshCw, Search, SlidersHorizontal, X } from 'lucide-react'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { KafkaMessageDetail, messageEnvelope } from '@/components/kafka/KafkaMessageDetail'
 import { KafkaMessageModal } from '@/components/kafka/KafkaMessageModal'
@@ -576,7 +576,22 @@ export function KafkaMessageBrowser({
           <table className="w-full min-w-full table-fixed divide-y divide-border text-sm">
             <thead className="group/head bg-muted/30 text-left text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
               <tr>
-                <th className="w-8 px-2 py-2" />
+                {/* In the first column, not after the last one. Parked at the
+                    end it sat behind a horizontal scroll — invisible until you
+                    dragged the table sideways, which nobody does on a hunch —
+                    and it drifted further right with every column added. Here
+                    it stays put however many columns there are. */}
+                <th className="w-8 px-1 py-2">
+                  <button
+                    type="button"
+                    onClick={() => { setPickerIndex(-1); setPickerOpen(true) }}
+                    title="Show a JSON field as its own column"
+                    aria-label="Add a column"
+                    className="flex h-5 w-5 items-center justify-center rounded-sm border border-border text-muted-foreground transition-colors hover:border-orange-500/50 hover:text-foreground"
+                  >
+                    <Plus className="h-3 w-3" />
+                  </button>
+                </th>
                 <th className="w-14 px-3 py-2">Part</th>
                 <th className="w-32 px-3 py-2">Offset</th>
                 <th className="w-52 px-3 py-2">Timestamp</th>
@@ -611,17 +626,6 @@ export function KafkaMessageBrowser({
                     the payload vanished from the table entirely. */}
                 <th className="w-[28rem] min-w-[16rem] px-3 py-2">Value</th>
                 <th className="w-20 px-3 py-2">Format</th>
-                <th className="w-10 px-2 py-2">
-                  <button
-                    type="button"
-                    onClick={() => { setPickerIndex(-1); setPickerOpen(true) }}
-                    title="Show a JSON field as its own column"
-                    aria-label="Add a column"
-                    className="rounded-sm border border-border px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
-                  >
-                    +
-                  </button>
-                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border/60">
