@@ -246,7 +246,7 @@ export function RedisSlotRibbon({ nodes }: { nodes: RedisSlotNode[] }) {
                 {/* Below ~6% the label has no room and turns into noise. The
                     address is written in full and left to truncate: shortening
                     it by hand guesses which part is the distinguishing one, and
-                    on 10.0.4.11 and redis-01.example.internal the guesses differ. */}
+                    on 10.0.4.11 and a long hostname the guesses differ. */}
                 {segment.node && segment.slots / TOTAL_SLOTS > 0.06 && (
                   <span className="truncate px-1 pb-0.5 font-mono text-[9px] text-foreground/70">
                     {segment.node.address}

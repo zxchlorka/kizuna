@@ -24,10 +24,11 @@ const MSG_JSON_FIXTURE = {
     event_data: {
       events: [
         {
-          data: { address: '312470', item_id: 111111111, shop_rating: 2 },
+          data: { address: '100200', item_id: 111111111, shop_rating: 2 },
           event_num: 1470,
           event_time: '2026-07-16T19:49:58.931+05:00',
           name: 'View_Item_With_Shop_Rating',
+          // Above 2^53: the sampler must not round it into a different number.
           session_value: 17157706631802851000,
         },
         {

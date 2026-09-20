@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type MouseEvent } from 'react'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { Binary, Braces, Copy as CopyIcon, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
+import { Binary, Braces, Copy as CopyIcon, GitCompare, KeyRound, Link2, Lock, PenLine, RefreshCw, TimerReset, Trash2 } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -63,6 +63,7 @@ import {
 import { trimToken, valueAtPoint } from '@/lib/textSelection'
 import { formatBytes } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
+import { RedisCompareDialog } from '@/components/redis/RedisCompareDialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
@@ -108,6 +109,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   // plain duplicate; picking another turns the same action into a transfer.
   const [copyTarget, setCopyTarget] = useState(connId)
   const [exporting, setExporting] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
 
   // Derived from copyTarget, so they must come after it: reading a useState
   // binding above its declaration is a temporal dead zone, and the whole view
@@ -892,6 +894,19 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
                     read-only connection. Hiding them there was the mistake:
                     taking a key off production is the one thing you are allowed
                     to do with it, and it was the one thing not offered. */}
+                {/* Beside the copy actions because it belongs with them: it
+                    only reads, so it stays on a read-only connection. */}
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="h-8 w-8 p-0"
+                  onClick={() => setCompareOpen(true)}
+                  title="Compare with other keys"
+                  aria-label="Compare this key with others"
+                >
+                  <GitCompare className="h-3.5 w-3.5" />
+                </Button>
                 <Button
                   type="button"
                   variant="outline"
@@ -1033,6 +1048,14 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
           </div>
         </DialogContent>
       </Dialog>
+
+      <RedisCompareDialog
+        open={compareOpen}
+        connId={connId}
+        anchor={object}
+        anchorType={metaType ?? objectType}
+        onOpenChange={setCompareOpen}
+      />
 
       <RenameKeyDialog
         open={renameOpen}
