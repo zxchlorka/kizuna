@@ -187,6 +187,14 @@ function seekOf(tab: { seekOffset?: string; seekTimestamp?: string }): KafkaSeek
 
 interface KafkaStore {
   tabs: Record<string, KafkaTopicTabState>
+  /**
+   * Chosen JSON columns, keyed by connection and topic rather than by tab: the
+   * fields worth seeing belong to the shape of the topic's messages, so they
+   * should still be there when the tab is closed and the topic reopened.
+   */
+  columnsByTopic: Record<string, string[]>
+  addColumn: (connId: string, topic: string, path: string) => void
+  removeColumn: (connId: string, topic: string, path: string) => void
   fetchTopicChildren: (connId: string, topic: string, tabId: string) => Promise<void>
   // Mount-time initial load. Guards an active search from being browse-clobbered
   // when KafkaTopicView remounts (see implementation). Prefer this over
@@ -463,6 +471,10 @@ const kafkaScanControllers = new Map<string, AbortController>()
 // virtualizing KafkaMessageBrowser's table first.
 export const MAX_SCAN_MATCHES = 5000
 
+export function topicColumnsKey(connId: string, topic: string): string {
+  return `${connId}::${topic}`
+}
+
 function kafkaTopicKey(connId: string, topic: string, tabId: string): string {
   return `${tabId}::${connId}::${topic}`
 }
@@ -680,6 +692,29 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
 
   return {
     tabs: {},
+  columnsByTopic: {},
+
+  addColumn: (connId, topic, path) => {
+    const trimmed = path.trim()
+    if (trimmed === '') return
+    set((state) => {
+      const key = topicColumnsKey(connId, topic)
+      const current = state.columnsByTopic[key] ?? []
+      // Adding the same field twice would render two identical columns and no
+      // way to tell which × removes which.
+      if (current.includes(trimmed)) return state
+      return { columnsByTopic: { ...state.columnsByTopic, [key]: [...current, trimmed] } }
+    })
+  },
+
+  removeColumn: (connId, topic, path) => {
+    set((state) => {
+      const key = topicColumnsKey(connId, topic)
+      const current = state.columnsByTopic[key] ?? []
+      return { columnsByTopic: { ...state.columnsByTopic, [key]: current.filter((item) => item !== path) } }
+    })
+  },
+
 
     fetchTopicChildren: async (connId, topic, tabId) => {
       const requestKey = kafkaTopicKey(connId, topic, tabId)

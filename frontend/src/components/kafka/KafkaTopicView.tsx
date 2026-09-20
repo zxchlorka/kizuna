@@ -13,7 +13,7 @@ import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import { canReverse, connectionLinks, linkTouchesObject } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import { useKafkaStore } from '@/stores/kafka'
+import { topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord } from '@/types/api'
@@ -25,6 +25,10 @@ interface KafkaTopicViewProps {
 }
 
 type TopicTab = 'messages' | 'partitions' | 'groups' | 'config'
+
+// A stable reference: a fresh [] per render would look like new state to the
+// store subscription and repaint the table for nothing.
+const EMPTY_COLUMNS: string[] = []
 
 const tabs: Array<{ id: TopicTab; label: string; icon: typeof MessagesSquare }> = [
   { id: 'messages', label: 'Messages', icon: MessagesSquare },
@@ -40,6 +44,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
     (state) => state.connections.find((connection) => connection.id === connId)?.read_only ?? false
   )
   const tab = useKafkaStore((state) => state.tabs[tabId])
+  const columns = useKafkaStore((state) => state.columnsByTopic[topicColumnsKey(connId, topic)] ?? EMPTY_COLUMNS)
+  const addColumn = useKafkaStore((state) => state.addColumn)
+  const removeColumn = useKafkaStore((state) => state.removeColumn)
   const fetchTopicChildren = useKafkaStore((state) => state.fetchTopicChildren)
   const loadInitialMessages = useKafkaStore((state) => state.loadInitialMessages)
   const refreshMessages = useKafkaStore((state) => state.refreshMessages)
@@ -266,6 +273,9 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanned={tab?.scanned ?? 0}
             scanReached={tab?.scanReached ?? ''}
             topic={topic}
+            columns={columns}
+            onAddColumn={(path) => addColumn(connId, topic, path)}
+            onRemoveColumn={(path) => removeColumn(connId, topic, path)}
             topicMessages={totalMessages}
             scanPartial={tab?.scanPartial ?? false}
             scanLimitReached={tab?.scanLimitReached ?? false}
