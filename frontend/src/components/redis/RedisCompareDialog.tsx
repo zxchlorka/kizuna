@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Plus, X } from 'lucide-react'
+import { Loader2, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Input } from '@/components/ui/input'
+import { KeyPicker } from '@/components/redis/KeyPicker'
 import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import { compareDocuments, type CompareDocument } from '@/lib/redisCompare'
 import { cn } from '@/lib/utils'
@@ -27,7 +27,6 @@ interface RedisCompareDialogProps {
 
 export function RedisCompareDialog({ open, connId, anchor, anchorType, onOpenChange }: RedisCompareDialogProps) {
   const [keys, setKeys] = useState<string[]>([])
-  const [draft, setDraft] = useState('')
   const [docs, setDocs] = useState<CompareDocument[]>([])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -36,7 +35,6 @@ export function RedisCompareDialog({ open, connId, anchor, anchorType, onOpenCha
   useEffect(() => {
     if (open) {
       setKeys([])
-      setDraft('')
       setDocs([])
       setError(null)
     }
@@ -75,21 +73,14 @@ export function RedisCompareDialog({ open, connId, anchor, anchorType, onOpenCha
     }
   }, [anchor, keys, connId])
 
-  const addKey = () => {
-    const name = draft.trim()
-    if (name === '' || name === anchor || keys.includes(name) || keys.length + 1 >= MAX_COMPARED) {
-      return
-    }
-    setKeys((current) => [...current, name])
-    setDraft('')
-  }
+
 
   const result = docs.length > 1 ? compareDocuments(docs) : null
   const rows = result?.rows.filter((row) => !hideEmpty || !row.allEmpty) ?? []
   const hiddenCount = (result?.rows.length ?? 0) - rows.length
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
       <DialogContent className="max-w-5xl [&>*]:min-w-0">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Compare keys</DialogTitle>
@@ -123,25 +114,11 @@ export function RedisCompareDialog({ open, connId, anchor, anchorType, onOpenCha
         </div>
 
         {keys.length + 1 < MAX_COMPARED && (
-          <div className="flex items-center gap-2">
-            <Input
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') {
-                  event.preventDefault()
-                  addKey()
-                }
-              }}
-              placeholder="another key name"
-              className="h-8 font-mono text-xs"
-              aria-label="Key to compare with"
-            />
-            <Button type="button" size="sm" variant="outline" className="h-8 gap-1.5 font-mono text-[11px]" onClick={addKey}>
-              <Plus className="h-3.5 w-3.5" />
-              Add
-            </Button>
-          </div>
+          <KeyPicker
+            connId={connId}
+            taken={[anchor, ...keys]}
+            onPick={(picked) => setKeys((current) => [...current, ...picked].slice(0, MAX_COMPARED - 1))}
+          />
         )}
 
         <div className="flex items-center justify-between gap-2">
