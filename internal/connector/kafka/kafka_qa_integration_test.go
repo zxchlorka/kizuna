@@ -18,13 +18,11 @@ import (
 	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
-// Task 8a — representative local-only QA. These tests are gated on
-// KAFKA_TEST_BROKER (they skip when unset) and MUST only ever target the local
-// docker-compose.test.yml broker (localhost:59092). assertLocalBroker enforces
-// that boundary in code so a stray production broker address (per the plan's
-// Testing/environment boundaries: Kafka device-fp / kafka-01.example.internal.*,
-// etc.) can never be reached from a test run, regardless of what KAFKA_TEST_BROKER
-// is set to.
+// Local-only QA. These tests are gated on KAFKA_TEST_BROKER (they skip when
+// unset) and MUST only ever target the local docker-compose.test.yml broker
+// (localhost:59092). assertLocalBroker enforces that boundary in code, so a
+// stray broker address cannot be reached from a test run regardless of what
+// KAFKA_TEST_BROKER is set to.
 //
 // The existing TestKafkaMessageBrowseAndNestedSearchIntegration already covers the
 // normal first/second page and the nested-array Auth search on its own freshly

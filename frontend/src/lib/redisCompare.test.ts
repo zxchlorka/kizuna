@@ -8,7 +8,8 @@ const profile = (key: string, fields: Record<string, string>): CompareDocument =
 })
 
 describe('splitValues', () => {
-  // mapper.go writes ids as strings.Join(values, ","), so a field is a list.
+  // A service that stores several ids in one field joins them with a comma,
+  // so the stored string is a list.
   it('splits a joined list', () => {
     expect(splitValues('019ec4d4, 71b0aa2f,9f3c1d88')).toEqual(['019ec4d4', '71b0aa2f', '9f3c1d88'])
   })
@@ -24,13 +25,14 @@ describe('splitValues', () => {
 })
 
 describe('compareDocuments finds what keys share', () => {
-  // The case from the investigation: two profiles that carry the same install
-  // id, which by the merge usecase means they should have merged into one.
+  // Two keys carrying the same install id. Where a service merges profiles on
+  // shared identifiers, that is the pair worth finding — and it is invisible
+  // across sixteen fields by eye.
   const docs = [
     profile('profile:2091885016401416192', {
       install_ids: '019ff59b-ddad-7226-971a-000000000004',
       gaid_ids: 'manual-c6-gaid',
-      wb_user_id: '770006',
+      user_id: '770006',
       cookie_ids: '',
     }),
     profile('profile:2091885444434333696', {

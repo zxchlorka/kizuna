@@ -8,7 +8,7 @@
  * four keys is how an afternoon disappears.
  */
 
-/** Ids are stored joined: mapper.go writes strings.Join(values, ","). */
+/** Several ids in one field are stored joined by this. */
 const LIST_SEPARATOR = ','
 
 export interface CompareValue {
