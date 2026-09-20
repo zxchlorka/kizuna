@@ -3,6 +3,20 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.9.1 — 2026-09-20
+
+### Fixed
+
+- Test fixtures no longer carry captured data. A sampler fixture had been pasted
+  from a live message and brought an internal hostname, a real product and a
+  customer's search text along with it; the schema sampler is tested on the
+  shape of a payload — nesting, arrays of objects, a null, an integer past
+  2^53 — and never on what the values say, so every one of them is now invented.
+  The same went for two comments naming internal hosts.
+- The repository history was rewritten to remove those values from every commit
+  and tag that carried them, so checking out an older tag no longer reproduces
+  them.
+
 ## v0.9.0 — 2026-09-04
 
 ### Redis
