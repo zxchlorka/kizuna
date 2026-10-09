@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { exportFileName, formatIdList, idWithoutPrefix } from '@/lib/redisKeyExport'
+import { collectNodeIds, exportFileName, formatIdList, idWithoutPrefix } from '@/lib/redisKeyExport'
 
 describe('idWithoutPrefix', () => {
   it('drops the namespace the file is already named after', () => {
@@ -20,6 +20,33 @@ describe('idWithoutPrefix', () => {
 
   it('honours a non-default separator', () => {
     expect(idWithoutPrefix('idfa|abc', 'idfa', '|')).toBe('abc')
+  })
+})
+
+describe('collectNodeIds', () => {
+  const node = {
+    path: 'idfa',
+    keys: [{ name: 'idfa:aaa', path: 'idfa:aaa' }, { name: 'idfa:bbb', path: 'idfa:bbb' }],
+    namespaces: [],
+  } as never
+
+  it('reads what the tree is already showing', () => {
+    expect(collectNodeIds(node, 'idfa', ':')).toEqual(['aaa', 'bbb'])
+  })
+
+  // The folder is what the reader pointed at, so leaving nested levels out
+  // would hand back a list that is quietly short.
+  it('includes nested namespaces', () => {
+    const nested = {
+      path: 'user',
+      keys: [{ name: 'user:1', path: 'user:1' }],
+      namespaces: [{ path: 'user:session', keys: [{ name: 'user:session:a', path: 'user:session:a' }], namespaces: [] }],
+    } as never
+    expect(collectNodeIds(nested, 'user', ':')).toEqual(['1', 'session:a'])
+  })
+
+  it('yields nothing for an empty folder', () => {
+    expect(collectNodeIds({ path: 'x', keys: [], namespaces: [] } as never, 'x', ':')).toEqual([])
   })
 })
 

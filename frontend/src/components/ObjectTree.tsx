@@ -11,7 +11,6 @@ import {
   Hash,
   List,
   ListOrdered,
-  Loader2,
   MessagesSquare,
   MoreHorizontal,
   Plus,
@@ -32,7 +31,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { buildRedisTree, type RedisTreeNode } from '@/lib/redisTree'
-import { collectNamespaceKeys, exportFileName, formatIdList } from '@/lib/redisKeyExport'
+import { collectNodeIds, exportFileName, formatIdList } from '@/lib/redisKeyExport'
 import { downloadTextFile } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import { normalizeVisibleSchemasSelection } from '@/lib/objectTreeVisibleSchemas'
@@ -200,31 +199,29 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const [createTableSchema, setCreateTableSchema] = useState<string | null>(null)
   const [isCreatingTable, setIsCreatingTable] = useState(false)
   const [topicSearch, setTopicSearch] = useState('')
-  // Which namespace is being walked, so its row shows a spinner and cannot be
-  // started twice. One at a time: these are full scans.
-  const [exportingNamespace, setExportingNamespace] = useState<string | null>(null)
+  // Exports what the tree is showing, with no request at all: these keys are
+  // already here, and the scan that would re-find them walks the whole keyspace
+  // because Redis has no index by prefix. Nothing to make concurrent, and
+  // nothing to wait for.
+  const exportNamespace = (node: RedisTreeNode) => {
+    const separator = currentConnection?.redis_config?.separator || ':'
+    const ids = collectNodeIds(node, node.path, separator)
+    const name = exportFileName(node.path)
+    downloadTextFile(name, 'application/json', formatIdList(ids))
 
-  const exportNamespace = async (namespace: string) => {
-    if (exportingNamespace !== null) return
-    setExportingNamespace(namespace)
-    try {
-      const separator = currentConnection?.redis_config?.separator || ':'
-      const { ids, capped } = await collectNamespaceKeys(connId, namespace, separator)
-      const name = exportFileName(namespace)
-      downloadTextFile(name, 'application/json', formatIdList(ids))
-      pushToast({
-        tone: capped ? 'error' : 'success',
-        title: capped ? 'Export stopped at the cap' : 'Keys exported',
-        message: capped
-          ? `${name} holds the first ${ids.length.toLocaleString()} ids — the namespace has more`
-          : `${name} — ${ids.length.toLocaleString()} ids`,
-      })
-    } catch (error) {
-      pushToast({ tone: 'error', title: 'Export failed', message: (error as Error).message })
-    } finally {
-      setExportingNamespace(null)
-    }
+    // The tree holds a page of the keyspace, not all of it. Saying so turns a
+    // short list from a wrong answer into a known one — and names the control
+    // that makes it longer.
+    const partial = Boolean(treeCursors[rootKey])
+    pushToast({
+      tone: 'success',
+      title: 'Keys exported',
+      message: partial
+        ? `${name} — ${ids.length.toLocaleString()} ids loaded so far. “Scan more keys” finds the rest.`
+        : `${name} — ${ids.length.toLocaleString()} ids`,
+    })
   }
+
 
   useEffect(() => {
     void fetchTree(connId)
@@ -535,7 +532,6 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const renderRedisNamespaceNode = (node: RedisTreeNode) => {
     const childKey = buildTreeKey(connId, node.path)
     const expanded = expandedSchemas.has(childKey)
-    const exporting = exportingNamespace === node.path
 
     return (
       <div key={`namespace:${node.path}`}>
@@ -558,17 +554,13 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
             type="button"
             onClick={(event) => {
               event.stopPropagation()
-              void exportNamespace(node.path)
+              exportNamespace(node)
             }}
-            disabled={exporting}
             title={`Save every id under ${node.path} as ${exportFileName(node.path)}`}
             aria-label={`Export ${node.path} keys as JSON`}
-            className={cn(
-              'mr-1 shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-foreground',
-              exporting ? 'opacity-100' : 'opacity-0 group-hover/ns:opacity-100'
-            )}
+            className="mr-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/ns:opacity-100"
           >
-            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            <Download className="h-3.5 w-3.5" />
           </button>
         </div>
         {expanded && (

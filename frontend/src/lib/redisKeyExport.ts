@@ -1,85 +1,53 @@
-import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
 import type { ObjectItem } from '@/types/api'
 
 /**
- * Every key under a namespace, as a JSON list of ids.
+ * Every id under a namespace, as a JSON list.
  *
- * The need is sample data: a thousand real device ids to drive a test, a
- * generator or a fixture, which otherwise get copied out of the tree by hand a
- * dozen at a time.
+ * The need is sample data: a few hundred device ids to drive a test or a
+ * generator, which otherwise get copied out of the tree by hand.
  *
- * Walks the same paged endpoint the tree uses rather than adding one of its
- * own. A page ends on the server's scan budget, not at the end of the keyspace,
- * so the loop follows the cursor until the server stops handing one back.
+ * Reads what the tree already holds rather than asking the server again. The
+ * first version re-scanned the keyspace for each export, and on a cluster of
+ * several hundred million keys that meant waiting half a minute to be handed
+ * five ids that were on screen the whole time: SCAN has no prefix index, so
+ * finding `fp:*` means walking every key there is.
  */
 
-/** The ceiling, so a mistyped prefix on a huge keyspace cannot run forever. */
-export const MAX_EXPORTED_KEYS = 50_000
-
-export interface KeyExportResult {
-  /** Ids, with the namespace prefix removed — it already names the file. */
-  ids: string[]
-  /** Stopped at MAX_EXPORTED_KEYS rather than at the end of the namespace. */
-  capped: boolean
-}
-
-interface ObjectPageResponse {
-  objects?: ObjectItem[]
-  next_cursor?: string
+/** A namespace node as the tree holds it, flattened to what the export needs. */
+export interface ExportableNode {
+  path: string
+  keys: ObjectItem[]
+  namespaces: ExportableNode[]
 }
 
 /**
  * Strips the namespace from a key name: `idfa:00584dbd-…` under `idfa` becomes
- * `00584dbd-…`. The prefix is what the file is named after, so repeating it on
- * every one of a thousand lines would be noise.
+ * `00584dbd-…`. The prefix already names the file, so repeating it on every one
+ * of a thousand lines is noise.
  */
 export function idWithoutPrefix(key: string, namespace: string, separator: string): string {
   const prefix = `${namespace}${separator}`
   return key.startsWith(prefix) ? key.slice(prefix.length) : key
 }
 
-export async function collectNamespaceKeys(
-  connId: string,
-  namespace: string,
-  separator: string,
-  options: { signal?: AbortSignal; onProgress?: (count: number) => void } = {}
-): Promise<KeyExportResult> {
-  const match = `${namespace}${separator}*`
+/**
+ * Collects ids from a namespace and everything nested under it.
+ *
+ * Nested levels are included because the folder is what the reader pointed at:
+ * exporting `user` and silently leaving out `user:session:*` would hand back a
+ * list that is quietly short.
+ */
+export function collectNodeIds(node: ExportableNode, namespace: string, separator: string): string[] {
   const ids: string[] = []
-  // A key can come back twice across pages: SCAN guarantees every key present
-  // for the whole iteration is returned at least once, not at most once.
-  const seen = new Set<string>()
-  let cursor = ''
-
-  for (;;) {
-    const params = new URLSearchParams({ paged: '1', flat: '1', match })
-    if (cursor) params.set('cursor', cursor)
-
-    const res = await fetchWithTimeout(
-      `/api/connections/${connId}/objects?${params.toString()}`,
-      { signal: options.signal },
-      Infinity,
-      options.signal
-    )
-    await throwOnApiError(res)
-    const page = (await res.json()) as ObjectPageResponse
-
-    for (const item of page.objects ?? []) {
+  const walk = (current: ExportableNode) => {
+    for (const item of current.keys) {
       const key = item.path ?? item.name
-      if (key === undefined || seen.has(key)) continue
-      seen.add(key)
-      ids.push(idWithoutPrefix(key, namespace, separator))
+      if (key !== undefined) ids.push(idWithoutPrefix(key, namespace, separator))
     }
-    options.onProgress?.(ids.length)
-
-    if (ids.length >= MAX_EXPORTED_KEYS) {
-      return { ids: ids.slice(0, MAX_EXPORTED_KEYS), capped: true }
-    }
-    cursor = page.next_cursor ?? ''
-    if (cursor === '') {
-      return { ids, capped: false }
-    }
+    current.namespaces.forEach(walk)
   }
+  walk(node)
+  return ids
 }
 
 /** The ids as the file's contents: one JSON array, one id per line. */
@@ -90,7 +58,7 @@ export function formatIdList(ids: string[]): string {
 
 /**
  * A namespace named as a file. Separators and anything a filesystem objects to
- * become dashes, so a nested namespace like `user:session` is still one legible
+ * become dashes, so a nested namespace like `user:session` stays one legible
  * name rather than an accidental directory.
  */
 export function exportFileName(namespace: string): string {
