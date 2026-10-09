@@ -4,12 +4,14 @@ import {
   Braces,
   CircleDot,
   Database,
+  Download,
   Eye,
   Folder,
   FolderOpen,
   Hash,
   List,
   ListOrdered,
+  Loader2,
   MessagesSquare,
   MoreHorizontal,
   Plus,
@@ -30,6 +32,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { buildRedisTree, type RedisTreeNode } from '@/lib/redisTree'
+import { collectNamespaceKeys, exportFileName, formatIdList } from '@/lib/redisKeyExport'
+import { downloadTextFile } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import { normalizeVisibleSchemasSelection } from '@/lib/objectTreeVisibleSchemas'
 import { getObjectTypeLabel } from '@/lib/objectTypes'
@@ -196,6 +200,31 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const [createTableSchema, setCreateTableSchema] = useState<string | null>(null)
   const [isCreatingTable, setIsCreatingTable] = useState(false)
   const [topicSearch, setTopicSearch] = useState('')
+  // Which namespace is being walked, so its row shows a spinner and cannot be
+  // started twice. One at a time: these are full scans.
+  const [exportingNamespace, setExportingNamespace] = useState<string | null>(null)
+
+  const exportNamespace = async (namespace: string) => {
+    if (exportingNamespace !== null) return
+    setExportingNamespace(namespace)
+    try {
+      const separator = currentConnection?.redis_config?.separator || ':'
+      const { ids, capped } = await collectNamespaceKeys(connId, namespace, separator)
+      const name = exportFileName(namespace)
+      downloadTextFile(name, 'application/json', formatIdList(ids))
+      pushToast({
+        tone: capped ? 'error' : 'success',
+        title: capped ? 'Export stopped at the cap' : 'Keys exported',
+        message: capped
+          ? `${name} holds the first ${ids.length.toLocaleString()} ids — the namespace has more`
+          : `${name} — ${ids.length.toLocaleString()} ids`,
+      })
+    } catch (error) {
+      pushToast({ tone: 'error', title: 'Export failed', message: (error as Error).message })
+    } finally {
+      setExportingNamespace(null)
+    }
+  }
 
   useEffect(() => {
     void fetchTree(connId)
@@ -506,20 +535,42 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const renderRedisNamespaceNode = (node: RedisTreeNode) => {
     const childKey = buildTreeKey(connId, node.path)
     const expanded = expandedSchemas.has(childKey)
+    const exporting = exportingNamespace === node.path
 
     return (
       <div key={`namespace:${node.path}`}>
-        <button
-          type="button"
-          onClick={() => toggleSchema(connId, node.path)}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
-        >
-          {getIcon('namespace', expanded)}
-          <span className="truncate">{node.name}</span>
-          <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
-            {formatCount(node.keyCount)} keys
-          </span>
-        </button>
+        <div className="group/ns flex items-center gap-1 rounded hover:bg-muted">
+          <button
+            type="button"
+            onClick={() => toggleSchema(connId, node.path)}
+            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm"
+          >
+            {getIcon('namespace', expanded)}
+            <span className="truncate">{node.name}</span>
+            <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
+              {formatCount(node.keyCount)} keys
+            </span>
+          </button>
+          {/* Sample data is the point: a thousand ids copied out of the tree by
+              hand is the job this replaces. Shown on hover so the row still
+              reads as a folder. */}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              void exportNamespace(node.path)
+            }}
+            disabled={exporting}
+            title={`Save every id under ${node.path} as ${exportFileName(node.path)}`}
+            aria-label={`Export ${node.path} keys as JSON`}
+            className={cn(
+              'mr-1 shrink-0 rounded p-1 text-muted-foreground transition-opacity hover:text-foreground',
+              exporting ? 'opacity-100' : 'opacity-0 group-hover/ns:opacity-100'
+            )}
+          >
+            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+          </button>
+        </div>
         {expanded && (
           <div className="ml-4 border-l border-border pl-1">
             {node.namespaces.map(renderRedisNamespaceNode)}
