@@ -3,6 +3,39 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.10.0 — 2026-10-16
+
+### Kafka
+
+- Chosen JSON fields can be shown as their own columns. The `Value` column
+  truncates exactly where the meaning starts, so twenty rows read
+  `{"api_key":"","event_type":"batch","file":"/opt/log…` and none of them say
+  which event they are. Pick a field — from the same tree the filters use — and
+  it becomes a column of its own, before the raw payload rather than instead of
+  it. A path through an array shows the first couple of values and a count; a
+  dash means the field is absent, which on a mixed topic is how two different
+  message shapes announce themselves. The set is remembered per connection and
+  topic, because the fields worth seeing belong to the shape of that topic's
+  messages.
+
+### Redis
+
+- Keys can be compared to find what they have in common. Not a diff — these
+  keys did not change into one another — but the question behind it: two
+  profiles carrying the same cookie or the same install id are two profiles
+  that probably should have been one, and finding that across sixteen fields
+  and four keys by eye is an afternoon. Up to five keys of the same type, with
+  the shared values named above the table and highlighted inside it.
+- A field holding a comma-separated list is compared element by element. The
+  whole strings `a,b,c` and `a,d` differ while sharing the id `a`, and that
+  shared id is the entire reason to open the screen.
+- Every id under a namespace can be saved as a JSON list, named after the
+  namespace it came from. Sample data — a few hundred device ids to drive a
+  test or a generator — otherwise gets copied out of the tree by hand.
+- Picking a key to compare no longer means typing one. Keys are uuids; a prefix
+  is enough to find one, a list pasted from a log or a message becomes several,
+  and the dialog no longer covers the tree a key's name is read from.
+
 ## v0.9.1 — 2026-09-20
 
 ### Fixed
