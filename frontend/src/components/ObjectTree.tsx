@@ -4,6 +4,7 @@ import {
   Braces,
   CircleDot,
   Database,
+  Download,
   Eye,
   Folder,
   FolderOpen,
@@ -30,6 +31,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { buildRedisTree, type RedisTreeNode } from '@/lib/redisTree'
+import { collectNodeIds, exportFileName, formatIdList } from '@/lib/redisKeyExport'
+import { downloadTextFile } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import { normalizeVisibleSchemasSelection } from '@/lib/objectTreeVisibleSchemas'
 import { getObjectTypeLabel } from '@/lib/objectTypes'
@@ -196,6 +199,29 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
   const [createTableSchema, setCreateTableSchema] = useState<string | null>(null)
   const [isCreatingTable, setIsCreatingTable] = useState(false)
   const [topicSearch, setTopicSearch] = useState('')
+  // Exports what the tree is showing, with no request at all: these keys are
+  // already here, and the scan that would re-find them walks the whole keyspace
+  // because Redis has no index by prefix. Nothing to make concurrent, and
+  // nothing to wait for.
+  const exportNamespace = (node: RedisTreeNode) => {
+    const separator = currentConnection?.redis_config?.separator || ':'
+    const ids = collectNodeIds(node, node.path, separator)
+    const name = exportFileName(node.path)
+    downloadTextFile(name, 'application/json', formatIdList(ids))
+
+    // The tree holds a page of the keyspace, not all of it. Saying so turns a
+    // short list from a wrong answer into a known one — and names the control
+    // that makes it longer.
+    const partial = Boolean(treeCursors[rootKey])
+    pushToast({
+      tone: 'success',
+      title: 'Keys exported',
+      message: partial
+        ? `${name} — ${ids.length.toLocaleString()} ids loaded so far. “Scan more keys” finds the rest.`
+        : `${name} — ${ids.length.toLocaleString()} ids`,
+    })
+  }
+
 
   useEffect(() => {
     void fetchTree(connId)
@@ -509,17 +535,34 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
 
     return (
       <div key={`namespace:${node.path}`}>
-        <button
-          type="button"
-          onClick={() => toggleSchema(connId, node.path)}
-          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
-        >
-          {getIcon('namespace', expanded)}
-          <span className="truncate">{node.name}</span>
-          <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
-            {formatCount(node.keyCount)} keys
-          </span>
-        </button>
+        <div className="group/ns flex items-center gap-1 rounded hover:bg-muted">
+          <button
+            type="button"
+            onClick={() => toggleSchema(connId, node.path)}
+            className="flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-sm"
+          >
+            {getIcon('namespace', expanded)}
+            <span className="truncate">{node.name}</span>
+            <span className="ml-auto shrink-0 rounded-sm border border-red-500/20 bg-red-500/5 px-1.5 py-0.5 text-[10px] font-mono uppercase tracking-[0.12em] text-red-500">
+              {formatCount(node.keyCount)} keys
+            </span>
+          </button>
+          {/* Sample data is the point: a thousand ids copied out of the tree by
+              hand is the job this replaces. Shown on hover so the row still
+              reads as a folder. */}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation()
+              exportNamespace(node)
+            }}
+            title={`Save every id under ${node.path} as ${exportFileName(node.path)}`}
+            aria-label={`Export ${node.path} keys as JSON`}
+            className="mr-1 shrink-0 rounded p-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover/ns:opacity-100"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </div>
         {expanded && (
           <div className="ml-4 border-l border-border pl-1">
             {node.namespaces.map(renderRedisNamespaceNode)}
