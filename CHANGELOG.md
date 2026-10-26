@@ -3,6 +3,51 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## Unreleased
+
+### Navigation
+
+- ⌘K (Ctrl K elsewhere) jumps to any connection, table, view or topic from any
+  page. Typing `ord` lists `public.orders` on every Postgres it is known on, and
+  a second word narrows by connection: `orders stage`. It searches only what the
+  browser already holds — connection names and the trees opened so far — so
+  opening it never sends a query anywhere, production included.
+- Redis namespaces are remembered from every tree you have opened, so `nms`
+  finds `nms:*` on each connection that has it, even straight after a reload,
+  and opens that connection already filtered. Keys themselves are never
+  searched from here: Redis has no prefix index, and finding `nms:*` by SCAN
+  means walking the whole keyspace.
+- A `Go to… ⌘K` button sits in the header and the sidebar. Nobody discovers a
+  shortcut they were never shown, so the button carries the hint, and the
+  palette explains in one line what it can and cannot find.
+
+### Connections
+
+- The list can be searched by name, filtered by tag and grouped by tag. A tag
+  click works like a label in Gmail: it shows only that tag, clicking it again
+  shows everything, and ⌘/Shift-click adds a tag to the selection.
+
+### PostgreSQL
+
+- `DDL → Show DDL` prints the statement that recreates a table, view or
+  materialized view: columns with defaults, identity and generated columns,
+  primary, foreign, unique, check and exclusion constraints, indexes and the
+  partition key. Every name comes out schema-qualified, as `pg_dump` writes it,
+  so the statement means the same thing wherever it is pasted, and a `serial`
+  column is printed as `serial` instead of a `nextval()` default pointing at a
+  sequence the output never creates. Triggers, grants and comments are not
+  included.
+
+### Kafka
+
+- A consumer group's offsets can be reset on a topic — to the earliest
+  retained message, to the end, or to the first message at or after a moment
+  in time. The dialog says what that means in messages before anything is
+  sent: "the group will re-read 1 200 messages", "the group will skip 6 unread
+  messages". A group with live consumers is refused up front, naming how many
+  are still attached, since Kafka only accepts the reset on an empty group. On
+  a connection tagged `production` the group's name has to be typed to confirm.
+
 ## v0.10.0 — 2026-10-16
 
 ### Kafka
