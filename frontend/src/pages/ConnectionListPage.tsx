@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
 import { Layers, Plus, Search, Settings, Sun, Moon, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { CommandPaletteTrigger } from '@/components/CommandPaletteTrigger'
 import { ConnectionTypeTabs, type ConnectionTypeFilter } from '@/components/ConnectionTypeTabs'
 import {
   collectTags,
@@ -214,6 +215,7 @@ export default function ConnectionListPage() {
           </div>
 
           <div className="flex items-center gap-2 animate-fade-in-up" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
+            <CommandPaletteTrigger />
             <button
               onClick={() => navigate('/settings')}
               className={cn(
