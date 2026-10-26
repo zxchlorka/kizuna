@@ -114,6 +114,20 @@ export interface KafkaProduceResult {
   partitions?: Record<string, number>
 }
 
+export type KafkaOffsetResetMode = 'earliest' | 'latest' | 'timestamp'
+
+export interface KafkaOffsetResetRequest {
+  group: string
+  topic: string
+  mode: KafkaOffsetResetMode
+  // Unix ms, only for mode 'timestamp'.
+  timestamp?: number
+}
+
+export interface KafkaOffsetResetResult {
+  partitions: { partition: number; offset: number }[]
+}
+
 export interface KafkaConnectionInput {
   name: string
   type: 'kafka'

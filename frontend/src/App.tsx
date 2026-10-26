@@ -3,6 +3,7 @@ import { Routes, Route } from 'react-router-dom'
 import ConnectionListPage from '@/pages/ConnectionListPage'
 import DataViewPage from '@/pages/DataViewPage'
 import SettingsPage from '@/pages/SettingsPage'
+import { CommandPalette } from '@/components/CommandPalette'
 import { ToastViewport } from '@/components/ToastViewport'
 import { restoreWorkspace, syncWorkspaceWithConnections } from '@/lib/workspacePersistence'
 import { useConnectionStore } from '@/stores/connections'
@@ -39,6 +40,7 @@ export default function App() {
         <Route path="/settings" element={<SettingsPage />} />
         <Route path="/connections/:id" element={<DataViewPage />} />
       </Routes>
+      <CommandPalette />
       <ToastViewport />
     </>
   )

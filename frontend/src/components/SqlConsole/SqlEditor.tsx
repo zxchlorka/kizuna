@@ -123,7 +123,7 @@ function toggleLineComments(view: EditorView): boolean {
   return true
 }
 
-function buildTheme(dark: boolean): Extension {
+export function buildTheme(dark: boolean): Extension {
   return EditorView.theme(
     {
       '&': {

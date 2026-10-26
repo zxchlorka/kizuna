@@ -1,7 +1,14 @@
 import { create } from 'zustand'
 import { fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
 import { fieldPresence, matchField, matchFieldContains } from '@/lib/jsonPaths'
-import type { ColumnMeta, KafkaProduceRequest, KafkaProduceResult, ObjectItem } from '@/types/api'
+import type {
+  ColumnMeta,
+  KafkaOffsetResetRequest,
+  KafkaOffsetResetResult,
+  KafkaProduceRequest,
+  KafkaProduceResult,
+  ObjectItem,
+} from '@/types/api'
 
 export interface KafkaMessageRow {
   partition: number
@@ -238,6 +245,7 @@ interface KafkaStore {
   cancelScan: (tabId: string) => void
   clearSearch: (connId: string, topic: string, tabId: string) => Promise<void>
   produce: (connId: string, request: KafkaProduceRequest) => Promise<KafkaProduceResult>
+  resetGroupOffsets: (connId: string, request: KafkaOffsetResetRequest) => Promise<KafkaOffsetResetResult>
 }
 
 function defaultTabState(): KafkaTopicTabState {
@@ -1204,6 +1212,20 @@ export const useKafkaStore = create<KafkaStore>((set, get) => {
       )
       await throwOnApiError(res)
       return (await res.json()) as KafkaProduceResult
+    },
+
+    resetGroupOffsets: async (connId, request) => {
+      const res = await fetchWithTimeout(
+        `/api/connections/${connId}/consumer-groups/reset`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(request),
+        },
+        30000
+      )
+      await throwOnApiError(res)
+      return (await res.json()) as KafkaOffsetResetResult
     },
   }
 })

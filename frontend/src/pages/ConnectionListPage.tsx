@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
-import { Plus, Sun, Moon, Settings } from 'lucide-react'
+import { Layers, Plus, Search, Settings, Sun, Moon, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { CommandPaletteTrigger } from '@/components/CommandPaletteTrigger'
 import { ConnectionTypeTabs, type ConnectionTypeFilter } from '@/components/ConnectionTypeTabs'
+import {
+  collectTags,
+  filterConnectionsByName,
+  filterConnectionsByTags,
+  groupConnectionsByTag,
+  nextTagSelection,
+} from '@/lib/connectionGroups'
+import { getConnectionTagClass } from '@/lib/connectionTags'
 import { deleteConnectionEverywhere } from '@/lib/connectionDeletion'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
@@ -13,6 +22,16 @@ import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import type { Connection } from '@/types/api'
 import { HEALTH_POLL_MS, useConnectionHealthStore } from '@/stores/connectionHealth'
+
+const GROUP_BY_TAG_KEY = 'kizuna:connections:groupByTag'
+
+function readGroupByTag() {
+  try {
+    return localStorage.getItem(GROUP_BY_TAG_KEY) === '1'
+  } catch {
+    return false
+  }
+}
 
 export default function ConnectionListPage() {
   const navigate = useNavigate()
@@ -36,10 +55,39 @@ export default function ConnectionListPage() {
     kafka: connections.filter((connection) => connection.type === 'kafka').length,
   }
 
-  const visibleConnections =
+  const [query, setQuery] = useState('')
+  const [groupByTag, setGroupByTag] = useState(readGroupByTag)
+
+  const typeFiltered =
     selectedType === 'all'
       ? connections
       : connections.filter((connection) => connection.type === selectedType)
+  const [selectedTags, setSelectedTags] = useState<ReadonlySet<string>>(new Set())
+  const tagOptions = useMemo(() => collectTags(typeFiltered), [typeFiltered])
+  // Drop selections whose tag vanished (type tab switched, connection retagged),
+  // otherwise the list goes empty with no chip left to turn the filter off.
+  const activeTags = useMemo(
+    () => new Set([...selectedTags].filter((key) => tagOptions.some((t) => t.key === key))),
+    [selectedTags, tagOptions]
+  )
+  const visibleConnections = filterConnectionsByTags(filterConnectionsByName(typeFiltered, query), activeTags)
+  const groups = useMemo(
+    () => (groupByTag ? groupConnectionsByTag(visibleConnections, activeTags) : []),
+    [groupByTag, visibleConnections, activeTags]
+  )
+
+  const selectTag = (key: string, e: React.MouseEvent) =>
+    setSelectedTags(nextTagSelection(activeTags, key, e.metaKey || e.ctrlKey || e.shiftKey))
+
+  const toggleGroupByTag = () => {
+    const next = !groupByTag
+    setGroupByTag(next)
+    try {
+      localStorage.setItem(GROUP_BY_TAG_KEY, next ? '1' : '0')
+    } catch {
+      // Private mode or blocked storage: the toggle still works for this visit.
+    }
+  }
 
   useEffect(() => {
     hydrateHealth()
@@ -167,6 +215,7 @@ export default function ConnectionListPage() {
           </div>
 
           <div className="flex items-center gap-2 animate-fade-in-up" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
+            <CommandPaletteTrigger />
             <button
               onClick={() => navigate('/settings')}
               className={cn(
@@ -230,27 +279,146 @@ export default function ConnectionListPage() {
                 <ConnectionTypeTabs value={selectedType} counts={counts} onChange={handleTypeChange} />
               </div>
 
-              <button
-                onClick={openCreate}
-                className={cn(
-                  'group flex items-center gap-1.5 self-start rounded-sm border border-amber-500/40 bg-amber-500/8 px-3 py-1.5 font-mono text-xs font-medium text-amber-500',
-                  'transition-all duration-200 hover:border-amber-500/70 hover:bg-amber-500/15 md:self-auto'
-                )}
-              >
-                <Plus className="h-3 w-3 transition-transform duration-200 group-hover:rotate-90" />
-                New
-              </button>
+              <div className="flex items-center gap-2 self-start md:self-auto">
+                <div className="relative">
+                  <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3 w-3 -translate-y-1/2 text-muted-foreground" />
+                  <input
+                    type="text"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Escape' && setQuery('')}
+                    placeholder="Search by name"
+                    aria-label="Search connections by name"
+                    className={cn(
+                      'h-8 w-52 rounded-sm border border-border bg-card/60 pl-8 pr-7 font-mono text-xs',
+                      'placeholder:text-muted-foreground/60 focus-visible:border-amber-500/50 focus-visible:outline-none'
+                    )}
+                  />
+                  {query && (
+                    <button
+                      type="button"
+                      onClick={() => setQuery('')}
+                      aria-label="Clear search"
+                      className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-sm p-0.5 text-muted-foreground hover:text-foreground"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleGroupByTag}
+                  aria-pressed={groupByTag}
+                  className={cn(
+                    'flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-xs transition-all duration-200',
+                    groupByTag
+                      ? 'border-amber-500/45 bg-amber-500/10 text-amber-500'
+                      : 'border-border text-muted-foreground hover:border-amber-500/40 hover:text-foreground'
+                  )}
+                >
+                  <Layers className="h-3 w-3" />
+                  Group by tag
+                </button>
+                <button
+                  onClick={openCreate}
+                  className={cn(
+                    'group flex h-8 items-center gap-1.5 rounded-sm border border-amber-500/40 bg-amber-500/8 px-3 font-mono text-xs font-medium text-amber-500',
+                    'transition-all duration-200 hover:border-amber-500/70 hover:bg-amber-500/15'
+                  )}
+                >
+                  <Plus className="h-3 w-3 transition-transform duration-200 group-hover:rotate-90" />
+                  New
+                </button>
+              </div>
             </div>
+
+            {tagOptions.length > 0 && (
+              <div className="mb-6 flex flex-wrap items-center gap-1.5" role="group" aria-label="Filter by tag">
+                {tagOptions.map((tag) => {
+                  const active = activeTags.has(tag.key)
+                  return (
+                    <button
+                      key={tag.key}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={(e) => selectTag(tag.key, e)}
+                      title="Click to show only this tag, ⌘/Shift-click to add it"
+                      className={cn(
+                        'flex items-center gap-1.5 rounded-sm border px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] transition-all duration-200',
+                        active || activeTags.size === 0
+                          ? getConnectionTagClass(tag.label)
+                          : 'border-border/60 bg-transparent text-muted-foreground opacity-60 hover:opacity-100',
+                        active && 'ring-1 ring-amber-500/60'
+                      )}
+                    >
+                      {tag.label}
+                      <span className="tabular-nums opacity-70">{tag.count}</span>
+                    </button>
+                  )
+                })}
+                {activeTags.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setSelectedTags(new Set())}
+                    className="ml-1 font-mono text-[10px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
 
             {visibleConnections.length === 0 ? (
               <div className="animate-fade-in-up py-10" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
-                <EmptyState
-                  variant="no_results"
-                  title={`No ${selectedType} connections`}
-                  description={`There are no ${selectedType} connections in this workspace yet. Switch back to all connections or create a new one.`}
-                  actionLabel={selectedType === 'all' ? 'New Connection' : 'Show All'}
-                  onAction={selectedType === 'all' ? openCreate : () => handleTypeChange('all')}
-                />
+                {query.trim() ? (
+                  <EmptyState
+                    variant="no_results"
+                    title={`No connections match "${query.trim()}"`}
+                    description="Check the spelling or clear the search to see every connection."
+                    actionLabel="Clear search"
+                    onAction={() => setQuery('')}
+                  />
+                ) : (
+                  <EmptyState
+                    variant="no_results"
+                    title={`No ${selectedType} connections`}
+                    description={`There are no ${selectedType} connections in this workspace yet. Switch back to all connections or create a new one.`}
+                    actionLabel={selectedType === 'all' ? 'New Connection' : 'Show All'}
+                    onAction={selectedType === 'all' ? openCreate : () => handleTypeChange('all')}
+                  />
+                )}
+              </div>
+            ) : groupByTag ? (
+              <div className="space-y-8">
+                {groups.map((group) => (
+                  <section key={group.key || 'untagged'} aria-label={group.label || 'No tag'}>
+                    <div className="mb-3 flex items-center gap-3">
+                      {group.label ? (
+                        <span
+                          className={cn(
+                            'rounded-sm border px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]',
+                            getConnectionTagClass(group.label)
+                          )}
+                        >
+                          {group.label}
+                        </span>
+                      ) : (
+                        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
+                          No tag
+                        </span>
+                      )}
+                      <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
+                        {group.connections.length}
+                      </span>
+                      <div className="h-px flex-1 bg-border/60" />
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {group.connections.map((conn) => (
+                        <ConnectionCard key={conn.id} connection={conn} onDelete={deleteConnectionEverywhere} onEdit={openEdit} />
+                      ))}
+                    </div>
+                  </section>
+                ))}
               </div>
             ) : (
               <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">

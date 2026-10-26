@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowLeft, Eye, Lock, PanelLeftClose, PanelLeft, Plus, RefreshCw, Settings, SlidersHorizontal, Table2, Zap } from 'lucide-react'
+import { CommandPaletteTrigger } from '@/components/CommandPaletteTrigger'
 import { CreateKeyDialog } from '@/components/redis/CreateKeyDialog'
 import { BulkActions } from '@/components/redis/BulkActions'
 import type { CreateEntry } from '@/components/redis/CreateKeyDialog'
@@ -198,6 +199,7 @@ export function Sidebar({ connId }: SidebarProps) {
             >
               <Settings className="h-4 w-4" />
             </button>
+            <CommandPaletteTrigger compact />
           </div>
         )}
         <button

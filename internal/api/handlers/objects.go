@@ -94,6 +94,37 @@ func (h *ObjectsHandler) GetSchema(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, schema)
 }
 
+// GetDDL returns the CREATE statement for a table or view.
+func (h *ObjectsHandler) GetDDL(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	name, err := url.PathUnescape(chi.URLParam(r, "name"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid object name")
+		return
+	}
+
+	c, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	provider, ok := c.(connector.DDLSourceProvider)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "DDL is not available for this connection")
+		return
+	}
+
+	ddl, err := provider.ObjectDDL(r.Context(), name)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"ddl": ddl})
+}
+
 func (h *ObjectsHandler) GetObjectInfo(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	name, err := url.PathUnescape(chi.URLParam(r, "name"))

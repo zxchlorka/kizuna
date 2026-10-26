@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Layers, Lock, MessagesSquare, RefreshCw, Send, SlidersHorizontal, Users } from 'lucide-react'
 import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
+import { KafkaResetOffsetsDialog } from '@/components/kafka/KafkaResetOffsetsDialog'
 import { KafkaTopicConfig } from '@/components/kafka/KafkaTopicConfig'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
 import { KafkaPartitionsTable } from '@/components/kafka/KafkaPartitionsTable'
@@ -16,7 +17,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
 import type { KafkaMessageRow } from '@/stores/kafka'
-import type { LinkRecord } from '@/types/api'
+import type { LinkRecord, ObjectItem } from '@/types/api'
 
 interface KafkaTopicViewProps {
   tabId: string
@@ -43,6 +44,10 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const readOnly = useConnectionStore(
     (state) => state.connections.find((connection) => connection.id === connId)?.read_only ?? false
   )
+  const production = useConnectionStore(
+    (state) => state.connections.find((connection) => connection.id === connId)?.tags?.includes('production') ?? false
+  )
+  const [resetGroup, setResetGroup] = useState<ObjectItem | null>(null)
   const tab = useKafkaStore((state) => state.tabs[tabId])
   const columns = useKafkaStore((state) => state.columnsByTopic[topicColumnsKey(connId, topic)] ?? EMPTY_COLUMNS)
   const addColumn = useKafkaStore((state) => state.addColumn)
@@ -319,8 +324,18 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
           (tab?.childrenLoading && groups.length === 0 ? (
             <LoadingSkeleton variant="table" />
           ) : (
-            <KafkaConsumerGroups groups={groups} />
+            <KafkaConsumerGroups groups={groups} onReset={readOnly ? undefined : setResetGroup} />
           ))}
+
+        <KafkaResetOffsetsDialog
+          connId={connId}
+          topic={topic}
+          group={resetGroup}
+          partitions={partitions}
+          production={production}
+          onOpenChange={(open) => !open && setResetGroup(null)}
+          onReset={() => void fetchTopicChildren(connId, topic, tabId)}
+        />
 
         {activeTab === 'config' && <KafkaTopicConfig connId={connId} topic={topic} />}
       </div>
