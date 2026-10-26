@@ -44,16 +44,18 @@ func TestObjectDDLIntegration(t *testing.T) {
 
 	exec(`CREATE TABLE ` + schema + `.accounts (id bigint PRIMARY KEY)`)
 	exec(`CREATE TABLE ` + schema + `."Order Items" (
-		id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+		id bigint GENERATED ALWAYS AS IDENTITY (START WITH 100 INCREMENT BY 10) PRIMARY KEY,
 		account_id bigint NOT NULL REFERENCES ` + schema + `.accounts(id),
 		qty int NOT NULL DEFAULT 1 CHECK (qty > 0),
 		price numeric(10,2),
 		total numeric GENERATED ALWAYS AS (qty * price) STORED,
 		sku text UNIQUE,
-		line_no serial
-	)`)
+		line_no serial,
+		code text COLLATE "C"
+	) WITH (fillfactor=70)`)
+	exec(`ALTER SEQUENCE ` + schema + `."Order Items_line_no_seq" START WITH 7 RESTART`)
 	exec(`CREATE INDEX order_items_account_idx ON ` + schema + `."Order Items" (account_id) WHERE qty > 1`)
-	exec(`CREATE VIEW ` + schema + `.big_orders AS SELECT id, qty FROM ` + schema + `."Order Items" WHERE qty > 10`)
+	exec(`CREATE VIEW ` + schema + `.big_orders WITH (security_invoker=true) AS SELECT id, qty FROM ` + schema + `."Order Items" WHERE qty > 10 WITH CASCADED CHECK OPTION`)
 	exec(`CREATE TABLE ` + schema + `.events (at date NOT NULL) PARTITION BY RANGE (at)`)
 
 	tests := []struct {
@@ -62,7 +64,10 @@ func TestObjectDDLIntegration(t *testing.T) {
 	}{
 		{schema + ".Order Items", []string{
 			`CREATE TABLE ` + schema + `."Order Items" (`,
-			`bigint GENERATED ALWAYS AS IDENTITY NOT NULL`,
+			`bigint GENERATED ALWAYS AS IDENTITY (START WITH 100 INCREMENT BY 10) NOT NULL`,
+			`text COLLATE pg_catalog."C"`,
+			`) WITH (fillfactor=70);`,
+			`ALTER SEQUENCE ` + schema + `."Order Items_line_no_seq" START WITH 7 RESTART;`,
 			`integer DEFAULT 1 NOT NULL`,
 			`numeric(10,2),`,
 			`GENERATED ALWAYS AS (((qty)::numeric * price)) STORED`,
@@ -73,7 +78,7 @@ func TestObjectDDLIntegration(t *testing.T) {
 			`line_no    serial NOT NULL`,
 			`CREATE INDEX order_items_account_idx ON ` + schema + `."Order Items" USING btree (account_id) WHERE (qty > 1);`,
 		}},
-		{schema + ".big_orders", []string{`CREATE VIEW ` + schema + `.big_orders AS`, `WHERE qty > 10;`}},
+		{schema + ".big_orders", []string{`CREATE VIEW ` + schema + `.big_orders WITH (`, `security_invoker=true`, `check_option=cascaded`, `) AS`, `WHERE qty > 10;`}},
 		{schema + ".events", []string{`) PARTITION BY RANGE (at);`}},
 	}
 	for _, tt := range tests {
@@ -97,14 +102,47 @@ func TestObjectDDLIntegration(t *testing.T) {
 		}
 	})
 
-	// The point of the feature: what it prints recreates the table.
-	t.Run("output replays into an empty schema", func(t *testing.T) {
-		ddl, _ := p.ObjectDDL(ctx, schema+".Order Items")
+	// The point of the feature: what it prints recreates the objects, and they
+	// behave like the originals — not merely parse.
+	t.Run("output replays into an empty schema and behaves the same", func(t *testing.T) {
 		replica := schema + "_replica"
 		exec(`CREATE SCHEMA ` + replica)
 		t.Cleanup(func() { _, _ = p.pool.Exec(context.Background(), `DROP SCHEMA `+replica+` CASCADE`) })
 		exec(`CREATE TABLE ` + replica + `.accounts (id bigint PRIMARY KEY)`)
-		exec(strings.ReplaceAll(ddl, schema+".", replica+"."))
+		for _, object := range []string{".Order Items", ".big_orders"} {
+			ddl, err := p.ObjectDDL(ctx, schema+object)
+			if err != nil {
+				t.Fatalf("ObjectDDL: %v", err)
+			}
+			exec(strings.ReplaceAll(ddl, schema+".", replica+"."))
+		}
+
+		var id, lineNo int64
+		var collation, tableOptions, viewOptions string
+		exec(`INSERT INTO ` + replica + `.accounts VALUES (1)`)
+		if err := p.pool.QueryRow(ctx, `INSERT INTO `+replica+`."Order Items" (account_id) VALUES (1) RETURNING id, line_no`).Scan(&id, &lineNo); err != nil {
+			t.Fatalf("insert into replica: %v", err)
+		}
+		if err := p.pool.QueryRow(ctx, `SELECT co.collname,
+				array_to_string((SELECT reloptions FROM pg_class WHERE oid = $1::regclass), ','),
+				array_to_string((SELECT reloptions FROM pg_class WHERE oid = $2::regclass), ',')
+			FROM pg_attribute a JOIN pg_collation co ON co.oid = a.attcollation
+			WHERE a.attrelid = $1::regclass AND a.attname = 'code'`,
+			replica+`."Order Items"`, replica+`.big_orders`).Scan(&collation, &tableOptions, &viewOptions); err != nil {
+			t.Fatalf("read replica catalog: %v", err)
+		}
+		if id != 100 || lineNo != 7 {
+			t.Errorf("first row got id=%d line_no=%d, want 100 and 7 as in the original sequences", id, lineNo)
+		}
+		if collation != "C" {
+			t.Errorf("code collation = %q, want C", collation)
+		}
+		if tableOptions != "fillfactor=70" {
+			t.Errorf("table reloptions = %q", tableOptions)
+		}
+		if !strings.Contains(viewOptions, "security_invoker=true") || !strings.Contains(viewOptions, "check_option=cascaded") {
+			t.Errorf("view reloptions = %q", viewOptions)
+		}
 	})
 
 	t.Run("unknown object", func(t *testing.T) {

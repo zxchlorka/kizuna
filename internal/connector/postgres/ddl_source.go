@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -43,19 +44,28 @@ func (p *PostgresConnector) ObjectDDL(ctx context.Context, object string) (strin
 		oid       uint32
 		kind      string
 		qualified string
+		options   *string
 	)
 	err = tx.QueryRow(ctx,
-		`SELECT c.oid, c.relkind::text, format('%I.%I', n.nspname, c.relname)
+		`SELECT c.oid, c.relkind::text, format('%I.%I', n.nspname, c.relname), array_to_string(c.reloptions, ', ')
 		FROM pg_class c
 		JOIN pg_namespace n ON n.oid = c.relnamespace
 		WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind IN ('r', 'p', 'v', 'm')`,
 		schema, name,
-	).Scan(&oid, &kind, &qualified)
+	).Scan(&oid, &kind, &qualified, &options)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return "", fmt.Errorf("%w: table or view %q not found", connector.ErrRelationNotFound, object)
 		}
 		return "", normalizePostgresError(fmt.Errorf("failed to look up object: %w", err))
+	}
+
+	// Storage parameters, and for views security_invoker, security_barrier and
+	// check_option: dropping those turns an invoker-rights view into one that
+	// reads with its owner's rights.
+	with := ""
+	if options != nil && *options != "" {
+		with = " WITH (" + *options + ")"
 	}
 
 	var b strings.Builder
@@ -69,9 +79,9 @@ func (p *PostgresConnector) ObjectDDL(ctx context.Context, object string) (strin
 		if kind == "m" {
 			keyword = "MATERIALIZED VIEW"
 		}
-		fmt.Fprintf(&b, "CREATE %s %s AS\n%s\n", keyword, qualified, strings.TrimRight(strings.TrimSpace(body), ";")+";")
+		fmt.Fprintf(&b, "CREATE %s %s%s AS\n%s\n", keyword, qualified, with, strings.TrimRight(strings.TrimSpace(body), ";")+";")
 	default:
-		if err := writeTableDDL(ctx, tx, &b, oid, qualified, kind == "p"); err != nil {
+		if err := writeTableDDL(ctx, tx, &b, oid, qualified, kind == "p", with); err != nil {
 			return "", err
 		}
 	}
@@ -84,16 +94,33 @@ func (p *PostgresConnector) ObjectDDL(ctx context.Context, object string) (strin
 	return b.String(), nil
 }
 
-func writeTableDDL(ctx context.Context, tx pgx.Tx, b *strings.Builder, oid uint32, qualified string, partitioned bool) error {
+func writeTableDDL(ctx context.Context, tx pgx.Tx, b *strings.Builder, oid uint32, qualified string, partitioned bool, with string) error {
 	rows, err := tx.Query(ctx,
 		`SELECT format('%I', a.attname), format_type(a.atttypid, a.atttypmod), a.attnotnull,
 			a.attidentity::text, a.attgenerated::text, pg_get_expr(d.adbin, d.adrelid),
-			pg_get_serial_sequence($2, a.attname) IS NOT NULL
+			CASE WHEN a.attcollation <> 0 AND a.attcollation <> t.typcollation
+				THEN format('%I.%I', cn.nspname, co.collname) END,
+			seq.name, seq.typ, seq.seqstart, seq.seqincrement, seq.seqmin, seq.seqmax, seq.seqcache, seq.seqcycle
 		FROM pg_attribute a
+		JOIN pg_type t ON t.oid = a.atttypid
+		LEFT JOIN pg_collation co ON co.oid = a.attcollation
+		LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
 		LEFT JOIN pg_attrdef d ON d.adrelid = a.attrelid AND d.adnum = a.attnum
+		-- The sequence behind an identity (deptype i) or serial (deptype a) column.
+		LEFT JOIN LATERAL (
+			SELECT format('%I.%I', sn.nspname, sc.relname) AS name, format_type(s.seqtypid, NULL) AS typ,
+				s.seqstart, s.seqincrement, s.seqmin, s.seqmax, s.seqcache, s.seqcycle
+			FROM pg_depend dep
+			JOIN pg_class sc ON sc.oid = dep.objid AND sc.relkind = 'S'
+			JOIN pg_namespace sn ON sn.oid = sc.relnamespace
+			JOIN pg_sequence s ON s.seqrelid = sc.oid
+			WHERE dep.classid = 'pg_class'::regclass AND dep.refclassid = 'pg_class'::regclass
+			  AND dep.refobjid = a.attrelid AND dep.refobjsubid = a.attnum AND dep.deptype IN ('a', 'i')
+			LIMIT 1
+		) seq ON TRUE
 		WHERE a.attrelid = $1 AND a.attnum > 0 AND NOT a.attisdropped
 		ORDER BY a.attnum`,
-		oid, qualified,
+		oid,
 	)
 	if err != nil {
 		return normalizePostgresError(fmt.Errorf("failed to read columns: %w", err))
@@ -102,30 +129,50 @@ func writeTableDDL(ctx context.Context, tx pgx.Tx, b *strings.Builder, oid uint3
 		name, rest string
 	}
 	var columns []column
+	var sequenceFixups []string
 	width := 0
 	for rows.Next() {
 		var (
 			name, typ           string
 			notNull             bool
 			identity, generated string
-			expr                *string
-			ownsSequence        bool
+			expr, collation     *string
+			seqName, seqType    *string
+			seq                 sequenceParams
 		)
-		if err := rows.Scan(&name, &typ, &notNull, &identity, &generated, &expr, &ownsSequence); err != nil {
+		if err := rows.Scan(&name, &typ, &notNull, &identity, &generated, &expr, &collation,
+			&seqName, &seqType, &seq.start, &seq.increment, &seq.min, &seq.max, &seq.cache, &seq.cycle); err != nil {
 			rows.Close()
 			return normalizePostgresError(fmt.Errorf("failed to read columns: %w", err))
 		}
 		// A serial column's sequence is not printed, so its nextval() default
 		// would not replay; the serial pseudo-type recreates both.
 		serial := map[string]string{"smallint": "smallserial", "integer": "serial", "bigint": "bigserial"}[typ]
+		seqOptions := ""
+		if seqName != nil && seqType != nil {
+			seqOptions = seq.nonDefault(*seqType)
+		}
 		rest := typ
+		if collation != nil {
+			rest += " COLLATE " + *collation
+		}
 		switch {
-		case ownsSequence && identity == "" && serial != "" && expr != nil && strings.HasPrefix(*expr, "nextval("):
+		case seqName != nil && identity == "" && serial != "" && expr != nil && strings.HasPrefix(*expr, "nextval("):
 			rest = serial
-		case identity == "a":
-			rest += " GENERATED ALWAYS AS IDENTITY"
-		case identity == "d":
-			rest += " GENERATED BY DEFAULT AS IDENTITY"
+			// serial has no clause for sequence options, so they follow the
+			// table; RESTART makes a changed START WITH take effect at once.
+			if seqOptions != "" {
+				fixup := "ALTER SEQUENCE " + *seqName + " " + seqOptions
+				if strings.HasPrefix(seqOptions, "START WITH") {
+					fixup += " RESTART"
+				}
+				sequenceFixups = append(sequenceFixups, fixup+";")
+			}
+		case identity == "a" || identity == "d":
+			rest += map[string]string{"a": " GENERATED ALWAYS AS IDENTITY", "d": " GENERATED BY DEFAULT AS IDENTITY"}[identity]
+			if seqOptions != "" {
+				rest += " (" + seqOptions + ")"
+			}
 		case generated == "s" && expr != nil:
 			rest += " GENERATED ALWAYS AS (" + *expr + ") STORED"
 		case generated == "v" && expr != nil:
@@ -183,8 +230,54 @@ func writeTableDDL(ctx context.Context, tx pgx.Tx, b *strings.Builder, oid uint3
 		}
 		b.WriteString(" PARTITION BY " + key)
 	}
-	b.WriteString(";\n")
+	b.WriteString(with + ";\n")
+	for _, fixup := range sequenceFixups {
+		b.WriteString(fixup + "\n")
+	}
 	return nil
+}
+
+type sequenceParams struct {
+	start, increment, min, max, cache *int64
+	cycle                             *bool
+}
+
+// nonDefault spells out the sequence options that differ from what CREATE
+// SEQUENCE ... AS typ would pick by itself, so a plain identity column stays
+// a plain "AS IDENTITY" and a customised one keeps its START WITH 100.
+func (s sequenceParams) nonDefault(typ string) string {
+	if s.start == nil || s.increment == nil || s.min == nil || s.max == nil || s.cache == nil || s.cycle == nil {
+		return ""
+	}
+	typMax := map[string]int64{"smallint": math.MaxInt16, "integer": math.MaxInt32}[typ]
+	if typMax == 0 {
+		typMax = math.MaxInt64
+	}
+	defMin, defMax, defStart := int64(1), typMax, *s.min
+	if *s.increment < 0 {
+		defMin, defMax, defStart = -typMax-1, -1, *s.max
+	}
+
+	var parts []string
+	if *s.start != defStart {
+		parts = append(parts, fmt.Sprintf("START WITH %d", *s.start))
+	}
+	if *s.increment != 1 {
+		parts = append(parts, fmt.Sprintf("INCREMENT BY %d", *s.increment))
+	}
+	if *s.min != defMin {
+		parts = append(parts, fmt.Sprintf("MINVALUE %d", *s.min))
+	}
+	if *s.max != defMax {
+		parts = append(parts, fmt.Sprintf("MAXVALUE %d", *s.max))
+	}
+	if *s.cache != 1 {
+		parts = append(parts, fmt.Sprintf("CACHE %d", *s.cache))
+	}
+	if *s.cycle {
+		parts = append(parts, "CYCLE")
+	}
+	return strings.Join(parts, " ")
 }
 
 // writeIndexDDL appends indexes that are not already spelled out as a
