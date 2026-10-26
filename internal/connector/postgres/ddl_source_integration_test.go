@@ -51,9 +51,14 @@ func TestObjectDDLIntegration(t *testing.T) {
 		total numeric GENERATED ALWAYS AS (qty * price) STORED,
 		sku text UNIQUE,
 		line_no serial,
+		batch serial,
+		plain_no serial,
 		code text COLLATE "C"
 	) WITH (fillfactor=70)`)
 	exec(`ALTER SEQUENCE ` + schema + `."Order Items_line_no_seq" START WITH 7 RESTART`)
+	// Renamed, and a raised minimum that only works together with its start.
+	exec(`ALTER SEQUENCE ` + schema + `."Order Items_batch_seq" RENAME TO batch_counter`)
+	exec(`ALTER SEQUENCE ` + schema + `.batch_counter START WITH 50 MINVALUE 50 RESTART`)
 	exec(`CREATE INDEX order_items_account_idx ON ` + schema + `."Order Items" (account_id) WHERE qty > 1`)
 	exec(`CREATE VIEW ` + schema + `.big_orders WITH (security_invoker=true) AS SELECT id, qty FROM ` + schema + `."Order Items" WHERE qty > 10 WITH CASCADED CHECK OPTION`)
 	exec(`CREATE TABLE ` + schema + `.events (at date NOT NULL) PARTITION BY RANGE (at)`)
@@ -67,7 +72,12 @@ func TestObjectDDLIntegration(t *testing.T) {
 			`bigint GENERATED ALWAYS AS IDENTITY (START WITH 100 INCREMENT BY 10) NOT NULL`,
 			`text COLLATE pg_catalog."C"`,
 			`) WITH (fillfactor=70);`,
-			`ALTER SEQUENCE ` + schema + `."Order Items_line_no_seq" START WITH 7 RESTART;`,
+			`CREATE SEQUENCE ` + schema + `."Order Items_line_no_seq" AS integer START WITH 7;`,
+			`line_no    integer DEFAULT nextval('` + schema + `."Order Items_line_no_seq"'::regclass) NOT NULL`,
+			`ALTER SEQUENCE ` + schema + `."Order Items_line_no_seq" OWNED BY ` + schema + `."Order Items".line_no;`,
+			`CREATE SEQUENCE ` + schema + `.batch_counter AS integer MINVALUE 50;`,
+			`ALTER SEQUENCE ` + schema + `.batch_counter OWNED BY ` + schema + `."Order Items".batch;`,
+			`plain_no   serial NOT NULL`,
 			`integer DEFAULT 1 NOT NULL`,
 			`numeric(10,2),`,
 			`GENERATED ALWAYS AS (((qty)::numeric * price)) STORED`,
@@ -75,7 +85,6 @@ func TestObjectDDLIntegration(t *testing.T) {
 			`UNIQUE (sku)`,
 			`FOREIGN KEY (account_id) REFERENCES ` + schema + `.accounts(id)`,
 			`CHECK (qty > 0)`,
-			`line_no    serial NOT NULL`,
 			`CREATE INDEX order_items_account_idx ON ` + schema + `."Order Items" USING btree (account_id) WHERE (qty > 1);`,
 		}},
 		{schema + ".big_orders", []string{`CREATE VIEW ` + schema + `.big_orders WITH (`, `security_invoker=true`, `check_option=cascaded`, `) AS`, `WHERE qty > 10;`}},
@@ -97,8 +106,8 @@ func TestObjectDDLIntegration(t *testing.T) {
 
 	t.Run("constraint-backed indexes are not repeated", func(t *testing.T) {
 		ddl, _ := p.ObjectDDL(ctx, schema+".Order Items")
-		if n := strings.Count(ddl, "CREATE "); n != 2 {
-			t.Fatalf("want CREATE TABLE + one CREATE INDEX, got %d statements:\n%s", n, ddl)
+		if n := strings.Count(ddl, "CREATE INDEX"); n != 1 {
+			t.Fatalf("want one CREATE INDEX, got %d:\n%s", n, ddl)
 		}
 	})
 
@@ -117,10 +126,10 @@ func TestObjectDDLIntegration(t *testing.T) {
 			exec(strings.ReplaceAll(ddl, schema+".", replica+"."))
 		}
 
-		var id, lineNo int64
+		var id, lineNo, batch, plainNo int64
 		var collation, tableOptions, viewOptions string
 		exec(`INSERT INTO ` + replica + `.accounts VALUES (1)`)
-		if err := p.pool.QueryRow(ctx, `INSERT INTO `+replica+`."Order Items" (account_id) VALUES (1) RETURNING id, line_no`).Scan(&id, &lineNo); err != nil {
+		if err := p.pool.QueryRow(ctx, `INSERT INTO `+replica+`."Order Items" (account_id) VALUES (1) RETURNING id, line_no, batch, plain_no`).Scan(&id, &lineNo, &batch, &plainNo); err != nil {
 			t.Fatalf("insert into replica: %v", err)
 		}
 		if err := p.pool.QueryRow(ctx, `SELECT co.collname,
@@ -131,8 +140,9 @@ func TestObjectDDLIntegration(t *testing.T) {
 			replica+`."Order Items"`, replica+`.big_orders`).Scan(&collation, &tableOptions, &viewOptions); err != nil {
 			t.Fatalf("read replica catalog: %v", err)
 		}
-		if id != 100 || lineNo != 7 {
-			t.Errorf("first row got id=%d line_no=%d, want 100 and 7 as in the original sequences", id, lineNo)
+		if id != 100 || lineNo != 7 || batch != 50 || plainNo != 1 {
+			t.Errorf("first row got id=%d line_no=%d batch=%d plain_no=%d, want 100, 7, 50, 1 as in the original sequences",
+				id, lineNo, batch, plainNo)
 		}
 		if collation != "C" {
 			t.Errorf("code collation = %q, want C", collation)
