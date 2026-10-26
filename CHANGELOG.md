@@ -3,7 +3,7 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
-## Unreleased
+## v0.11.0 — 2026-10-26
 
 ### Navigation
 
