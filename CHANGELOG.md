@@ -32,7 +32,10 @@ gives the same notes from the command line.
 - `DDL → Show DDL` prints the statement that recreates a table, view or
   materialized view: columns with defaults, identity and generated columns,
   primary, foreign, unique, check and exclusion constraints, indexes and the
-  partition key. Every name comes out schema-qualified, as `pg_dump` writes it,
+  partition key — along with what changes behaviour without changing the
+  shape: column collations, identity and serial sequence options such as
+  `START WITH 100`, storage parameters, and a view's `security_invoker` and
+  check option. Every name comes out schema-qualified, as `pg_dump` writes it,
   so the statement means the same thing wherever it is pasted, and a `serial`
   column is printed as `serial` instead of a `nextval()` default pointing at a
   sequence the output never creates. Triggers, grants and comments are not
