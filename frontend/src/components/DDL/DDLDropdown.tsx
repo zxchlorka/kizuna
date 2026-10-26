@@ -1,4 +1,4 @@
-import { ChevronDown, FilePlus2, ListPlus, ListX, ScanSearch, Trash2 } from 'lucide-react'
+import { ChevronDown, FileCode2, FilePlus2, ListPlus, ListX, ScanSearch, Trash2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-export type TableDDLAction = 'drop_table' | 'add_column' | 'drop_column' | 'create_index'
+export type TableDDLAction = 'show_ddl' | 'drop_table' | 'add_column' | 'drop_column' | 'create_index'
 
 interface DDLDropdownProps {
   disabled?: boolean
@@ -33,6 +33,11 @@ export function DDLDropdown({ disabled = false, onAction }: DDLDropdownProps) {
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-52">
+        <DropdownMenuItem onSelect={() => onAction('show_ddl')}>
+          <FileCode2 className="mr-2 h-3.5 w-3.5" />
+          Show DDL
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
         <DropdownMenuLabel>Table Actions</DropdownMenuLabel>
         {actions.slice(0, 2).map(({ action, label, icon: Icon }) => (
           <DropdownMenuItem key={action} onSelect={() => onAction(action)}>

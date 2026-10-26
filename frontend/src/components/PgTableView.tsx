@@ -3,6 +3,7 @@ import type { SortingState } from '@tanstack/react-table'
 import { Trash2, X } from 'lucide-react'
 import { AddColumnForm } from '@/components/DDL/AddColumnForm'
 import { CreateIndexForm } from '@/components/DDL/CreateIndexForm'
+import { ShowDDLDialog } from '@/components/DDL/ShowDDLDialog'
 import { DropConfirmDialog } from '@/components/DDL/DropConfirmDialog'
 import { DataTable } from '@/components/DataTable'
 import { ReferencedByDialog } from '@/components/DataTable/ReferencedByDialog'
@@ -73,7 +74,7 @@ const EMPTY_FILTERS: FilterExpr[] = []
 const EMPTY_DRAFT_UPDATES: Record<string, DraftUpdateState> = {}
 const EMPTY_DRAFT_DELETES: Record<string, DraftDeleteState> = {}
 const EMPTY_INSERTS: Record<string, unknown>[] = []
-type DDLDialog = 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | null
+type DDLDialog = 'show_ddl' | 'drop_table' | 'add_column' | 'drop_column' | 'create_index' | null
 
 // One checked row: how to address it in a mutation, and what it contained when
 // it was checked. See the selectedRows state for why both halves are kept.
@@ -1063,6 +1064,12 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
         onSubmit={handleAddRowSubmit}
       />
 
+      <ShowDDLDialog
+        open={activeDDLDialog === 'show_ddl'}
+        connId={connId}
+        object={object}
+        onOpenChange={(open) => !open && setActiveDDLDialog(null)}
+      />
       <AddColumnForm
         open={activeDDLDialog === 'add_column'}
         tableName={object}

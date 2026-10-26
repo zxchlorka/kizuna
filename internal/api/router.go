@@ -48,6 +48,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Post("/keys", dataHandler.CreateKey)
 			r.Get("/objects/{name}/info", objHandler.GetObjectInfo)
 			r.Get("/objects/{name}/schema", objHandler.GetSchema)
+			r.Get("/objects/{name}/ddl", objHandler.GetDDL)
 			r.Get("/objects/{name}/data", dataHandler.GetData)
 			r.Post("/mutate", dataHandler.Mutate)
 			r.Post("/objects/{name}/copy-to", dataHandler.CopyObject)

@@ -149,7 +149,12 @@ type KafkaProducer interface {
 	Produce(ctx context.Context, req KafkaProduceRequest) (*KafkaProduceResult, error)
 }
 
-
+// DDLSourceProvider is an optional capability for connectors that can show the
+// statement that would recreate an object (Postgres tables and views). The API
+// exposes it via GET /objects/{name}/ddl.
+type DDLSourceProvider interface {
+	ObjectDDL(ctx context.Context, object string) (string, error)
+}
 
 // KafkaOffsetResetRequest moves a consumer group's committed offsets for every
 // partition of one topic. Mode is "earliest", "latest" or "timestamp"; for the
