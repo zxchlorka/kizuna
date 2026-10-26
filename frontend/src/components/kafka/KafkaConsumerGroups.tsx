@@ -1,5 +1,5 @@
 import { Fragment, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
 import { EmptyState } from '@/components/EmptyState'
 import { formatCompactCount, formatExactCount, splitSharedPrefix } from '@/lib/numberFormat'
 import { cn } from '@/lib/utils'
@@ -42,7 +42,13 @@ function lagBadgeTone(lag: number): string {
   return 'border-red-500/20 bg-red-500/5 text-red-500'
 }
 
-export function KafkaConsumerGroups({ groups }: { groups: ObjectItem[] }) {
+interface KafkaConsumerGroupsProps {
+  groups: ObjectItem[]
+  // Absent on read-only connections.
+  onReset?: (group: ObjectItem) => void
+}
+
+export function KafkaConsumerGroups({ groups, onReset }: KafkaConsumerGroupsProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
 
   if (groups.length === 0) {
@@ -101,6 +107,18 @@ export function KafkaConsumerGroups({ groups }: { groups: ObjectItem[] }) {
                   <tr>
                     <td colSpan={5} className="p-0">
                       <div className="space-y-1.5 border-t border-border/60 bg-muted/10 px-4 py-3">
+                        {onReset && (
+                          <div className="flex justify-end pb-1">
+                            <button
+                              type="button"
+                              onClick={() => onReset(group)}
+                              className="flex items-center gap-1.5 rounded-sm border border-border px-2 py-1 font-mono text-[11px] text-muted-foreground transition-colors hover:border-orange-500/50 hover:text-foreground"
+                            >
+                              <RotateCcw className="h-3 w-3" />
+                              Reset offsets
+                            </button>
+                          </div>
+                        )}
                         {lags.map((partitionLag) => {
                           const committed = partitionLag.current_offset < 0 ? null : formatExactCount(partitionLag.current_offset)
                           const end = formatExactCount(partitionLag.end_offset)

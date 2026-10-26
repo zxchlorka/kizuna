@@ -54,6 +54,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Get("/objects/{name}/export", dataHandler.ExportObject)
 			r.Post("/mutate/bulk", dataHandler.MutateBulk)
 			r.Post("/produce", dataHandler.Produce)
+			r.Post("/consumer-groups/reset", dataHandler.ResetGroupOffsets)
 			r.Post("/ddl", ddlHandler.Execute)
 			r.Post("/execute", sqlHandler.Execute)
 			r.Post("/execute-multi", sqlHandler.ExecuteMulti)

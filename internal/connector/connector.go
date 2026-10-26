@@ -149,6 +149,34 @@ type KafkaProducer interface {
 	Produce(ctx context.Context, req KafkaProduceRequest) (*KafkaProduceResult, error)
 }
 
+
+
+// KafkaOffsetResetRequest moves a consumer group's committed offsets for every
+// partition of one topic. Mode is "earliest", "latest" or "timestamp"; for the
+// last, Timestamp (unix ms) picks the first record at or after that instant.
+type KafkaOffsetResetRequest struct {
+	Group     string `json:"group"`
+	Topic     string `json:"topic"`
+	Mode      string `json:"mode"`
+	Timestamp int64  `json:"timestamp,omitempty"`
+}
+
+type KafkaPartitionOffset struct {
+	Partition int32 `json:"partition"`
+	Offset    int64 `json:"offset"`
+}
+
+type KafkaOffsetResetResult struct {
+	Partitions []KafkaPartitionOffset `json:"partitions"`
+}
+
+// KafkaOffsetResetter is an optional capability for connectors that can rewind
+// or fast-forward a consumer group (Kafka). The API exposes it via
+// POST /consumer-groups/reset.
+type KafkaOffsetResetter interface {
+	ResetGroupOffsets(ctx context.Context, req KafkaOffsetResetRequest) (*KafkaOffsetResetResult, error)
+}
+
 type ObjectInfo struct {
 	Name       string   `json:"name"`
 	Schema     string   `json:"schema"`

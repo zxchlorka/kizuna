@@ -219,6 +219,37 @@ func (h *DataHandler) Produce(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// ResetGroupOffsets moves a consumer group's committed offsets on one topic.
+func (h *DataHandler) ResetGroupOffsets(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+
+	var req connector.KafkaOffsetResetRequest
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+
+	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	defer cancel()
+
+	resetter, ok := conn.(connector.KafkaOffsetResetter)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "offset reset is not supported for this connection")
+		return
+	}
+
+	result, err := resetter.ResetGroupOffsets(r.Context(), req)
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 // CopyObjectRequest moves one object to another connection.
 type CopyObjectRequest struct {
 	Object       string `json:"object"`
