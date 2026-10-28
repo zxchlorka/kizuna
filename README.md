@@ -14,6 +14,13 @@ English · [Русский](README.ru.md)
 
 </div>
 
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/hero.webp" type="image/webp">
+    <img src=".github/assets/hero.png" width="960" alt="⌘K opens a Kafka topic; a right-click on an event jumps to the Redis profile of its user_id, and from there to that user’s PostgreSQL orders">
+  </picture>
+</p>
+
 ## Why Kizuna
 
 Kizuna replaces a scattered set of pgAdmin, Redis Desktop Manager, and Kafka UI with one compact application. Its goal is to make everyday data work faster: open a table, key, or message, change what you need, then jump straight to the related entity in another source.
@@ -73,7 +80,6 @@ The frontend is embedded in one Go binary; the app listens on port `9090`.
 
 Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and **Kafka**. Redis supports standalone, Cluster, and Sentinel; Kafka supports multiple brokers, SASL, and TLS with a custom CA bundle; PostgreSQL supports TLS up to `verify-full` and filling the form from a pasted connection string.
 
-- **⌘K** (Ctrl K) jumps to any connection, table, view, topic, or Redis namespace from any page. It searches only what the browser already holds, so it never sends a query to your databases.
 - Connections can be searched, filtered, and grouped by tag. A connection tagged `production` opens under a warning banner.
 - The address bar carries the open object and its filters, so an investigation can be handed to a teammate as a link.
 - Tabs and SQL drafts survive a page reload.
@@ -83,6 +89,17 @@ Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and *
       <source srcset=".github/assets/connections-types.webp" type="image/webp">
       <img src=".github/assets/connections-types.png" width="960" alt="New connection wizard choosing PostgreSQL, Redis, and Kafka">
     </picture>
+</p>
+
+## ⌘K — jump anywhere
+
+**⌘K** (Ctrl K) jumps to any connection, table, view, topic, or Redis namespace from any page. Typing `ord` finds `public.orders` on every connection that has it; a second word narrows by connection: `ord stage`. It searches only what the browser already holds, so opening it never sends a query to your databases.
+
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/command-palette.webp" type="image/webp">
+    <img src=".github/assets/command-palette.png" width="960" alt="The ⌘K palette finds public.orders on two connections, narrows to the stage one with a second word, and opens the table">
+  </picture>
 </p>
 
 ## PostgreSQL — from schema to query

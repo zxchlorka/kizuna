@@ -14,6 +14,13 @@
 
 </div>
 
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/hero.webp" type="image/webp">
+    <img src=".github/assets/hero.png" width="960" alt="⌘K открывает топик Kafka; правый клик по событию ведёт в Redis-профиль по его user_id, а оттуда — к заказам этого пользователя в PostgreSQL">
+  </picture>
+</p>
+
 ## Зачем Kizuna
 
 Kizuna заменяет разрозненный набор из pgAdmin, Redis Desktop Manager и Kafka UI одним компактным приложением. Его цель — сделать ежедневную работу с данными быстрее: открыть таблицу, ключ или сообщение, изменить нужное значение и сразу перейти к связанной сущности в другом источнике.
@@ -73,7 +80,6 @@ go run ./cmd/kizuna
 
 Подключайте три типа источников в одном мастере: **PostgreSQL**, **Redis** и **Kafka**. Redis поддерживает standalone, Cluster и Sentinel; для Kafka доступны несколько брокеров, SASL и TLS с пользовательским CA bundle; для PostgreSQL — TLS вплоть до `verify-full` и вставка готовой connection string.
 
-- **⌘K** (Ctrl K) — переход к любому подключению, таблице, представлению, топику или Redis-неймспейсу с любой страницы. Ищет только по тому, что уже загружено в браузер, поэтому не шлёт запросов в базы.
 - Подключения можно искать, фильтровать и группировать по тегам. Подключение с тегом `production` открывается под предупреждающим баннером.
 - Ссылка в адресной строке ведёт на открытый объект вместе с фильтрами — расследование можно передать коллеге одной ссылкой.
 - Вкладки и черновики SQL переживают перезагрузку страницы.
@@ -83,6 +89,17 @@ go run ./cmd/kizuna
       <source srcset=".github/assets/connections-types.webp" type="image/webp">
       <img src=".github/assets/connections-types.png" width="960" alt="Мастер нового подключения с выбором PostgreSQL, Redis и Kafka">
     </picture>
+</p>
+
+## ⌘K — переход куда угодно
+
+**⌘K** (Ctrl K) открывает любое подключение, таблицу, представление, топик или Redis-неймспейс с любой страницы. По `ord` находится `public.orders` на каждом подключении, где она есть; второе слово сужает по подключению: `ord stage`. Ищет только по тому, что уже загружено в браузер, поэтому открытие палитры не шлёт запросов в базы.
+
+<p align="center">
+  <picture>
+    <source srcset=".github/assets/command-palette.webp" type="image/webp">
+    <img src=".github/assets/command-palette.png" width="960" alt="Палитра ⌘K находит public.orders на двух подключениях, вторым словом сужает до stage и открывает таблицу">
+  </picture>
 </p>
 
 ## PostgreSQL — от схемы до запроса
