@@ -22,17 +22,42 @@ It is a self-hosted tool for engineers, analysts, and support teams. In producti
 ## Quick Start
 
 ```bash
+docker run -d --name kizuna -p 127.0.0.1:9090:9090 -v kizuna-data:/data zxchlorka/kizuna
+```
+
+Open [http://localhost:9090](http://localhost:9090) and add your first connection. Configuration lives in the `kizuna-data` Docker volume; connection passwords are encrypted with AES-256-GCM. The image is built for amd64 and arm64 and is also on GHCR: `ghcr.io/zxchlorka/kizuna`.
+
+To update, run `docker pull zxchlorka/kizuna && docker rm -f kizuna`, then the same `docker run` command; your connections stay in the volume.
+
+<details>
+<summary><b>Docker Compose</b></summary>
+
+```yaml
+services:
+  kizuna:
+    image: zxchlorka/kizuna
+    ports:
+      - "127.0.0.1:9090:9090"
+    volumes:
+      - kizuna-data:/data
+    restart: unless-stopped
+
+volumes:
+  kizuna-data:
+```
+
+</details>
+
+<details>
+<summary><b>Build from source</b></summary>
+
+```bash
 git clone https://github.com/zxchlorka/kizuna.git
 cd kizuna
 docker compose up -d --build
 ```
 
-Open [http://localhost:9090](http://localhost:9090) and add your first connection. Configuration lives in the `kizuna-data` Docker volume; connection passwords are encrypted with AES-256-GCM.
-
-<details>
-<summary><b>Run from source</b></summary>
-
-Requires Go 1.26+ and Node 20+.
+Without Docker you need Go 1.26+ and Node 20+:
 
 ```bash
 cd frontend && npm install && npm run build && cd ..
@@ -45,7 +70,12 @@ The frontend is embedded in one Go binary; the app listens on port `9090`.
 
 ## Connections
 
-Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and **Kafka**. Redis supports standalone, Cluster, and Sentinel; Kafka supports multiple brokers, SASL, and TLS with a custom CA bundle.
+Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and **Kafka**. Redis supports standalone, Cluster, and Sentinel; Kafka supports multiple brokers, SASL, and TLS with a custom CA bundle; PostgreSQL supports TLS up to `verify-full` and filling the form from a pasted connection string.
+
+- **⌘K** (Ctrl K) jumps to any connection, table, view, topic, or Redis namespace from any page. It searches only what the browser already holds, so it never sends a query to your databases.
+- Connections can be searched, filtered, and grouped by tag. A connection tagged `production` opens under a warning banner.
+- The address bar carries the open object and its filters, so an investigation can be handed to a teammate as a link.
+- Tabs and SQL drafts survive a page reload.
 
 <p align="center">
     <img src=".github/assets/connections-types.png" width="960" alt="New connection wizard choosing PostgreSQL, Redis, and Kafka">
@@ -65,6 +95,10 @@ Open a schema, table, or view directly from the tree. The table view provides so
 - SQL console with autocomplete, history, multi-statement scripts, safe `EXPLAIN`, and confirmed `EXPLAIN ANALYZE`.
 - DDL actions and an index inspector without switching to another client.
 - Forward and reverse foreign keys: jump to a parent row, inspect **Referenced By**, and return through breadcrumbs.
+- **Show DDL** prints the `CREATE` statement for a table, view, or materialized view, the way `pg_dump` writes it.
+- **Overview**: active sessions and locks, heavy statements from `pg_stat_statements`, table sizes and dead tuples, replication lag, unused indexes, sequences nearing their ceiling.
+- Copy a row as `SELECT`, `INSERT`, `UPDATE`, or `DELETE`; export results as CSV or JSON.
+- `bigint` and `numeric` values are shown exactly as stored, never rounded through a double.
 
 <p align="center">
   <img src=".github/assets/sql-console.png" width="960" alt="Kizuna SQL console">
@@ -75,6 +109,11 @@ Open a schema, table, or view directly from the tree. The table view provides so
 The key tree is grouped by prefix. Kizuna opens the right editor for String, Hash, List, Set, Sorted Set, Stream, and RedisJSON; TTL, key creation, and bulk actions stay in the same workspace.
 
 The built-in Redis CLI formats command output and adds an `open <key>` button for a recognized key. After `HGETALL profile:1001`, for example, you can open `profile:1001` in its typed editor immediately—without copying the key name.
+
+- **Overview**: memory against `maxmemory`, eviction, fragmentation, and for a cluster, its masters and a map of all 16384 slots, missing ones included.
+- Compare up to five keys of one type: shared values are highlighted, and comma-separated lists are compared element by element.
+- Rename, duplicate, copy a key to another connection or out as JSON — in a cluster too, and without `RESTORE` permission.
+- Filter the tree with server-side `SCAN MATCH`, and export a namespace's ids as a JSON list.
 
 <p align="center">
   <picture>
@@ -92,6 +131,12 @@ The built-in Redis CLI formats command output and adds an `open <key>` button fo
 Browse topics, partitions, consumer groups, and JSON messages in one view. Message fields can also drive filters and related-data navigation.
 
 The producer can send one message, a batch of comma-separated JSON objects in **Multi** mode, or a template-expanded batch in **Loop** mode. Before publishing, Kizuna previews every exact message, so you can validate `{{i}}` expressions, step, and count before writing to Kafka.
+
+- Search a topic by key, header, or JSON fields, with several conditions joined by AND/OR and `equals` / `contains` / "field exists". The scan shows its progress and can be stopped at any point.
+- Seek by offset or time, and read newest-first or oldest-first.
+- Chosen JSON fields can be shown as their own columns.
+- Reset a consumer group's offsets to the start, the end, or a point in time; before anything is sent, you see how many messages the group will re-read or skip.
+- The Config tab shows every topic setting with where its value comes from and what it would be without the override.
 
 <p align="center">
     <img src=".github/assets/kafka-produce.png" width="960" alt="Kafka producer switches between Multi and Loop modes and previews the expanded message batch">
