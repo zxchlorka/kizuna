@@ -3,6 +3,24 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.11.1 — 2026-10-28
+
+### Distribution
+
+- A ready image is published on every release, to Docker Hub as
+  `zxchlorka/kizuna` and to GHCR as `ghcr.io/zxchlorka/kizuna`, for amd64 and
+  arm64. Trying Kizuna no longer means cloning the repository and building it:
+  one `docker run` is the whole install, and an update is a `docker pull`.
+- The image builds without emulation on any platform: the frontend is bundled
+  once and Go cross-compiles, so the arm64 half of a release costs the same as
+  the amd64 one.
+
+### Docs
+
+- The README starts from the published image and lists what the last few
+  releases added — ⌘K, Show DDL, the Overview tabs, key comparison, offset
+  reset — next to the source each belongs to.
+
 ## v0.11.0 — 2026-10-26
 
 ### Navigation

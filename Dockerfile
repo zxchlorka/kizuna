@@ -1,17 +1,20 @@
-FROM node:20-alpine AS frontend
+# Build stages run on the builder's own platform: the frontend bundle is the same
+# for every target and Go cross-compiles, so a multi-arch build needs no emulation.
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend
 WORKDIR /app/frontend
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
 RUN npm run build
 
-FROM golang:1.26-alpine AS backend
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS backend
+ARG TARGETOS TARGETARCH
 WORKDIR /app
 COPY go.* ./
 RUN go mod download
 COPY . .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
-RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o kizuna ./cmd/kizuna/
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags="-s -w" -o kizuna ./cmd/kizuna/
 
 FROM golang:1.26-alpine AS debug
 WORKDIR /app
@@ -30,7 +33,7 @@ ENV CONFIG_PATH=/data/config.json
 ENV KIZUNA_LISTEN=0.0.0.0:9090
 ENTRYPOINT ["dlv", "--listen=:2345", "--headless=true", "--api-version=2", "--accept-multiclient", "exec", "/app/kizuna"]
 
-FROM alpine:3.19 AS certs
+FROM --platform=$BUILDPLATFORM alpine:3.19 AS certs
 RUN apk add --no-cache ca-certificates
 
 FROM scratch AS final
