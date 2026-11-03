@@ -5,6 +5,7 @@ import { LinkPickerDialog } from '@/components/links/LinkPickerDialog'
 import { connectionLinks, linkSummary } from '@/lib/links'
 import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface ConnectionLinksButtonProps {
   connId: string
@@ -29,7 +30,7 @@ export function ConnectionLinksButton({ connId }: ConnectionLinksButtonProps) {
     void fetchLinks().catch(() => undefined)
   }, [fetchLinks])
 
-  const connectionName = (id: string) => connections.find((item) => item.id === id)?.name ?? id
+  const connectionName = (id: string) => findConnection(connections, id)?.name ?? id
   const items = useMemo(
     () =>
       connectionLinks(links, connId).map((link) => ({

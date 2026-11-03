@@ -12,6 +12,7 @@ import { fetchWithTimeout } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { databaseConnectionId, findConnection } from '@/lib/databaseConnection'
 
 interface TreeDatabaseSwitcherProps {
   pageConnId: string
@@ -24,16 +25,15 @@ interface DatabasesResponse {
 }
 
 // Switches which database the object tree displays, without leaving the page:
-// sibling connections are created (idempotently) on the backend and the tree
-// is re-pointed at them via the workspace treeConnByPage override.
+// the tree is re-pointed at a runtime database id via the workspace
+// treeConnByPage override.
 export function TreeDatabaseSwitcher({ pageConnId, viewConnId }: TreeDatabaseSwitcherProps) {
   const pushToast = useToastStore((state) => state.push)
   const setTreeConn = useWorkspaceStore((state) => state.setTreeConn)
-  const pageConnection = useConnectionStore((state) => state.connections.find((item) => item.id === pageConnId))
-  const viewConnection = useConnectionStore((state) => state.connections.find((item) => item.id === viewConnId))
+  const pageConnection = useConnectionStore((state) => findConnection(state.connections, pageConnId))
+  const viewConnection = useConnectionStore((state) => findConnection(state.connections, viewConnId))
   const [databases, setDatabases] = useState<DatabasesResponse | null>(null)
   const [loading, setLoading] = useState(false)
-  const [switching, setSwitching] = useState<string | null>(null)
 
   const currentDatabase = viewConnection?.database ?? ''
 
@@ -54,32 +54,13 @@ export function TreeDatabaseSwitcher({ pageConnId, viewConnId }: TreeDatabaseSwi
     }
   }
 
-  const handleSwitch = async (database: string) => {
-    if (database === currentDatabase || switching) {
+  // Another database needs no request: the runtime id resolves on the backend
+  // and nothing is added to the connection list.
+  const handleSwitch = (database: string) => {
+    if (database === currentDatabase) {
       return
     }
-    setSwitching(database)
-    try {
-      if (database === pageConnection?.database) {
-        setTreeConn(pageConnId, pageConnId)
-        return
-      }
-      const res = await fetchWithTimeout(`/api/connections/${pageConnId}/duplicate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ database }),
-      })
-      const body = await res.json()
-      if (!res.ok) {
-        throw new Error(body.error || 'Failed to switch database')
-      }
-      await useConnectionStore.getState().fetch()
-      setTreeConn(pageConnId, body.id as string)
-    } catch (error) {
-      pushToast({ tone: 'error', title: 'Switch failed', message: (error as Error).message })
-    } finally {
-      setSwitching(null)
-    }
+    setTreeConn(pageConnId, database === pageConnection?.database ? pageConnId : databaseConnectionId(pageConnId, database))
   }
 
   return (
@@ -119,15 +100,11 @@ export function TreeDatabaseSwitcher({ pageConnId, viewConnId }: TreeDatabaseSwi
             return (
               <DropdownMenuItem
                 key={database}
-                disabled={isCurrent || switching !== null}
-                onSelect={() => void handleSwitch(database)}
+                disabled={isCurrent}
+                onSelect={() => handleSwitch(database)}
                 className="gap-2 font-mono text-xs"
               >
-                {switching === database ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Check className={isCurrent ? 'h-3.5 w-3.5 text-amber-500' : 'h-3.5 w-3.5 opacity-0'} />
-                )}
+                <Check className={isCurrent ? 'h-3.5 w-3.5 text-amber-500' : 'h-3.5 w-3.5 opacity-0'} />
                 {database}
               </DropdownMenuItem>
             )

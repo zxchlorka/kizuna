@@ -14,6 +14,7 @@ import { useSqlCatalogStore } from '@/stores/sqlCatalog'
 import { useSqlConsoleStore } from '@/stores/sqlConsole'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { SqlCatalogTable } from '@/components/SqlConsole/SqlAutocomplete'
+import { findConnection, parentConnectionId } from '@/lib/databaseConnection'
 
 interface SqlConsoleProps {
   tabId: string
@@ -98,11 +99,13 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   }, [connId, fetchHistory, tab?.historyOpen, tab?.historySearch, tabId])
 
   const connectionLabel = useMemo(() => {
-    const connection = connections.find((item) => item.id === connId)
+    const connection = findConnection(connections, connId)
     if (!connection) {
       return connId
     }
-    return `${connection.name} · ${connection.database}`
+    // A runtime database already carries its database in the name.
+    const parentName = findConnection(connections, parentConnectionId(connId))?.name ?? connection.name
+    return `${parentName} · ${connection.database}`
   }, [connections, connId])
 
   const activeResult = tab?.results.find((result) => result.id === tab.activeResultId) ?? tab?.results[0] ?? null

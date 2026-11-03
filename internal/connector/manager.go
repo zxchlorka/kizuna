@@ -127,7 +127,7 @@ func (m *ConnectionManager) createConnector(ctx context.Context, id string, bypa
 }
 
 func (m *ConnectionManager) openConnector(ctx context.Context, id string) (Connector, error) {
-	connCfg, ok := m.config.GetConnection(id)
+	connCfg, ok := m.config.ResolveConnection(id)
 	if !ok {
 		return nil, fmt.Errorf("connection %q not found", id)
 	}
@@ -239,16 +239,23 @@ func (m *ConnectionManager) markFailure(id string, err error) {
 	}
 }
 
-// Remove closes and removes a connector from the pool.
+// Remove closes and removes a connector from the pool, together with the
+// runtime database connectors opened from it: they carry its old credentials.
 func (m *ConnectionManager) Remove(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if c, ok := m.connectors[id]; ok {
-		c.connector.Close()
-		delete(m.connectors, id)
+	for key, c := range m.connectors {
+		if key == id || config.IsDatabaseOf(key, id) {
+			c.connector.Close()
+			delete(m.connectors, key)
+		}
 	}
-	delete(m.failures, id)
+	for key := range m.failures {
+		if key == id || config.IsDatabaseOf(key, id) {
+			delete(m.failures, key)
+		}
+	}
 }
 
 // CloseAll closes all active connectors.

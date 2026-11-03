@@ -353,6 +353,31 @@ describe('purgeConnection — deleted-connection cleanup', () => {
     expect(state.activeTabId).toBe('t2')
   })
 
+  it('removes tabs reading from a runtime database of the deleted connection', () => {
+    useWorkspaceStore.setState({
+      tabs: [objectTab('t1', `${CONN}~billing`, CONN), objectTab('t2', `${CONN}0~billing`, 'other')] as never,
+      treeConnByPage: { [CONN]: `${CONN}~billing` },
+      activeTabId: 't2',
+    })
+
+    useWorkspaceStore.getState().purgeConnection(CONN)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.tabs.map((tab) => tab.id)).toEqual(['t2'])
+    expect(state.treeConnByPage).toEqual({})
+  })
+
+  it('keeps runtime database tabs whose parent is still live on startup prune', () => {
+    useWorkspaceStore.setState({
+      tabs: [objectTab('t1', `${CONN}~billing`, CONN), objectTab('t2', 'gone~billing', 'gone')] as never,
+      activeTabId: 't1',
+    })
+
+    useWorkspaceStore.getState().pruneMissingConnections([CONN])
+
+    expect(useWorkspaceStore.getState().tabs.map((tab) => tab.id)).toEqual(['t1'])
+  })
+
   it('drops every per-connection cache entry', () => {
     useWorkspaceStore.setState({
       treeItems: { [rootKey]: [] as never, 'other::': [] as never },

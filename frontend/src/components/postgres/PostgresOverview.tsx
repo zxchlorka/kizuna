@@ -6,6 +6,7 @@ import { fetchWithTimeout } from '@/lib/http'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import type { ColumnMeta } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface PostgresOverviewProps {
   connId: string
@@ -76,7 +77,7 @@ function renderCell(value: unknown): string {
 }
 
 export function PostgresOverview({ connId }: PostgresOverviewProps) {
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connection = useConnectionStore((state) => findConnection(state.connections, connId))
   const [section, setSection] = useState<Section>('activity')
   const [result, setResult] = useState<StatsResult | null>(null)
   const [loading, setLoading] = useState(true)

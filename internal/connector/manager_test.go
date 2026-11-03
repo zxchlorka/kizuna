@@ -238,3 +238,41 @@ func TestConnectionManagerAppliesFailureCooldown(t *testing.T) {
 		t.Fatalf("expected cooldown to skip the second factory dial, got %d extra call(s)", got-afterFirst)
 	}
 }
+
+func TestConnectionManagerRemoveClosesRuntimeDatabases(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.AppConfig{
+		Connections: []config.ConnectionConfig{
+			{ID: "pg-1", Type: "postgres", Database: "orders"},
+			{ID: "pg-10", Type: "postgres", Database: "orders"},
+		},
+	}
+
+	manager := NewConnectionManager(cfg)
+	opened := map[string]string{}
+	manager.RegisterFactory("postgres", func(_ context.Context, c config.ConnectionConfig, _ string) (Connector, error) {
+		opened[c.ID] = c.Database
+		return &testManagerConnector{}, nil
+	})
+
+	for _, id := range []string{"pg-1", "pg-1~billing", "pg-10~billing"} {
+		if _, err := manager.Get(context.Background(), id); err != nil {
+			t.Fatalf("get %s: %v", id, err)
+		}
+	}
+	if opened["pg-1~billing"] != "billing" {
+		t.Fatalf("runtime id opened against %q, want billing", opened["pg-1~billing"])
+	}
+
+	manager.Remove("pg-1")
+
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+	if _, ok := manager.connectors["pg-1~billing"]; ok {
+		t.Fatal("runtime database kept a pool with the parent's old credentials")
+	}
+	if _, ok := manager.connectors["pg-10~billing"]; !ok {
+		t.Fatal("another parent's runtime database was closed")
+	}
+}

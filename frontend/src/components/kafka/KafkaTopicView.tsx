@@ -18,6 +18,7 @@ import { topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord, ObjectItem } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface KafkaTopicViewProps {
   tabId: string
@@ -42,10 +43,10 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const [activeTab, setActiveTab] = useState<TopicTab>('messages')
   const [produceOpen, setProduceOpen] = useState(false)
   const readOnly = useConnectionStore(
-    (state) => state.connections.find((connection) => connection.id === connId)?.read_only ?? false
+    (state) => findConnection(state.connections, connId)?.read_only ?? false
   )
   const production = useConnectionStore(
-    (state) => state.connections.find((connection) => connection.id === connId)?.tags?.includes('production') ?? false
+    (state) => findConnection(state.connections, connId)?.tags?.includes('production') ?? false
   )
   const [resetGroup, setResetGroup] = useState<ObjectItem | null>(null)
   const tab = useKafkaStore((state) => state.tabs[tabId])
@@ -73,7 +74,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   // Both ends of a link are named: the far end is usually a different
   // connection, and the summary is otherwise ambiguous between servers.
   const connectionName = useCallback(
-    (id: string) => connections.find((item) => item.id === id)?.name ?? id,
+    (id: string) => findConnection(connections, id)?.name ?? id,
     [connections]
   )
   const openLinkTarget = useOpenLinkTarget()

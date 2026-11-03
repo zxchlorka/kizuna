@@ -363,7 +363,7 @@ func (h *ConnectionsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	}
 
 	latency := time.Since(start).Milliseconds()
-	connCfg, _ := h.cfg.GetConnection(id)
+	connCfg, _ := h.cfg.ResolveConnection(id)
 	logSlowConnectionCheck("test", connCfg.Type, connCfg.Host, connCfg.Database, latency)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "latency_ms": latency})

@@ -14,6 +14,7 @@ import { formatBytes, formatDurationSeconds, formatExactCount } from '@/lib/numb
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import type { ConnectionInfo } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface RedisOverviewProps {
   connId: string
@@ -98,7 +99,7 @@ function MemoryMeter({ used, max }: { used: number; max: number }) {
 }
 
 export function RedisOverview({ connId }: RedisOverviewProps) {
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connection = useConnectionStore((state) => findConnection(state.connections, connId))
   const [info, setInfo] = useState<ConnectionInfo | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)

@@ -59,6 +59,7 @@ import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { ColumnMeta, FKRef, FilterExpr, LinkRecord, TableRow } from '@/types/api'
 import type { RowIdentity } from '@/types/table'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface PgTableViewProps {
   connId: string
@@ -137,7 +138,7 @@ export function PgTableView({ connId, object, tabId }: PgTableViewProps) {
   // Both ends of a link are named, because the far end is usually a different
   // connection and the summary is otherwise ambiguous between servers.
   const connectionName = useCallback(
-    (id: string) => connections.find((connection) => connection.id === id)?.name ?? id,
+    (id: string) => findConnection(connections, id)?.name ?? id,
     [connections]
   )
 

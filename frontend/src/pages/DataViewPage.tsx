@@ -21,6 +21,7 @@ import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/conn
 import { Button } from '@/components/ui/button'
 import { decodeObjectDeepLink, encodeObjectDeepLink } from '@/lib/objectDeepLink'
 import { useDataStore } from '@/stores/data'
+import { findConnection } from '@/lib/databaseConnection'
 
 export default function DataViewPage() {
   const { id } = useParams<{ id: string }>()
@@ -35,7 +36,7 @@ export default function DataViewPage() {
   const openConnection = useWorkspaceStore((state) => state.openConnection)
   const activeTabByConnection = useWorkspaceStore((state) => state.activeTabByConnection)
   const setActiveTab = useWorkspaceStore((state) => state.setActiveTab)
-  const currentConnection = connections.find((connection) => connection.id === id)
+  const currentConnection = findConnection(connections, id)
   const connectionTabs = tabs.filter((tab) => tabPageId(tab) === id)
   // Prefer the globally-active tab when it belongs to this connection; otherwise
   // fall back to this connection's last-active tab (or its most recent tab), so

@@ -41,6 +41,7 @@ import { useDataStore } from '@/stores/data'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { DDLColumnInput, ObjectItem, ObjectType } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface SchemaChildGroup {
   primaryItems: ObjectItem[]
@@ -227,7 +228,7 @@ export function ObjectTree({ connId, anchorConnId }: ObjectTreeProps) {
     void fetchTree(connId)
   }, [connId, fetchTree])
 
-  const currentConnection = connections.find((connection) => connection.id === connId)
+  const currentConnection = findConnection(connections, connId)
   const isRedisConnection = currentConnection?.type === 'redis'
   const isKafkaConnection = currentConnection?.type === 'kafka'
   const rootKey = buildTreeKey(connId)

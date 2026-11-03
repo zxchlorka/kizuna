@@ -7,6 +7,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import type { LinkKind, LinkRecord, RedisExtract } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface CreateLinkDialogProps {
   open: boolean
@@ -90,7 +91,7 @@ export function CreateLinkDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editLink])
 
-  const targetConn = connections.find((conn) => conn.id === targetConnId)
+  const targetConn = findConnection(connections, targetConnId)
   const targetKind: LinkKind | null =
     targetConn?.type === 'redis' ? 'redis' : targetConn?.type === 'postgres' ? 'postgres' : targetConn?.type === 'kafka' ? 'kafka' : null
 

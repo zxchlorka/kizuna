@@ -73,6 +73,7 @@ import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
 import type { ObjectType } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface RedisKeyViewProps {
   connId: string
@@ -84,11 +85,11 @@ interface RedisKeyViewProps {
 
 export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: RedisKeyViewProps) {
   const connections = useConnectionStore((state) => state.connections)
-  const connection = connections.find((item) => item.id === connId)
+  const connection = findConnection(connections, connId)
   // Both ends of a link are named: the far end is usually a different
   // connection, and the summary is otherwise ambiguous between servers.
   const connectionName = useCallback(
-    (id: string) => connections.find((item) => item.id === id)?.name ?? id,
+    (id: string) => findConnection(connections, id)?.name ?? id,
     [connections]
   )
   const tabData = useDataStore((state) => state.tabs[tabId])
@@ -120,7 +121,7 @@ export function RedisKeyView({ connId, tabId, object, objectType, ttlSeconds }: 
   const redisConnections = connections.filter(
     (item) => item.type === 'redis' && !(item.read_only && item.id === connId)
   )
-  const targetConnection = connections.find((item) => item.id === copyTarget)
+  const targetConnection = findConnection(connections, copyTarget)
   const targetIsProduction = Boolean(targetConnection?.tags?.includes('production'))
   const [copying, setCopying] = useState(false)
   const [renameOpen, setRenameOpen] = useState(false)

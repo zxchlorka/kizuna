@@ -20,6 +20,7 @@ import { ObjectTree } from '@/components/ObjectTree'
 import { useConnectionStore } from '@/stores/connections'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore, type TreeVisibilityKey } from '@/stores/workspace'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface SidebarProps {
   connId: string
@@ -52,8 +53,8 @@ export function Sidebar({ connId }: SidebarProps) {
   const setSelectedNode = useWorkspaceStore((state) => state.setSelectedNode)
   const [clusterNodes, setClusterNodes] = useState<string[]>([])
 
-  const currentConnection = connections.find((connection) => connection.id === connId)
-  const viewConnection = connections.find((connection) => connection.id === viewConnId)
+  const currentConnection = findConnection(connections, connId)
+  const viewConnection = findConnection(connections, viewConnId)
   const isRedisConnection = currentConnection?.type === 'redis'
   const isKafkaConnection = currentConnection?.type === 'kafka'
   const isClusterConnection = isRedisConnection && currentConnection?.mode === 'cluster'
