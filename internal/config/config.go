@@ -22,6 +22,7 @@ type ConnectionConfig struct {
 	Tags           []string        `json:"tags,omitempty"`
 	VisibleSchemas []string        `json:"visible_schemas"`
 	ReadOnly       bool            `json:"read_only,omitempty"`
+	FolderID       string          `json:"folder_id,omitempty"` // "" = top level
 	PostgresConfig *PostgresConfig `json:"postgres_config,omitempty"`
 	RedisConfig    *RedisConfig    `json:"redis_config,omitempty"`
 	KafkaConfig    *KafkaConfig    `json:"kafka_config,omitempty"`
@@ -53,6 +54,7 @@ type AppConfig struct {
 	mu            sync.RWMutex
 	Connections   []ConnectionConfig `json:"connections"`
 	Links         []LinkConfig       `json:"links,omitempty"`
+	Folders       []FolderConfig     `json:"folders,omitempty"`
 	EncryptionKey string             `json:"encryption_key"`
 	path          string
 }

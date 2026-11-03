@@ -27,6 +27,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	ddlHandler := handlers.NewDDLHandler(cfg, manager)
 	sqlHandler := handlers.NewSQLHandler(cfg, manager)
 	linksHandler := handlers.NewLinksHandler(cfg)
+	foldersHandler := handlers.NewFoldersHandler(cfg)
 
 	r.Get("/api/health", handlers.Health)
 
@@ -38,6 +39,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 		r.Route("/{id}", func(r chi.Router) {
 			r.Put("/", connHandler.Update)
 			r.Put("/visible-schemas", connHandler.UpdateVisibleSchemas)
+			r.Put("/folder", connHandler.UpdateFolder)
 			r.Delete("/", connHandler.Delete)
 			r.Post("/test", connHandler.Test)
 			r.Get("/info", connHandler.Info)
@@ -72,6 +74,13 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 		r.Post("/", linksHandler.Create)
 		r.Delete("/{id}", linksHandler.Delete)
 		r.Put("/{id}", linksHandler.Update)
+	})
+
+	r.Route("/api/folders", func(r chi.Router) {
+		r.Get("/", foldersHandler.List)
+		r.Post("/", foldersHandler.Create)
+		r.Put("/{id}", foldersHandler.Update)
+		r.Delete("/{id}", foldersHandler.Delete)
 	})
 
 	return r

@@ -8,6 +8,7 @@ import { buildPaletteEntries, mergeNamespaces, redisSeparator, searchPalette, to
 import { cn } from '@/lib/utils'
 import { PALETTE_SHORTCUT, useCommandPaletteStore } from '@/stores/commandPalette'
 import { useConnectionStore } from '@/stores/connections'
+import { useFoldersStore } from '@/stores/folders'
 import { useWorkspaceStore } from '@/stores/workspace'
 
 const TYPE_LABEL: Record<string, string> = { table: 'table', view: 'view', kafka_topic: 'topic', namespace: 'namespace' }
@@ -29,6 +30,9 @@ function readNamespaces(): Record<string, string[]> {
 export function CommandPalette() {
   const navigate = useNavigate()
   const connections = useConnectionStore((state) => state.connections)
+  const folders = useFoldersStore((state) => state.folders)
+  const foldersLoaded = useFoldersStore((state) => state.loaded)
+  const fetchFolders = useFoldersStore((state) => state.fetch)
   const treeItems = useWorkspaceStore((state) => state.treeItems)
   const openTab = useWorkspaceStore((state) => state.openTab)
   const setKeyPattern = useWorkspaceStore((state) => state.setKeyPattern)
@@ -79,7 +83,13 @@ export function CommandPalette() {
     if (!open) setQuery('')
   }, [open])
 
-  const entries = useMemo(() => (open ? buildPaletteEntries(connections, treeItems, namespaces) : []), [open, connections, treeItems, namespaces])
+  // The palette opens on any page, not only the list that loads folders. A
+  // failure only costs the folder paths, so it stays silent.
+  useEffect(() => {
+    if (open && !foldersLoaded) void fetchFolders().catch(() => undefined)
+  }, [open, foldersLoaded, fetchFolders])
+
+  const entries = useMemo(() => (open ? buildPaletteEntries(connections, treeItems, namespaces, folders) : []), [open, connections, treeItems, namespaces, folders])
   const results = useMemo(() => searchPalette(entries, query), [entries, query])
   const typeById = useMemo(() => new Map(connections.map((c) => [c.id, c.type])), [connections])
 
@@ -165,7 +175,14 @@ export function CommandPalette() {
                       </span>
                     </>
                   ) : (
-                    <span className="min-w-0 flex-1 truncate text-sm">{entry.connName}</span>
+                    <>
+                      <span className="min-w-0 flex-1 truncate text-sm">{entry.connName}</span>
+                      {entry.folderPath && (
+                        <span className="max-w-[45%] shrink-0 truncate font-mono text-[11px] text-muted-foreground">
+                          {entry.folderPath}
+                        </span>
+                      )}
+                    </>
                   )}
                 </button>
               )

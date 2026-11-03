@@ -13,6 +13,9 @@ interface ConnectionStore {
   update: (id: string, input: Partial<ConnectionInput>) => Promise<Connection>
   updateVisibleSchemas: (id: string, visibleSchemas: string[] | null) => Promise<Connection>
   remove: (id: string) => Promise<void>
+  moveToFolder: (id: string, folderId: string) => Promise<void>
+  // Mirrors a folder deletion: the backend lifts its connections into the parent.
+  liftFolder: (folderId: string, parentId: string) => void
   test: (id: string) => Promise<TestResult>
   testConfig: (input: Partial<ConnectionInput> & { id?: string }) => Promise<TestResult>
 }
@@ -109,6 +112,26 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const res = await fetchWithTimeout(`/api/connections/${id}`, { method: 'DELETE' })
     await throwOnApiError(res)
     set({ connections: get().connections.filter((c) => c.id !== id) })
+  },
+
+  moveToFolder: async (id: string, folderId: string) => {
+    const res = await fetchWithTimeout(`/api/connections/${id}/folder`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: folderId }),
+    })
+    await throwOnApiError(res)
+    set({
+      connections: get().connections.map((c) => (c.id === id ? { ...c, folder_id: folderId || undefined } : c)),
+    })
+  },
+
+  liftFolder: (folderId: string, parentId: string) => {
+    set({
+      connections: get().connections.map((c) =>
+        c.folder_id === folderId ? { ...c, folder_id: parentId || undefined } : c
+      ),
+    })
   },
 
   test: async (id: string) => {

@@ -3,32 +3,11 @@ import {
   collectTags,
   filterConnectionsByName,
   filterConnectionsByTags,
-  groupConnectionsByTag,
   nextTagSelection,
 } from './connectionGroups'
 import type { Connection } from '@/types/api'
 
 const conn = (name: string, tags?: string[]) => ({ id: name, name, tags }) as Connection
-
-describe('groupConnectionsByTag', () => {
-  it('orders environments by risk, other tags alphabetically, untagged last', () => {
-    const groups = groupConnectionsByTag([
-      conn('a'),
-      conn('b', ['zeta']),
-      conn('c', ['dev']),
-      conn('d', ['Production']),
-      conn('e', ['alpha']),
-      conn('f', ['stage']),
-    ])
-    expect(groups.map((g) => g.key)).toEqual(['production', 'stage', 'dev', 'alpha', 'zeta', ''])
-  })
-
-  it('puts a multi-tag connection under its first tag only and ignores blank tags', () => {
-    const groups = groupConnectionsByTag([conn('a', ['dev', 'prod']), conn('b', [' ', 'dev']), conn('c', ['DEV'])])
-    expect(groups).toHaveLength(1)
-    expect(groups[0].connections.map((c) => c.name)).toEqual(['a', 'b', 'c'])
-  })
-})
 
 describe('filterConnectionsByName', () => {
   it('matches case-insensitively as a substring and passes everything on blank input', () => {
@@ -59,10 +38,5 @@ describe('tag filter', () => {
     expect(pick(['dev'], 'dev')).toEqual([])
     expect(pick(['dev'], 'prod', true)).toEqual(['dev', 'prod'])
     expect(pick(['dev', 'prod'], 'dev', true)).toEqual(['prod'])
-  })
-
-  it('groups a multi-tag connection under the selected tag, not its first one', () => {
-    const groups = groupConnectionsByTag(filterConnectionsByTags(list, new Set(['dev'])), new Set(['dev']))
-    expect(groups.map((g) => [g.key, g.connections.length])).toEqual([['dev', 2]])
   })
 })

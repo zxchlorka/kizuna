@@ -1,0 +1,231 @@
+import { useState, type DragEvent } from 'react'
+import { CornerLeftUp } from 'lucide-react'
+import { ConnectionCard } from '@/components/ConnectionCard'
+import { FolderNameInput } from '@/components/folders/FolderNameInput'
+import { FolderSection } from '@/components/folders/FolderSection'
+import { folderPath, isWithinFolder, type FolderTree } from '@/lib/connectionFolders'
+import { cn } from '@/lib/utils'
+import { useConnectionStore } from '@/stores/connections'
+import { useFoldersStore } from '@/stores/folders'
+import { useToastStore } from '@/stores/toast'
+import type { Connection } from '@/types/api'
+
+const COLLAPSED_KEY = 'kizuna:connections:collapsedFolders'
+
+function readCollapsed(): Set<string> {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(COLLAPSED_KEY) ?? '[]') as string[])
+  } catch {
+    return new Set()
+  }
+}
+
+export interface DragItem {
+  kind: 'connection' | 'folder'
+  id: string
+  // Where the item is now; '' for top level.
+  folderId: string
+}
+
+// Everything a FolderSection needs from the tree, passed down unchanged
+// through every level.
+export interface FolderTreeControls {
+  isOpen: (folderId: string) => boolean
+  toggle: (folderId: string) => void
+  overFolderId: string | null
+  dragStart: (e: DragEvent, item: DragItem) => void
+  dragEnd: () => void
+  dragOver: (e: DragEvent, folderId: string) => void
+  drop: (e: DragEvent, folderId: string) => void
+  creatingIn: string | null
+  startCreating: (parentId: string | null) => void
+  create: (name: string, parentId: string) => Promise<void>
+  renamingId: string | null
+  setRenamingId: (id: string | null) => void
+  rename: (id: string, name: string) => Promise<void>
+  moveFolder: (id: string, parentId: string) => Promise<void>
+  removeFolder: (id: string) => Promise<void>
+}
+
+interface ConnectionFolderTreeProps {
+  tree: FolderTree
+  // A search or tag filter is on: every folder opens so no match hides in a
+  // collapsed one.
+  filtering: boolean
+  creatingIn: string | null
+  onCreatingInChange: (parentId: string | null) => void
+  onEdit: (connection: Connection) => void
+  onDelete: (id: string) => Promise<void>
+}
+
+export function ConnectionFolderTree({
+  tree,
+  filtering,
+  creatingIn,
+  onCreatingInChange,
+  onEdit,
+  onDelete,
+}: ConnectionFolderTreeProps) {
+  const pushToast = useToastStore((state) => state.push)
+  const folders = useFoldersStore((state) => state.folders)
+  const createFolder = useFoldersStore((state) => state.create)
+  const updateFolder = useFoldersStore((state) => state.update)
+  const deleteFolder = useFoldersStore((state) => state.remove)
+  const moveToFolder = useConnectionStore((state) => state.moveToFolder)
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const [dragging, setDragging] = useState<DragItem | null>(null)
+  const [overFolderId, setOverFolderId] = useState<string | null>(null)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+
+  const fail = (title: string) => (error: unknown) =>
+    pushToast({ tone: 'error', title, message: (error as Error).message })
+
+  const toggle = (folderId: string) => {
+    const next = new Set(collapsed)
+    if (!next.delete(folderId)) next.add(folderId)
+    setCollapsed(next)
+    try {
+      localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]))
+    } catch {
+      // Private mode or blocked storage: folders still fold for this visit.
+    }
+  }
+
+  const canDrop = (folderId: string) =>
+    dragging !== null &&
+    dragging.folderId !== folderId &&
+    !(dragging.kind === 'folder' && isWithinFolder(folders, folderId, dragging.id))
+
+  const moveFolder = async (id: string, parentId: string) => {
+    const folder = folders.find((f) => f.id === id)
+    if (!folder) return
+    await updateFolder(id, folder.name, parentId).catch(fail('Move failed'))
+  }
+
+  const moveItem = async (item: DragItem, folderId: string) => {
+    if (item.kind === 'folder') {
+      await moveFolder(item.id, folderId)
+      return
+    }
+    await moveToFolder(item.id, folderId).catch(fail('Move failed'))
+  }
+
+  const controls: FolderTreeControls = {
+    isOpen: (folderId) => filtering || !collapsed.has(folderId),
+    toggle,
+    overFolderId,
+    dragStart: (e, item) => {
+      // Firefox starts a drag only once something is set on the transfer.
+      e.dataTransfer.setData('text/plain', item.id)
+      e.dataTransfer.effectAllowed = 'move'
+      e.stopPropagation()
+      setDragging(item)
+    },
+    dragEnd: () => {
+      setDragging(null)
+      setOverFolderId(null)
+    },
+    // The innermost folder under the pointer claims the drag; stopPropagation
+    // keeps the folders around it from highlighting too.
+    dragOver: (e, folderId) => {
+      if (!dragging) return
+      e.stopPropagation()
+      if (!canDrop(folderId)) {
+        setOverFolderId(null)
+        return
+      }
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'move'
+      setOverFolderId(folderId)
+    },
+    drop: (e, folderId) => {
+      e.preventDefault()
+      e.stopPropagation()
+      const item = dragging
+      setDragging(null)
+      setOverFolderId(null)
+      if (item && canDrop(folderId)) void moveItem(item, folderId)
+    },
+    creatingIn,
+    startCreating: (parentId) => {
+      if (parentId && collapsed.has(parentId)) toggle(parentId)
+      onCreatingInChange(parentId)
+    },
+    create: async (name, parentId) => {
+      await createFolder(name, parentId)
+        .then(() => onCreatingInChange(null))
+        .catch(fail('Folder not created'))
+    },
+    renamingId,
+    setRenamingId,
+    rename: async (id, name) => {
+      const folder = folders.find((f) => f.id === id)
+      if (!folder) return
+      await updateFolder(id, name, folder.parent_id ?? '')
+        .then(() => setRenamingId(null))
+        .catch(fail('Rename failed'))
+    },
+    moveFolder,
+    removeFolder: async (id) => {
+      const folder = folders.find((f) => f.id === id)
+      if (!folder) return
+      const destination = folderPath(folders, folder.parent_id).join(' / ') || 'top level'
+      await deleteFolder(id)
+        .then(() =>
+          pushToast({ tone: 'success', title: `Folder ${folder.name} deleted`, message: `Its contents moved to ${destination}.` })
+        )
+        .catch(fail('Delete failed'))
+    },
+  }
+
+  const renderConnections = (connections: Connection[]) => (
+    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {connections.map((conn) => (
+        <div
+          key={conn.id}
+          draggable
+          onDragStart={(e) => controls.dragStart(e, { kind: 'connection', id: conn.id, folderId: conn.folder_id ?? '' })}
+          onDragEnd={controls.dragEnd}
+          className={cn(dragging?.kind === 'connection' && dragging.id === conn.id && 'opacity-40')}
+        >
+          <ConnectionCard connection={conn} onDelete={onDelete} onEdit={onEdit} />
+        </div>
+      ))}
+    </div>
+  )
+
+  const showTopLevelTarget = dragging !== null && dragging.folderId !== ''
+
+  return (
+    <div
+      className="space-y-3"
+      onDragOver={(e) => controls.dragOver(e, '')}
+      onDrop={(e) => controls.drop(e, '')}
+    >
+      {showTopLevelTarget && (
+        <div
+          className={cn(
+            'flex h-9 items-center gap-2 rounded-sm border border-dashed px-3 font-mono text-xs transition-colors',
+            overFolderId === ''
+              ? 'border-amber-500/60 bg-amber-500/[0.06] text-amber-500'
+              : 'border-border text-muted-foreground'
+          )}
+        >
+          <CornerLeftUp className="h-3.5 w-3.5" />
+          Drop here to move to top level
+        </div>
+      )}
+      {creatingIn === '' && (
+        <div className="px-1">
+          <FolderNameInput onSubmit={(name) => controls.create(name, '')} onCancel={() => onCreatingInChange(null)} />
+        </div>
+      )}
+      {tree.children.map((node) => (
+        <FolderSection key={node.folder.id} node={node} controls={controls} renderConnections={renderConnections} />
+      ))}
+      {tree.connections.length > 0 && (
+        <div className={cn(tree.children.length > 0 && 'pt-3')}>{renderConnections(tree.connections)}</div>
+      )}
+    </div>
+  )
+}

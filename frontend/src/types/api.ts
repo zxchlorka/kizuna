@@ -65,7 +65,16 @@ export interface Connection {
   kafka_config?: KafkaConfig
   tags?: string[]
   read_only?: boolean
+  // Folder on the connection list; absent at top level.
+  folder_id?: string
   visible_schemas: string[] | null
+}
+
+export interface Folder {
+  id: string
+  name: string
+  // Absent at top level.
+  parent_id?: string
 }
 
 export interface PostgresConnectionInput {

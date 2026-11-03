@@ -1,11 +1,14 @@
-import { findConnection } from '@/lib/databaseConnection'
-import type { Connection, ObjectItem, ObjectType } from '@/types/api'
+import { folderPath } from '@/lib/connectionFolders'
+import { findConnection, parentConnectionId } from '@/lib/databaseConnection'
+import type { Connection, Folder, ObjectItem, ObjectType } from '@/types/api'
 
 export interface PaletteEntry {
   // Stable React key.
   id: string
   connId: string
   connName: string
+  // "Team / Project" of the connection's folder; '' at top level.
+  folderPath: string
   // null opens the connection itself.
   object: string | null
   objectType: ObjectType | null
@@ -43,12 +46,16 @@ export function mergeNamespaces(known: string[] = [], seen: string[]): string[] 
 export function buildPaletteEntries(
   connections: Connection[],
   treeItems: Record<string, ObjectItem[]>,
-  redisNamespaces: Record<string, string[]> = {}
+  redisNamespaces: Record<string, string[]> = {},
+  folders: Folder[] = []
 ): PaletteEntry[] {
+  // Keyed by stored id; a runtime database sits in its parent's folder.
+  const paths = new Map(connections.map((c) => [c.id, folderPath(folders, c.folder_id).join(' / ')]))
   const entries: PaletteEntry[] = connections.map((c) => ({
     id: c.id,
     connId: c.id,
     connName: c.name,
+    folderPath: paths.get(c.id) ?? '',
     object: null,
     objectType: null,
   }))
@@ -66,31 +73,41 @@ export function buildPaletteEntries(
       const id = `${connId}::${object}`
       if (seen.has(id)) continue
       seen.add(id)
-      entries.push({ id, connId, connName, object, objectType: item.type as ObjectType })
+      entries.push({ id, connId, connName, folderPath: paths.get(parentConnectionId(connId)) ?? '', object, objectType: item.type as ObjectType })
     }
   }
   for (const conn of connections) {
     if (conn.type !== 'redis') continue
     for (const namespace of redisNamespaces[conn.id] ?? []) {
       const object = `${namespace}${redisSeparator(conn)}*`
-      entries.push({ id: `${conn.id}::${object}`, connId: conn.id, connName: conn.name, object, objectType: 'namespace' })
+      entries.push({
+        id: `${conn.id}::${object}`,
+        connId: conn.id,
+        connName: conn.name,
+        folderPath: paths.get(conn.id) ?? '',
+        object,
+        objectType: 'namespace',
+      })
     }
   }
   return entries
 }
 
 // Lower is better; null drops the entry. Every whitespace-separated word must
-// match somewhere, so "stage orders" narrows to orders on the stage connection.
+// match somewhere, so "stage orders" narrows to orders on the stage connection
+// and "billing prod" to the prod connection inside a Billing folder.
 function score(entry: PaletteEntry, words: string[]): number | null {
   const object = (entry.object ?? '').toLowerCase()
   const bare = object.slice(object.lastIndexOf('.') + 1)
   const conn = entry.connName.toLowerCase()
+  const path = entry.folderPath.toLowerCase()
   let total = 0
   for (const word of words) {
     if (bare.startsWith(word)) total += 0
     else if (object.includes(word)) total += 1
     else if (conn.startsWith(word)) total += 2
     else if (conn.includes(word)) total += 3
+    else if (path.includes(word)) total += 4
     else return null
   }
   return total

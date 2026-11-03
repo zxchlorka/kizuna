@@ -1,13 +1,5 @@
 import type { Connection } from '@/types/api'
 
-export interface ConnectionGroup {
-  // Lowercased tag; '' for connections without one.
-  key: string
-  // Tag as the first connection in the group spelled it.
-  label: string
-  connections: Connection[]
-}
-
 // Environments sort by risk, the rest alphabetically, untagged last.
 const ENV_RANK: Record<string, number> = {
   production: 0,
@@ -61,23 +53,4 @@ export function nextTagSelection(selected: ReadonlySet<string>, key: string, add
 export function filterConnectionsByTags(connections: Connection[], selected: ReadonlySet<string>): Connection[] {
   if (selected.size === 0) return connections
   return connections.filter((c) => tagKeys(c).some((t) => selected.has(t.toLowerCase())))
-}
-
-// A connection with several tags lives under one of them, so every card shows up exactly once:
-// the first selected tag if a tag filter is active, otherwise its first tag.
-export function groupConnectionsByTag(
-  connections: Connection[],
-  selected: ReadonlySet<string> = new Set()
-): ConnectionGroup[] {
-  const groups = new Map<string, ConnectionGroup>()
-  for (const conn of connections) {
-    const tags = tagKeys(conn)
-    const label = tags.find((t) => selected.has(t.toLowerCase())) ?? tags[0] ?? ''
-    const key = label.toLowerCase()
-    const group = groups.get(key) ?? { key, label, connections: [] }
-    group.connections.push(conn)
-    groups.set(key, group)
-  }
-
-  return [...groups.values()].sort(byRank)
 }
