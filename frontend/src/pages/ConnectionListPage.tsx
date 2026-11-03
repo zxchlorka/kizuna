@@ -250,13 +250,14 @@ export default function ConnectionListPage() {
 
         {error && <ErrorBanner message={error} onRetry={() => void fetchConnections()} />}
 
-        {!loading && !error && connections.length === 0 && (
+        {!loading && !error && connections.length === 0 && folders.length === 0 && (
           <div className="animate-fade-in-up py-16" style={{ animationFillMode: 'both' }}>
             <EmptyState variant="no_connections" actionLabel="New Connection" onAction={openCreate} />
           </div>
         )}
 
-        {!loading && connections.length > 0 && (
+        {/* Folders outlive their connections: an emptied tree stays manageable. */}
+        {!loading && (connections.length > 0 || folders.length > 0) && (
           <>
             <div
               className="mb-6 flex flex-col gap-4 animate-fade-in-up md:flex-row md:items-end md:justify-between"
@@ -363,7 +364,7 @@ export default function ConnectionListPage() {
               </div>
             )}
 
-            {visibleConnections.length === 0 ? (
+            {visibleConnections.length === 0 && (filtering || folders.length === 0) ? (
               <div className="animate-fade-in-up py-10" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
                 {query.trim() ? (
                   <EmptyState
