@@ -3,6 +3,22 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.12.1 — 2026-11-03
+
+### Navigation
+
+- ⌘K / Ctrl+K opens the palette in any keyboard layout. It matched the
+  character the key produces, which is `л` with a Russian layout, so the
+  shortcut did nothing there; it now matches the physical K key.
+
+### Docs
+
+- Both READMEs spell the shortcut out: ⌘K on macOS, Ctrl+K on Windows and
+  Linux.
+- Updating is one command: `docker run --pull always` fetches the newest image.
+  A plain `docker run` reuses the image already on the machine, so repeating
+  the install command alone kept the old version.
+
 ## v0.12.0 — 2026-11-03
 
 ### SQL console
