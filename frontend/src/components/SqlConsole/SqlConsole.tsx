@@ -8,6 +8,7 @@ import { SqlEditor, type SqlEditorHandle } from '@/components/SqlConsole/SqlEdit
 import { SqlResultsArea } from '@/components/SqlConsole/SqlResultsArea'
 import { SqlStatusBar } from '@/components/SqlConsole/SqlStatusBar'
 import { SqlToolbar } from '@/components/SqlConsole/SqlToolbar'
+import { TransactionBar } from '@/components/SqlConsole/TransactionBar'
 import { getSqlStatements } from '@/lib/sqlStatements'
 import { useConnectionStore } from '@/stores/connections'
 import { useSqlCatalogStore } from '@/stores/sqlCatalog'
@@ -46,6 +47,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   const runExplain = useSqlConsoleStore((state) => state.runExplain)
   const runAnalyze = useSqlConsoleStore((state) => state.runAnalyze)
   const cancelRun = useSqlConsoleStore((state) => state.cancelRun)
+  const refreshTransaction = useSqlConsoleStore((state) => state.refreshTransaction)
 
   const catalogTables = useMemo<SqlCatalogTable[]>(() => {
     const tables: SqlCatalogTable[] = []
@@ -81,6 +83,12 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   useEffect(() => {
     void fetchSqlCatalog(connId)
   }, [connId, fetchSqlCatalog])
+
+  // The server keeps a tab's open transaction across a page reload; the
+  // restored tab has to show it before the next run does.
+  useEffect(() => {
+    void refreshTransaction(connId, tabId)
+  }, [connId, tabId, refreshTransaction])
 
   useEffect(() => {
     if (connections.length === 0) {
@@ -206,6 +214,17 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         onAnalyze={handleAnalyze}
         onFormat={() => editorRef.current?.formatDocument()}
         onToggleHistory={() => toggleHistory(tabId)}
+      />
+      <TransactionBar
+        transaction={tab.transaction}
+        running={tab.running}
+        onCommit={() => void runStatements(connId, tabId, ['COMMIT'])}
+        onRollback={() => void runStatements(connId, tabId, ['ROLLBACK'])}
+        onDismiss={() =>
+          useSqlConsoleStore.setState((state) => ({
+            tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], transaction: 'idle' } },
+          }))
+        }
       />
 
       <div ref={splitRef} className="relative flex-1 overflow-hidden">

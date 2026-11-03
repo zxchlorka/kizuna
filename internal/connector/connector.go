@@ -1,6 +1,9 @@
 package connector
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Connector is the core interface that all data source connectors implement.
 type Connector interface {
@@ -86,6 +89,50 @@ const (
 	// StatsSequences: sequences approaching the ceiling of the column they feed.
 	StatsSequences ServerStatsSection = "sequences"
 )
+
+// MarshalJSON always sends columns and rows as arrays. A failed or skipped
+// statement leaves both nil, and null on the wire broke the console, which
+// reads them as arrays: clicking a failed statement blanked the whole page.
+func (r ExecResult) MarshalJSON() ([]byte, error) {
+	type plain ExecResult
+	out := plain(r)
+	if out.Columns == nil {
+		out.Columns = []string{}
+	}
+	if out.Rows == nil {
+		out.Rows = [][]any{}
+	}
+	return json.Marshal(out)
+}
+
+// TxState is where a console session stands after a run.
+type TxState string
+
+const (
+	// TxIdle: no transaction; the session went back to the pool.
+	TxIdle TxState = "idle"
+	// TxOpen: a transaction is open and the session stays with the console tab.
+	TxOpen TxState = "open"
+	// TxFailed: the open transaction hit an error; only ROLLBACK gets it out.
+	TxFailed TxState = "failed"
+	// TxLost: the connection dropped (a cancel closes it) while a transaction
+	// was open, so the server rolled everything in it back.
+	TxLost TxState = "lost"
+)
+
+// SessionExecutor is an optional capability for connectors with server-side
+// transactions. Statements run under a session id (one per SQL console tab):
+// while that session has a transaction open it keeps its own connection, so a
+// BEGIN in one run, any number of runs after it, and a COMMIT in a later run
+// all reach the same server session. Outside a transaction the connection
+// goes back to the pool after every run, exactly as Execute does.
+type SessionExecutor interface {
+	ExecuteInSession(ctx context.Context, sessionID, command string) (*ExecResult, TxState, error)
+	ExecuteBatchInSession(ctx context.Context, sessionID string, commands []string) ([]ExecResult, TxState, error)
+	SessionState(ctx context.Context, sessionID string) (TxState, error)
+	// EndSession rolls back whatever the session left open and frees its connection.
+	EndSession(ctx context.Context, sessionID string) error
+}
 
 // ServerStatsProvider is an optional capability for connectors that can report
 // what the server itself is doing, as opposed to what is stored in it.
@@ -278,6 +325,9 @@ type ExecResult struct {
 	ColumnSources []*ColumnSource `json:"column_sources,omitempty"` // aligned to Columns; nil for expressions
 	Skipped       bool            `json:"skipped,omitempty"`
 	Canceled      bool            `json:"canceled,omitempty"` // stopped by an explicit Cancel, not a failure
+	// Transaction is the console session's state after a run in a session
+	// (SessionExecutor); empty for runs outside one.
+	Transaction TxState `json:"transaction,omitempty"`
 }
 
 type MutateResult struct {

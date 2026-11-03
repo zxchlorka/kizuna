@@ -50,6 +50,9 @@ type PostgresConnector struct {
 
 	schemaCacheMu sync.RWMutex
 	schemaCache   map[string]schemaCacheBucket
+
+	sessionsMu sync.Mutex
+	sessions   map[string]*consoleSession
 }
 
 type completionCacheItem struct {
@@ -220,6 +223,7 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 		columnCache:      make(map[string]completionCacheBucket),
 		childObjectCache: make(map[string]objectCacheBucket),
 		schemaCache:      make(map[string]schemaCacheBucket),
+		sessions:         make(map[string]*consoleSession),
 	}, nil
 }
 
@@ -243,6 +247,7 @@ func (p *PostgresConnector) GetInfo(ctx context.Context) (*connector.ConnInfo, e
 }
 
 func (p *PostgresConnector) Close() error {
+	p.endAllSessions()
 	p.pool.Close()
 	return nil
 }

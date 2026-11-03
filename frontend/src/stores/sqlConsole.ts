@@ -4,6 +4,7 @@ import type {
   ExecuteMultiResponse,
   ExplainResult,
   HistoryEntry,
+  TxState,
 } from '@/types/api'
 import { apiFetch, fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
 
@@ -52,6 +53,7 @@ interface SqlTabState {
   historySearch: string
   historyCursor: number
   historyDraft: string
+  transaction: TxState
 }
 
 interface SqlConsoleStore {
@@ -70,6 +72,11 @@ interface SqlConsoleStore {
   fetchHistory: (connId: string, tabId: string, search?: string) => Promise<void>
   clearHistory: (connId: string, tabId: string) => Promise<void>
   runStatements: (connId: string, tabId: string, statements: string[]) => Promise<void>
+  // Reads the session's transaction state from the server: after a Stop (the
+  // response never arrives) and when a console mounts after a page reload.
+  refreshTransaction: (connId: string, tabId: string) => Promise<void>
+  // Rolls back what the tab's session left open and frees its connection.
+  endSession: (connId: string, tabId: string) => void
   runExplain: (connId: string, tabId: string, statement: string) => Promise<void>
   runAnalyze: (connId: string, tabId: string, statement: string) => Promise<void>
   cancelRun: (tabId: string) => void
@@ -90,6 +97,7 @@ const defaultTabState = (): SqlTabState => ({
   historySearch: '',
   historyCursor: -1,
   historyDraft: '',
+  transaction: 'idle',
 })
 
 function ensureState(tabs: Record<string, SqlTabState>, tabId: string): SqlTabState {
@@ -514,13 +522,16 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
     const controller = new AbortController()
     sqlRunControllers.set(tabId, controller)
     const startedAt = Date.now()
+    let transactionAfter: TxState | undefined
 
     try {
+      // The tab id is the session: a BEGIN in this run and a COMMIT in a later
+      // one have to reach the same server connection.
       const endpoint = trimmedStatements.length === 1 ? 'execute' : 'execute-multi'
       const body =
         trimmedStatements.length === 1
-          ? JSON.stringify({ statement: trimmedStatements[0] })
-          : JSON.stringify({ statements: trimmedStatements })
+          ? JSON.stringify({ statement: trimmedStatements[0], session_id: tabId })
+          : JSON.stringify({ statements: trimmedStatements, session_id: tabId })
 
       const res = await fetchWithTimeout(
         `/api/connections/${connId}/${endpoint}`,
@@ -535,13 +546,22 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
 
       if (!res.ok) {
         const payload = await res.json().catch(() => ({ error: res.statusText }))
+        if (payload.transaction) {
+          transactionAfter = payload.transaction as TxState
+        }
         throw new Error(payload.error || res.statusText)
       }
 
-      const rawResults: ExecResult[] =
-        trimmedStatements.length === 1
-          ? [await res.json()]
-          : (await res.json() as ExecuteMultiResponse).results
+      let rawResults: ExecResult[]
+      if (trimmedStatements.length === 1) {
+        const single = (await res.json()) as ExecResult
+        rawResults = [single]
+        transactionAfter = single.transaction ?? 'idle'
+      } else {
+        const multi = (await res.json()) as ExecuteMultiResponse
+        rawResults = multi.results
+        transactionAfter = multi.transaction ?? 'idle'
+      }
 
       const results: SqlResultItem[] = rawResults.map((result, index) => ({
         id: newResultId('stmt', index),
@@ -570,6 +590,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
               error: null,
               results,
               activeResultId: results[0]?.id ?? null,
+              transaction: transactionAfter ?? tab.transaction,
             },
           },
         }
@@ -606,6 +627,8 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
             },
           }
         })
+        // The aborted request took the transaction state with it; ask for it.
+        void get().refreshTransaction(connId, tabId)
         // History is the only surviving record of what a cancelled batch
         // actually ran: the response carrying the per-statement outcome went
         // away with the aborted request. Opening the panel fetches it (see the
@@ -659,6 +682,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
               error: message,
               results: [failedResult],
               activeResultId: failedResult.id,
+              transaction: transactionAfter ?? tab.transaction,
             },
           },
         }
@@ -668,6 +692,38 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
         sqlRunControllers.delete(tabId)
       }
     }
+  },
+
+  // Tab ids ("<conn>:sql:<n>") go into the path as they are: encoding the
+  // colon would make the router read a different id than the run bodies carry.
+  refreshTransaction: async (connId, tabId) => {
+    try {
+      const res = await fetchWithTimeout(`/api/connections/${connId}/sessions/${tabId}`)
+      await throwOnApiError(res)
+      const { transaction } = (await res.json()) as { transaction: TxState }
+      set((state) => {
+        const tab = ensureState(state.tabs, tabId)
+        return { tabs: { ...state.tabs, [tabId]: { ...tab, transaction } } }
+      })
+    } catch {
+      // Unknown is shown as what the tab last knew; the next run reports the
+      // real state anyway.
+    }
+  },
+
+  endSession: (connId, tabId) => {
+    // keepalive: the tab may be closing because the page is going away.
+    void fetchWithTimeout(`/api/connections/${connId}/sessions/${tabId}`, {
+      method: 'DELETE',
+      keepalive: true,
+    }).catch(() => {
+      // The connector rolls back every session it holds when it closes, so a
+      // lost request costs a connection until then, not a transaction.
+    })
+    set((state) => {
+      if (!state.tabs[tabId]) return state
+      return { tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], transaction: 'idle' } } }
+    })
   },
 
   runExplain: async (connId, tabId, statement) => {
