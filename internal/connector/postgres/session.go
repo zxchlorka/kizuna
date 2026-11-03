@@ -15,7 +15,15 @@ import (
 // query timeout: it only stops a dead server from holding up a tab close.
 const rollbackTimeout = 5 * time.Second
 
+// sessionIdleTimeout is how long a console transaction may sit with nothing
+// running before it is rolled back. A tab whose browser went away would
+// otherwise hold its locks and a pool connection until Kizuna restarts. It
+// never touches a running statement: the clock starts when a run finishes.
+const sessionIdleTimeout = 30 * time.Minute
+
 var errSessionEnded = errors.New("this console session has ended")
+
+var errSessionExpired = errors.New("the transaction sat idle for 30 minutes and was rolled back; nothing was run, start it again")
 
 // consoleSession is the connection one SQL console tab holds while it has a
 // transaction open. turn makes runs of one tab take turns (two statements on
@@ -28,6 +36,14 @@ type consoleSession struct {
 	// lost remembers that the last run dropped an open transaction, for a
 	// console that missed the response (a Stop aborts its request).
 	lost bool
+	// expired is set when the idle timer rolled the transaction back. The next
+	// run is refused once, so statements meant for that transaction are not
+	// silently autocommitted.
+	expired bool
+	idle    *time.Timer
+	// idleGen tells a timer that fired while a run held the lock that the
+	// run has re-armed it since.
+	idleGen int
 }
 
 func (s *consoleSession) lock(ctx context.Context) error {
@@ -75,6 +91,11 @@ func (p *PostgresConnector) inSession(ctx context.Context, id string, fn func(*p
 	if s.ended {
 		return connector.TxIdle, fmt.Errorf("%w: %s", connector.ErrBadRequest, errSessionEnded)
 	}
+	if s.expired {
+		s.expired = false
+		return connector.TxExpired, fmt.Errorf("%w: %s", connector.ErrBadRequest, errSessionExpired)
+	}
+	s.stopIdle()
 
 	if s.conn == nil {
 		conn, err := p.pool.Acquire(ctx)
@@ -104,8 +125,37 @@ func (p *PostgresConnector) inSession(ctx context.Context, id string, fn func(*p
 	if state == connector.TxIdle {
 		s.conn.Release()
 		s.conn = nil
+	} else {
+		p.armIdle(s)
 	}
 	return state, runErr
+}
+
+// armIdle starts the idle clock of a session left holding a transaction.
+// Callers hold the session lock.
+func (p *PostgresConnector) armIdle(s *consoleSession) {
+	s.idleGen++
+	gen := s.idleGen
+	s.idle = time.AfterFunc(p.sessionIdle, func() { p.expireSession(s, gen) })
+}
+
+func (s *consoleSession) stopIdle() {
+	if s.idle != nil {
+		s.idle.Stop()
+		s.idle = nil
+	}
+	s.idleGen++
+}
+
+func (p *PostgresConnector) expireSession(s *consoleSession, gen int) {
+	_ = s.lock(context.Background())
+	defer s.unlock()
+	if s.ended || s.idleGen != gen || s.conn == nil {
+		return
+	}
+	p.rollbackAndRelease(s)
+	s.idle = nil
+	s.expired = true
 }
 
 func (p *PostgresConnector) ExecuteInSession(ctx context.Context, sessionID, command string) (*connector.ExecResult, connector.TxState, error) {
@@ -145,6 +195,9 @@ func (p *PostgresConnector) SessionState(ctx context.Context, sessionID string) 
 	if s.lost {
 		return connector.TxLost, nil
 	}
+	if s.expired {
+		return connector.TxExpired, nil
+	}
 	if s.conn == nil {
 		return connector.TxIdle, nil
 	}
@@ -169,11 +222,18 @@ func (p *PostgresConnector) endSession(ctx context.Context, s *consoleSession) {
 	_ = s.lock(context.WithoutCancel(ctx))
 	defer s.unlock()
 	s.ended = true
+	s.stopIdle()
 	if s.conn == nil {
 		return
 	}
+	p.rollbackAndRelease(s)
+}
+
+// rollbackAndRelease hands a pinned connection back to the pool, rolling back
+// whatever transaction it still holds. Callers hold the session lock.
+func (p *PostgresConnector) rollbackAndRelease(s *consoleSession) {
 	if txStateOf(s.conn) != connector.TxIdle {
-		rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), rollbackTimeout)
 		defer cancel()
 		if _, err := s.conn.Exec(rollbackCtx, "ROLLBACK"); err != nil {
 			// Releasing a connection still inside a transaction makes the pool

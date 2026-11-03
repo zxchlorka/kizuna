@@ -54,6 +54,21 @@ describe('console sessions', () => {
     await vi.waitFor(() => expect(useSqlConsoleStore.getState().tabs['c1:sql:1'].transaction).toBe('lost'))
     expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/connections/c1/sessions/c1:sql:1')).toBe(true)
   })
+
+  it('drops a state refresh that a newer run overtook', async () => {
+    let answerRefresh: (r: Response) => void = () => {}
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      if (String(input).includes('/sessions/')) return new Promise<Response>((resolve) => (answerRefresh = resolve))
+      return Promise.resolve(json({ columns: [], rows: [], rows_affected: 0, duration_ms: 0, rows_returned: 0, transaction: 'open' }))
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+
+    const refresh = useSqlConsoleStore.getState().refreshTransaction('c1', 'c1:sql:1')
+    await useSqlConsoleStore.getState().runStatements('c1', 'c1:sql:1', ['BEGIN'])
+    answerRefresh(json({ transaction: 'lost' }))
+    await refresh
+    expect(useSqlConsoleStore.getState().tabs['c1:sql:1'].transaction).toBe('open')
+  })
 })
 
 describe('session cleanup', () => {

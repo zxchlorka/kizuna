@@ -53,6 +53,9 @@ type PostgresConnector struct {
 
 	sessionsMu sync.Mutex
 	sessions   map[string]*consoleSession
+	// sessionIdle is how long a console transaction may sit idle; see
+	// sessionIdleTimeout.
+	sessionIdle time.Duration
 }
 
 type completionCacheItem struct {
@@ -224,6 +227,7 @@ func New(ctx context.Context, cfg config.ConnectionConfig, encKey string) (*Post
 		childObjectCache: make(map[string]objectCacheBucket),
 		schemaCache:      make(map[string]schemaCacheBucket),
 		sessions:         make(map[string]*consoleSession),
+		sessionIdle:      sessionIdleTimeout,
 	}, nil
 }
 

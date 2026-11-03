@@ -232,7 +232,7 @@ export interface ColumnSource {
 // Where a SQL console tab's server session stands after a run: 'open' keeps the
 // tab on its own connection until COMMIT or ROLLBACK, 'failed' needs ROLLBACK,
 // 'lost' means the connection dropped and the server rolled the transaction back.
-export type TxState = 'idle' | 'open' | 'failed' | 'lost'
+export type TxState = 'idle' | 'open' | 'failed' | 'lost' | 'expired'
 
 export interface ExecResult {
   columns: string[]

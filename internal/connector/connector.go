@@ -118,6 +118,9 @@ const (
 	// TxLost: the connection dropped (a cancel closes it) while a transaction
 	// was open, so the server rolled everything in it back.
 	TxLost TxState = "lost"
+	// TxExpired: the transaction sat idle past the session idle timeout and
+	// was rolled back to free its locks and its pool connection.
+	TxExpired TxState = "expired"
 )
 
 // SessionExecutor is an optional capability for connectors with server-side

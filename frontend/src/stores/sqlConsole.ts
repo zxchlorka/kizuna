@@ -169,6 +169,18 @@ function isCurrentRun(tabId: string, controller: AbortController): boolean {
   return sqlRunControllers.get(tabId) === controller
 }
 
+// Counts runs started per tab, so a transaction refresh that was in flight
+// when a new run began does not overwrite the state that run reports.
+const sqlRunStarts = new Map<string, number>()
+
+function startRun(tabId: string): AbortController {
+  sqlRunControllers.get(tabId)?.abort()
+  const controller = new AbortController()
+  sqlRunControllers.set(tabId, controller)
+  sqlRunStarts.set(tabId, (sqlRunStarts.get(tabId) ?? 0) + 1)
+  return controller
+}
+
 // Console requests carry no timeout — a legitimate query can run 30-40s+, so
 // every run below passes Infinity as fetchWithTimeout's timeoutMs and the
 // AbortController above is the only thing that can end the request.
@@ -518,9 +530,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
-    sqlRunControllers.get(tabId)?.abort()
-    const controller = new AbortController()
-    sqlRunControllers.set(tabId, controller)
+    const controller = startRun(tabId)
     const startedAt = Date.now()
     let transactionAfter: TxState | undefined
 
@@ -697,10 +707,12 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
   // Tab ids ("<conn>:sql:<n>") go into the path as they are: encoding the
   // colon would make the router read a different id than the run bodies carry.
   refreshTransaction: async (connId, tabId) => {
+    const runs = sqlRunStarts.get(tabId)
     try {
       const res = await fetchWithTimeout(`/api/connections/${connId}/sessions/${tabId}`)
       await throwOnApiError(res)
       const { transaction } = (await res.json()) as { transaction: TxState }
+      if (sqlRunStarts.get(tabId) !== runs) return
       set((state) => {
         const tab = ensureState(state.tabs, tabId)
         return { tabs: { ...state.tabs, [tabId]: { ...tab, transaction } } }
@@ -749,9 +761,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
-    sqlRunControllers.get(tabId)?.abort()
-    const controller = new AbortController()
-    sqlRunControllers.set(tabId, controller)
+    const controller = startRun(tabId)
     const startedAt = Date.now()
 
     try {
@@ -892,9 +902,7 @@ export const useSqlConsoleStore = create<SqlConsoleStore>((set, get) => ({
       }
     })
 
-    sqlRunControllers.get(tabId)?.abort()
-    const controller = new AbortController()
-    sqlRunControllers.set(tabId, controller)
+    const controller = startRun(tabId)
     const startedAt = Date.now()
 
     try {

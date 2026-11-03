@@ -48,6 +48,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   const runAnalyze = useSqlConsoleStore((state) => state.runAnalyze)
   const cancelRun = useSqlConsoleStore((state) => state.cancelRun)
   const refreshTransaction = useSqlConsoleStore((state) => state.refreshTransaction)
+  const endSession = useSqlConsoleStore((state) => state.endSession)
 
   const catalogTables = useMemo<SqlCatalogTable[]>(() => {
     const tables: SqlCatalogTable[] = []
@@ -89,6 +90,22 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
   useEffect(() => {
     void refreshTransaction(connId, tabId)
   }, [connId, tabId, refreshTransaction])
+
+  // An open transaction can expire on the server while the user is away;
+  // coming back to the window shows it before anything else runs.
+  const transactionOpen = tab?.transaction === 'open'
+  useEffect(() => {
+    if (!transactionOpen) return
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshTransaction(connId, tabId)
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    window.addEventListener('focus', onVisible)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('focus', onVisible)
+    }
+  }, [connId, tabId, transactionOpen, refreshTransaction])
 
   useEffect(() => {
     if (connections.length === 0) {
@@ -220,11 +237,7 @@ export function SqlConsole({ tabId, connId }: SqlConsoleProps) {
         running={tab.running}
         onCommit={() => void runStatements(connId, tabId, ['COMMIT'])}
         onRollback={() => void runStatements(connId, tabId, ['ROLLBACK'])}
-        onDismiss={() =>
-          useSqlConsoleStore.setState((state) => ({
-            tabs: { ...state.tabs, [tabId]: { ...state.tabs[tabId], transaction: 'idle' } },
-          }))
-        }
+        onDismiss={() => endSession(connId, tabId)}
       />
 
       <div ref={splitRef} className="relative flex-1 overflow-hidden">

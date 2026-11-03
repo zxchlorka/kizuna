@@ -213,3 +213,44 @@ func TestSessionCancelInsideTransactionReportsLost(t *testing.T) {
 		t.Fatal("a canceled transaction applied its DROP")
 	}
 }
+
+// An abandoned tab must not hold its transaction forever: after the idle
+// timeout it is rolled back, the next run is refused once with TxExpired so its
+// statements are not silently autocommitted, and the run after that works.
+func TestSessionIdleTimeoutRollsBackAndRefusesNextRun(t *testing.T) {
+	t.Parallel()
+	p := newLocalSessionTestConnector(t)
+	p.sessionIdle = 300 * time.Millisecond
+	table := tableName(t, "t")
+	setupTables(t, p, table)
+
+	if state := mustRun(t, p, "tab", "BEGIN", fmt.Sprintf("INSERT INTO public.%s VALUES (1)", table)); state != connector.TxOpen {
+		t.Fatalf("state after BEGIN = %s, want open", state)
+	}
+	// A run inside the window resets the clock.
+	time.Sleep(200 * time.Millisecond)
+	mustRun(t, p, "tab", "SELECT 1")
+	time.Sleep(200 * time.Millisecond)
+	if state, _ := p.SessionState(context.Background(), "tab"); state != connector.TxOpen {
+		t.Fatalf("session expired although a run reset its clock: %s", state)
+	}
+
+	time.Sleep(400 * time.Millisecond)
+	if state, _ := p.SessionState(context.Background(), "tab"); state != connector.TxExpired {
+		t.Fatalf("state after idle timeout = %s, want expired", state)
+	}
+	if n := countRows(t, p, table); n != 0 {
+		t.Fatalf("expired transaction left %d rows, want 0", n)
+	}
+
+	_, state, err := p.ExecuteInSession(context.Background(), "tab", fmt.Sprintf("INSERT INTO public.%s VALUES (2)", table))
+	if err == nil || state != connector.TxExpired {
+		t.Fatalf("first run after expiry: state %s, err %v; want refused with expired", state, err)
+	}
+	if n := countRows(t, p, table); n != 0 {
+		t.Fatalf("refused run still wrote %d rows", n)
+	}
+	if state := mustRun(t, p, "tab", "SELECT 1"); state != connector.TxIdle {
+		t.Fatalf("run after the refusal = %s, want idle", state)
+	}
+}
