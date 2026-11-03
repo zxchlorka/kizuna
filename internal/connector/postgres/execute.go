@@ -46,6 +46,16 @@ func (p *PostgresConnector) ExecuteBatch(ctx context.Context, commands []string)
 	}
 	defer session.Release()
 
+	return p.executeBatchOn(ctx, session, commands)
+}
+
+// executeBatchOn runs commands one after another on one connection, stopping
+// at the first failure and marking the rest skipped.
+func (p *PostgresConnector) executeBatchOn(ctx context.Context, session sqlExecutor, commands []string) ([]connector.ExecResult, error) {
+	if len(commands) == 0 {
+		return nil, fmt.Errorf("%w: statements are required", connector.ErrBadRequest)
+	}
+
 	results := make([]connector.ExecResult, 0, len(commands))
 	for idx, command := range commands {
 		trimmed := strings.TrimSpace(command)

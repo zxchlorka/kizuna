@@ -61,6 +61,8 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Post("/ddl", ddlHandler.Execute)
 			r.Post("/execute", sqlHandler.Execute)
 			r.Post("/execute-multi", sqlHandler.ExecuteMulti)
+			r.Get("/sessions/{session}", sqlHandler.SessionState)
+			r.Delete("/sessions/{session}", sqlHandler.EndSession)
 			r.Post("/explain", sqlHandler.Explain)
 			r.Post("/analyze", sqlHandler.Analyze)
 			r.Get("/completions", sqlHandler.Completions)

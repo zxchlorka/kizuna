@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Activity, Braces, CircleDot, Database, Eye, Folder, Gauge, Hash, List, ListOrdered, Plus, SquareTerminal, Table2, TerminalSquare, X, Zap } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { FloatingMenu, FloatingMenuItem, FloatingMenuLabel, FloatingMenuSeparator } from '@/components/ui/floating-menu'
+import { confirmCloseConsoles } from '@/lib/sqlSessions'
 import { cn } from '@/lib/utils'
 import { ConnectionLinksButton } from '@/components/links/ConnectionLinksButton'
 import { useConnectionStore } from '@/stores/connections'
@@ -74,6 +75,11 @@ export function TabBar({ connId }: TabBarProps) {
   const isRedis = connection?.type === 'redis'
   const isKafka = connection?.type === 'kafka'
   const visibleTabs = tabs.filter((tab) => tabPageId(tab) === connId)
+  // Every close goes through here so a console with an open transaction asks first.
+  const closeIf = (tabIds: string[], close: () => void) => {
+    if (confirmCloseConsoles(tabIds)) close()
+  }
+  const idsAfter = (tabId: string) => visibleTabs.slice(visibleTabs.findIndex((tab) => tab.id === tabId) + 1).map((tab) => tab.id)
 
   return (
     <div className="flex min-h-[42px] items-center justify-between gap-2 border-b border-border bg-muted/30 pr-2">
@@ -109,7 +115,7 @@ export function TabBar({ connId }: TabBarProps) {
             <button
               onClick={(e) => {
                 e.stopPropagation()
-                closeTab(tab.id)
+                closeIf([tab.id], () => closeTab(tab.id))
               }}
               className="ml-1 rounded p-0.5 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-muted"
             >
@@ -123,21 +129,27 @@ export function TabBar({ connId }: TabBarProps) {
           <FloatingMenuLabel>
             {tabs.find((tab) => tab.id === menuTab.id)?.label ?? 'Tab'}
           </FloatingMenuLabel>
-          <FloatingMenuItem onClick={() => { closeTab(menuTab.id); setMenuTab(null) }}>Close</FloatingMenuItem>
+          <FloatingMenuItem onClick={() => { closeIf([menuTab.id], () => closeTab(menuTab.id)); setMenuTab(null) }}>Close</FloatingMenuItem>
           <FloatingMenuItem
             disabled={visibleTabs.length < 2}
-            onClick={() => { closeTabsExcept(menuTab.id, 'others'); setMenuTab(null) }}
+            onClick={() => {
+              closeIf(visibleTabs.filter((tab) => tab.id !== menuTab.id).map((tab) => tab.id), () => closeTabsExcept(menuTab.id, 'others'))
+              setMenuTab(null)
+            }}
           >
             Close others
           </FloatingMenuItem>
           <FloatingMenuItem
             disabled={visibleTabs.findIndex((tab) => tab.id === menuTab.id) >= visibleTabs.length - 1}
-            onClick={() => { closeTabsExcept(menuTab.id, 'right'); setMenuTab(null) }}
+            onClick={() => {
+              closeIf(idsAfter(menuTab.id), () => closeTabsExcept(menuTab.id, 'right'))
+              setMenuTab(null)
+            }}
           >
             Close to the right
           </FloatingMenuItem>
           <FloatingMenuSeparator />
-          <FloatingMenuItem onClick={() => { closeAllTabs(); setMenuTab(null) }}>
+          <FloatingMenuItem onClick={() => { closeIf(tabs.map((tab) => tab.id), closeAllTabs); setMenuTab(null) }}>
             Close all
           </FloatingMenuItem>
         </FloatingMenu>

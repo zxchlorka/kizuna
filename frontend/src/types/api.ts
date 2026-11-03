@@ -229,6 +229,11 @@ export interface ColumnSource {
   column: string
 }
 
+// Where a SQL console tab's server session stands after a run: 'open' keeps the
+// tab on its own connection until COMMIT or ROLLBACK, 'failed' needs ROLLBACK,
+// 'lost' means the connection dropped and the server rolled the transaction back.
+export type TxState = 'idle' | 'open' | 'failed' | 'lost' | 'expired'
+
 export interface ExecResult {
   columns: string[]
   column_types?: string[]
@@ -242,6 +247,8 @@ export interface ExecResult {
   truncated?: boolean
   applied_limit?: number
   column_sources?: (ColumnSource | null)[]
+  // Only on single-statement runs made in a console session.
+  transaction?: TxState
   skipped?: boolean
   canceled?: boolean
 }
@@ -259,6 +266,7 @@ export interface SqlCatalog {
 
 export interface ExecuteMultiResponse {
   results: ExecResult[]
+  transaction?: TxState
 }
 
 export interface ExplainNode {

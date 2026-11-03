@@ -94,7 +94,8 @@ export function SqlResultsArea({ results, activeResultId, onSelectResult, connId
 
   const exportColumns = useMemo<ExportColumn[]>(() => {
     if (!activeExecuteResult) return []
-    return activeExecuteResult.columns.map((name, i) => ({ name, type: activeExecuteResult.column_types?.[i] }))
+    // A failed statement has no columns; older servers sent null for them.
+    return (activeExecuteResult.columns ?? []).map((name, i) => ({ name, type: activeExecuteResult.column_types?.[i] }))
   }, [activeExecuteResult])
 
   const copyText = async (text: string, successMessage: string) => {

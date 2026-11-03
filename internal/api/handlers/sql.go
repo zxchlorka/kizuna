@@ -28,12 +28,17 @@ func NewSQLHandler(cfg *config.AppConfig, manager *connector.ConnectionManager) 
 	}
 }
 
+// SessionID names the SQL console tab the run belongs to. With it, a
+// transaction opened by one run stays on the same server session for the
+// next (see connector.SessionExecutor); without it every run is independent.
 type executeRequest struct {
 	Statement string `json:"statement"`
+	SessionID string `json:"session_id"`
 }
 
 type executeMultiRequest struct {
 	Statements []string `json:"statements"`
+	SessionID  string   `json:"session_id"`
 }
 
 type explainRequest struct {
@@ -59,7 +64,14 @@ func (h *SQLHandler) Execute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	startedAt := time.Now()
-	result, err := conn.Execute(r.Context(), req.Statement)
+	var result *connector.ExecResult
+	var txState connector.TxState
+	sessions, inSession := conn.(connector.SessionExecutor)
+	if inSession && req.SessionID != "" {
+		result, txState, err = sessions.ExecuteInSession(r.Context(), req.SessionID, req.Statement)
+	} else {
+		result, err = conn.Execute(r.Context(), req.Statement)
+	}
 	if err != nil {
 		h.appendHistory(id, connector.HistoryEntry{
 			ID:         fmt.Sprintf("%d", startedAt.UnixNano()),
@@ -69,11 +81,12 @@ func (h *SQLHandler) Execute(w http.ResponseWriter, r *http.Request) {
 			ExecutedAt: startedAt.UTC().Format(time.RFC3339),
 			Canceled:   errors.Is(err, connector.ErrCanceled),
 		})
-		writeConnectorError(w, err)
+		writeSessionError(w, err, txState)
 		return
 	}
 
 	h.appendResult(id, req.Statement, result, startedAt)
+	result.Transaction = txState
 	writeJSON(w, http.StatusOK, result)
 }
 
@@ -95,9 +108,15 @@ func (h *SQLHandler) ExecuteMulti(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	results, err := conn.ExecuteBatch(r.Context(), req.Statements)
+	var results []connector.ExecResult
+	var txState connector.TxState
+	if sessions, ok := conn.(connector.SessionExecutor); ok && req.SessionID != "" {
+		results, txState, err = sessions.ExecuteBatchInSession(r.Context(), req.SessionID, req.Statements)
+	} else {
+		results, err = conn.ExecuteBatch(r.Context(), req.Statements)
+	}
 	if err != nil {
-		writeConnectorError(w, err)
+		writeSessionError(w, err, txState)
 		return
 	}
 
@@ -122,7 +141,58 @@ func (h *SQLHandler) ExecuteMulti(w http.ResponseWriter, r *http.Request) {
 	}
 	h.appendHistoryBatch(id, entries)
 
-	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+	resp := map[string]any{"results": results}
+	if txState != "" {
+		resp["transaction"] = txState
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// writeSessionError is writeConnectorError that also says where the console
+// session stands: a failed statement inside a transaction leaves it failed,
+// and the console has to show that rather than guess.
+func writeSessionError(w http.ResponseWriter, err error, txState connector.TxState) {
+	if txState == "" {
+		writeConnectorError(w, err)
+		return
+	}
+	status, msg := mapConnectorError(err)
+	writeJSON(w, status, map[string]any{"error": msg, "code": status, "transaction": txState})
+}
+
+// SessionState reports the transaction state of a console tab's session, so
+// a console reopened after a page reload shows a transaction it left open.
+func (h *SQLHandler) SessionState(w http.ResponseWriter, r *http.Request) {
+	conn, err := h.manager.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	state := connector.TxIdle
+	if sessions, ok := conn.(connector.SessionExecutor); ok {
+		if state, err = sessions.SessionState(r.Context(), chi.URLParam(r, "session")); err != nil {
+			writeConnectorError(w, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"transaction": state})
+}
+
+// EndSession rolls back what a console tab left open and frees its connection;
+// the console calls it when the tab closes or moves to another connection.
+func (h *SQLHandler) EndSession(w http.ResponseWriter, r *http.Request) {
+	conn, err := h.manager.Get(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeConnectorError(w, err)
+		return
+	}
+	if sessions, ok := conn.(connector.SessionExecutor); ok {
+		if err := sessions.EndSession(r.Context(), chi.URLParam(r, "session")); err != nil {
+			writeConnectorError(w, err)
+			return
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *SQLHandler) Explain(w http.ResponseWriter, r *http.Request) {

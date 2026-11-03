@@ -1,10 +1,12 @@
 import { useEffect } from 'react'
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, useLocation } from 'react-router-dom'
 import ConnectionListPage from '@/pages/ConnectionListPage'
 import DataViewPage from '@/pages/DataViewPage'
 import SettingsPage from '@/pages/SettingsPage'
 import { CommandPalette } from '@/components/CommandPalette'
+import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ToastViewport } from '@/components/ToastViewport'
+import { startSqlSessionCleanup } from '@/lib/sqlSessions'
 import { restoreWorkspace, syncWorkspaceWithConnections } from '@/lib/workspacePersistence'
 import { useConnectionStore } from '@/stores/connections'
 
@@ -14,8 +16,10 @@ import { useConnectionStore } from '@/stores/connections'
 // restoreWorkspace's own comment for why this can't wait for a connection
 // fetch or be deferred into a component effect.
 restoreWorkspace()
+startSqlSessionCleanup()
 
 export default function App() {
+  const location = useLocation()
   const connections = useConnectionStore((state) => state.connections)
   const connectionsLoadedOnce = useConnectionStore((state) => state.loadedOnce)
   const connectionsError = useConnectionStore((state) => state.error)
@@ -35,11 +39,13 @@ export default function App() {
 
   return (
     <>
-      <Routes>
-        <Route path="/" element={<ConnectionListPage />} />
-        <Route path="/settings" element={<SettingsPage />} />
-        <Route path="/connections/:id" element={<DataViewPage />} />
-      </Routes>
+      <ErrorBoundary resetKey={location.pathname}>
+        <Routes>
+          <Route path="/" element={<ConnectionListPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/connections/:id" element={<DataViewPage />} />
+        </Routes>
+      </ErrorBoundary>
       <CommandPalette />
       <ToastViewport />
     </>

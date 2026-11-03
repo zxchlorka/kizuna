@@ -7,9 +7,10 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu'
+import { confirmCloseConsoles } from '@/lib/sqlSessions'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import { useWorkspaceStore } from '@/stores/workspace'
+import { tabPageId, useWorkspaceStore } from '@/stores/workspace'
 import { findConnection } from '@/lib/databaseConnection'
 
 interface ConnectionChipsProps {
@@ -29,6 +30,10 @@ export function ConnectionChips({ activeId }: ConnectionChipsProps) {
     .filter((connection): connection is NonNullable<typeof connection> => Boolean(connection))
 
   const handleClose = (id: string) => {
+    const pageTabs = useWorkspaceStore.getState().tabs.filter((tab) => tabPageId(tab) === id)
+    if (!confirmCloseConsoles(pageTabs.map((tab) => tab.id))) {
+      return
+    }
     closeConnection(id)
     if (id !== activeId) {
       return
