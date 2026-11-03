@@ -43,7 +43,6 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 			r.Get("/info", connHandler.Info)
 			r.Get("/stats", connHandler.ServerStats)
 			r.Get("/databases", connHandler.Databases)
-			r.Post("/duplicate", connHandler.Duplicate)
 			r.Get("/objects", objHandler.ListObjects)
 			r.Post("/keys", dataHandler.CreateKey)
 			r.Get("/objects/{name}/info", objHandler.GetObjectInfo)

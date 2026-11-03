@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { fetchWithTimeout, throwOnApiError } from '@/lib/http'
+import { findConnection, isDatabaseConnectionId } from '@/lib/databaseConnection'
 import type { Connection, ConnectionInput, TestResult } from '@/types/api'
 
 interface ConnectionStore {
@@ -74,6 +75,15 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
   },
 
   updateVisibleSchemas: async (id: string, visibleSchemas: string[] | null) => {
+    // A runtime database is not stored, so neither is its schema filter: it
+    // lives in the workspace for this session only.
+    if (isDatabaseConnectionId(id)) {
+      const connection = findConnection(get().connections, id)
+      if (!connection) {
+        throw new Error('Connection not found in store')
+      }
+      return { ...connection, visible_schemas: visibleSchemas }
+    }
     const res = await fetchWithTimeout(`/api/connections/${id}/visible-schemas`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },

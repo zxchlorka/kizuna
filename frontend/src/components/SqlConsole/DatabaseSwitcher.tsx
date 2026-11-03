@@ -12,6 +12,7 @@ import { fetchWithTimeout } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { databaseConnectionId, findConnection, parentConnectionId } from '@/lib/databaseConnection'
 
 interface DatabaseSwitcherProps {
   connId: string
@@ -26,10 +27,9 @@ interface DatabasesResponse {
 
 export function DatabaseSwitcher({ connId, tabId, connectionLabel }: DatabaseSwitcherProps) {
   const pushToast = useToastStore((state) => state.push)
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connection = useConnectionStore((state) => findConnection(state.connections, connId))
   const [databases, setDatabases] = useState<DatabasesResponse | null>(null)
   const [loading, setLoading] = useState(false)
-  const [switching, setSwitching] = useState<string | null>(null)
 
   const isPostgres = connection?.type === 'postgres'
 
@@ -50,34 +50,18 @@ export function DatabaseSwitcher({ connId, tabId, connectionLabel }: DatabaseSwi
     }
   }
 
-  const handleSwitch = async (database: string) => {
-    if (!databases || database === databases.current || switching) {
+  // Re-point this console tab at the other database in place: the tab (and its
+  // editor text) stays on the current page, only the query target changes. The
+  // target is the page's own connection or a runtime database id of it, never a
+  // runtime id of a runtime id.
+  const handleSwitch = (database: string) => {
+    if (database === connection?.database) {
       return
     }
-    setSwitching(database)
-    try {
-      const res = await fetchWithTimeout(`/api/connections/${connId}/duplicate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ database }),
-      })
-      const body = await res.json()
-      if (!res.ok) {
-        throw new Error(body.error || 'Failed to switch database')
-      }
-      const siblingId: string = body.id
-
-      await useConnectionStore.getState().fetch()
-
-      // Re-point this console tab at the sibling database in place: the tab
-      // (and its editor text) stays on the current page, only the query
-      // target changes.
-      useWorkspaceStore.getState().rebindSqlTab(tabId, siblingId)
-    } catch (error) {
-      pushToast({ tone: 'error', title: 'Switch failed', message: (error as Error).message })
-    } finally {
-      setSwitching(null)
-    }
+    const parentId = parentConnectionId(connId)
+    const parent = findConnection(useConnectionStore.getState().connections, parentId)
+    const target = database === parent?.database ? parentId : databaseConnectionId(parentId, database)
+    useWorkspaceStore.getState().rebindSqlTab(tabId, target)
   }
 
   if (!isPostgres) {
@@ -120,19 +104,17 @@ export function DatabaseSwitcher({ connId, tabId, connectionLabel }: DatabaseSwi
           <div className="px-2 py-2 text-xs text-muted-foreground">No databases found.</div>
         ) : (
           databases.databases.map((database) => {
-            const isCurrent = database === databases.current
+            // The tab's own target, not databases.current: the list is fetched once and
+            // stays as it was while the tab moves between databases.
+            const isCurrent = database === connection?.database
             return (
               <DropdownMenuItem
                 key={database}
-                disabled={isCurrent || switching !== null}
-                onSelect={() => void handleSwitch(database)}
+                disabled={isCurrent}
+                onSelect={() => handleSwitch(database)}
                 className="gap-2 font-mono text-xs"
               >
-                {switching === database ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Check className={isCurrent ? 'h-3.5 w-3.5 text-amber-500' : 'h-3.5 w-3.5 opacity-0'} />
-                )}
+                <Check className={isCurrent ? 'h-3.5 w-3.5 text-amber-500' : 'h-3.5 w-3.5 opacity-0'} />
                 {database}
               </DropdownMenuItem>
             )

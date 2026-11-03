@@ -9,6 +9,7 @@ import { useAutocomplete } from '@/hooks/useAutocomplete'
 import { useConnectionStore } from '@/stores/connections'
 import { useRedisCliStore } from '@/stores/redisCli'
 import type { CompletionItem } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface RedisCliProps {
   tabId: string
@@ -71,7 +72,7 @@ export function RedisCli({ tabId, connId }: RedisCliProps) {
   }, [requestCompletions, tab])
 
   const connectionLabel = useMemo(() => {
-    const connection = connections.find((item) => item.id === connId)
+    const connection = findConnection(connections, connId)
     return connection ? `${connection.name} · Redis` : connId
   }, [connections, connId])
 

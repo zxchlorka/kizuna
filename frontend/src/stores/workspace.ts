@@ -4,6 +4,7 @@ import { normalizeFilters, filtersEqual } from '@/lib/table'
 import { useConnectionStore } from '@/stores/connections'
 import { useDataStore } from '@/stores/data'
 import type { FilterExpr, ObjectItem, ObjectPageResponse, ObjectType } from '@/types/api'
+import { findConnection, parentConnectionId } from '@/lib/databaseConnection'
 
 export interface NavigationTrailItem {
   tabId: string
@@ -167,7 +168,7 @@ function parseTreeKey(key: string): { connId: string; path: string } {
 }
 
 function isRedisConnection(connId: string): boolean {
-  return useConnectionStore.getState().connections.find((connection) => connection.id === connId)?.type === 'redis'
+  return findConnection(useConnectionStore.getState().connections, connId)?.type === 'redis'
 }
 
 function buildObjectsQuery(
@@ -700,7 +701,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
     const anchorConnId = options?.anchorConnId !== connId ? options?.anchorConnId : undefined
     let label = object
     if (anchorConnId) {
-      const database = useConnectionStore.getState().connections.find((conn) => conn.id === connId)?.database
+      const database = findConnection(useConnectionStore.getState().connections, connId)?.database
       if (database) {
         label = `${object} · ${database}`
       }
@@ -1039,7 +1040,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   // connection's page but READING from the deleted one survived it and kept
   // requesting a dead UUID, surfacing as `connection "..." not found`.
   purgeConnection: (connId: string) => {
-    set((state) => purgeTabsWhere(state, (id) => id === connId))
+    set((state) => purgeTabsWhere(state, (id) => parentConnectionId(id) === connId))
   },
 
   // Bulk form of purgeConnection, run once at startup after the connection list
@@ -1047,7 +1048,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set, get) => ({
   // connection isn't in the live set, rather than one specific known-deleted id.
   pruneMissingConnections: (liveConnIds: string[]) => {
     const live = new Set(liveConnIds)
-    set((state) => purgeTabsWhere(state, (id) => !live.has(id)))
+    set((state) => purgeTabsWhere(state, (id) => !live.has(parentConnectionId(id))))
   },
 }))
 

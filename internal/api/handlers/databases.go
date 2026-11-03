@@ -2,10 +2,7 @@ package handlers
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
-	"slices"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
@@ -13,11 +10,12 @@ import (
 const listDatabasesQuery = `SELECT datname FROM pg_database WHERE NOT datistemplate AND has_database_privilege(datname, 'CONNECT') ORDER BY datname`
 
 // Databases lists the databases available on the server behind a postgres
-// connection, so the UI can offer switching between sibling databases.
+// connection. Switching to one needs no request: the UI addresses it by the
+// runtime id config.DatabaseIDSeparator builds, and nothing is saved.
 func (h *ConnectionsHandler) Databases(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
-	connCfg, ok := h.cfg.GetConnection(id)
+	connCfg, ok := h.cfg.ResolveConnection(id)
 	if !ok {
 		writeError(w, http.StatusNotFound, "connection not found")
 		return
@@ -56,65 +54,4 @@ func (h *ConnectionsHandler) Databases(w http.ResponseWriter, r *http.Request) {
 		"current":   connCfg.Database,
 		"databases": databases,
 	})
-}
-
-type duplicateConnectionRequest struct {
-	Database string `json:"database"`
-}
-
-// Duplicate creates a sibling connection pointing at another database on the
-// same server. The stored (encrypted) password is copied server-side and never
-// leaves the backend. Idempotent: an existing sibling is returned instead of
-// creating a duplicate.
-func (h *ConnectionsHandler) Duplicate(w http.ResponseWriter, r *http.Request) {
-	id := chi.URLParam(r, "id")
-
-	var req duplicateConnectionRequest
-	if !decodeJSON(w, r, &req) {
-		return
-	}
-	database := strings.TrimSpace(req.Database)
-	if database == "" {
-		writeError(w, http.StatusBadRequest, "database is required")
-		return
-	}
-
-	source, ok := h.cfg.GetConnection(id)
-	if !ok {
-		writeError(w, http.StatusNotFound, "connection not found")
-		return
-	}
-	if source.Type != "postgres" {
-		writeError(w, http.StatusBadRequest, "duplicating into another database is only supported for postgres connections")
-		return
-	}
-
-	if source.Database == database {
-		writeJSON(w, http.StatusOK, buildConnectionResponse(source))
-		return
-	}
-
-	for _, existing := range h.cfg.GetConnections() {
-		if existing.Type == source.Type && existing.Host == source.Host && existing.Port == source.Port && existing.Database == database {
-			writeJSON(w, http.StatusOK, buildConnectionResponse(existing))
-			return
-		}
-	}
-
-	sibling := source
-	sibling.ID = generateID()
-	sibling.Database = database
-	baseName := strings.TrimSuffix(source.Name, " · "+source.Database)
-	sibling.Name = baseName + " · " + database
-	sibling.Tags = slices.Clone(source.Tags)
-	sibling.VisibleSchemas = slices.Clone(source.VisibleSchemas)
-
-	h.cfg.AddConnection(sibling)
-	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
-		slog.Error("failed to save config", "error", err)
-		writeError(w, http.StatusInternalServerError, "failed to save configuration")
-		return
-	}
-
-	writeJSON(w, http.StatusCreated, buildConnectionResponse(sibling))
 }

@@ -142,10 +142,10 @@ func (h *LinksHandler) validate(req linkRequest) error {
 	if strings.TrimSpace(req.SourceConnID) == "" || strings.TrimSpace(req.SourceScope) == "" {
 		return errBadLink("source_conn_id and source_scope are required")
 	}
-	if _, ok := h.cfg.GetConnection(req.SourceConnID); !ok {
+	if _, ok := h.cfg.ResolveConnection(req.SourceConnID); !ok {
 		return errBadLink("source connection not found")
 	}
-	if _, ok := h.cfg.GetConnection(req.TargetConnID); !ok {
+	if _, ok := h.cfg.ResolveConnection(req.TargetConnID); !ok {
 		return errBadLink("target connection not found")
 	}
 

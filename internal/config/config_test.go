@@ -342,3 +342,80 @@ func TestRemoveConnectionCascadePersists(t *testing.T) {
 		t.Fatalf("unexpected connections after reload: %#v", got)
 	}
 }
+
+func TestResolveConnection(t *testing.T) {
+	t.Parallel()
+
+	cfg := &AppConfig{Connections: []ConnectionConfig{
+		{ID: "pg-1", Name: "orders dev", Type: "postgres", Host: "db.example", Database: "orders", Username: "app", Password: "enc", VisibleSchemas: []string{"public"}},
+		{ID: "redis-1", Name: "cache", Type: "redis", Host: "redis.example"},
+	}}
+
+	tests := []struct {
+		name     string
+		id       string
+		wantOK   bool
+		wantDB   string
+		wantName string
+	}{
+		{name: "stored connection", id: "pg-1", wantOK: true, wantDB: "orders", wantName: "orders dev"},
+		{name: "runtime database", id: DatabaseConnectionID("pg-1", "billing"), wantOK: true, wantDB: "billing", wantName: "orders dev · billing"},
+		{name: "name with URL and separator characters", id: DatabaseConnectionID("pg-1", "a/b?c#d~e %f"), wantOK: true, wantDB: "a/b?c#d~e %f", wantName: "orders dev · a/b?c#d~e %f"},
+		{name: "raw name instead of base64url", id: "pg-1~billing!", wantOK: false},
+		{name: "empty database", id: "pg-1~", wantOK: false},
+		{name: "unknown parent", id: DatabaseConnectionID("pg-9", "billing"), wantOK: false},
+		{name: "non-postgres parent", id: DatabaseConnectionID("redis-1", "billing"), wantOK: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := cfg.ResolveConnection(tc.id)
+			if ok != tc.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tc.wantOK)
+			}
+			if !ok {
+				return
+			}
+			if got.ID != tc.id || got.Database != tc.wantDB || got.Name != tc.wantName {
+				t.Fatalf("got id=%q db=%q name=%q", got.ID, got.Database, got.Name)
+			}
+			if got.Password != "enc" || got.Username != "app" {
+				t.Fatalf("credentials not taken from parent: %#v", got)
+			}
+		})
+	}
+
+	billing := DatabaseConnectionID("pg-1", "billing")
+	if derived, _ := cfg.ResolveConnection(billing); derived.VisibleSchemas != nil {
+		t.Fatalf("runtime database inherited the parent's schema filter: %v", derived.VisibleSchemas)
+	}
+	if _, ok := cfg.GetConnection(billing); ok {
+		t.Fatal("GetConnection must not resolve runtime ids: mutations would then edit a connection that is not stored")
+	}
+	if len(cfg.GetConnections()) != 2 {
+		t.Fatal("resolving a runtime database must not store it")
+	}
+}
+
+func TestRemoveConnectionCascadeDropsRuntimeDatabaseLinks(t *testing.T) {
+	t.Parallel()
+
+	cfg := &AppConfig{
+		Connections: []ConnectionConfig{{ID: "pg-1", Type: "postgres"}, {ID: "pg-10", Type: "postgres"}},
+		Links: []LinkConfig{
+			{ID: "from-runtime", SourceConnID: "pg-1~billing", TargetConnID: "pg-10"},
+			{ID: "to-runtime", SourceConnID: "pg-10", TargetConnID: "pg-1~billing"},
+			{ID: "other-parent", SourceConnID: "pg-10~billing", TargetConnID: "pg-10"},
+		},
+	}
+
+	removed, linkIDs := cfg.RemoveConnectionCascade("pg-1")
+	if !removed || len(linkIDs) != 2 {
+		t.Fatalf("removed=%v links=%v", removed, linkIDs)
+	}
+	if links := cfg.GetLinks(); len(links) != 1 || links[0].ID != "other-parent" {
+		t.Fatalf("pg-1 must not match pg-10's runtime ids: %#v", links)
+	}
+}

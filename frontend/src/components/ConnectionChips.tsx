@@ -10,6 +10,7 @@ import {
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useWorkspaceStore } from '@/stores/workspace'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface ConnectionChipsProps {
   activeId: string
@@ -24,7 +25,7 @@ export function ConnectionChips({ activeId }: ConnectionChipsProps) {
   // Only render chips for connections that still exist (a deleted connection's
   // chip silently drops out).
   const chips = openConnectionIds
-    .map((id) => connections.find((connection) => connection.id === id))
+    .map((id) => findConnection(connections, id))
     .filter((connection): connection is NonNullable<typeof connection> => Boolean(connection))
 
   const handleClose = (id: string) => {

@@ -33,6 +33,10 @@ type connectorCall struct {
 	done      chan struct{}
 	connector Connector
 	err       error
+	// removed is set when the connection is removed or edited while this call
+	// is still opening: the connector it opens carries the old config and must
+	// not reach the cache.
+	removed bool
 }
 
 type connectionFailure struct {
@@ -120,14 +124,11 @@ func (m *ConnectionManager) createConnector(ctx context.Context, id string, bypa
 
 	conn, err := m.openConnector(ctx, id)
 	m.finishConnectorCall(id, call, conn, err)
-	if err != nil {
-		return nil, err
-	}
-	return conn, nil
+	return call.connector, call.err
 }
 
 func (m *ConnectionManager) openConnector(ctx context.Context, id string) (Connector, error) {
-	connCfg, ok := m.config.GetConnection(id)
+	connCfg, ok := m.config.ResolveConnection(id)
 	if !ok {
 		return nil, fmt.Errorf("connection %q not found", id)
 	}
@@ -175,11 +176,17 @@ func (m *ConnectionManager) finishConnectorCall(id string, call *connectorCall, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	call.connector = conn
-	call.err = err
-	delete(m.inFlight, id)
+	if m.inFlight[id] == call {
+		delete(m.inFlight, id)
+	}
 
-	if err == nil {
+	if call.removed {
+		if err == nil {
+			conn.Close()
+			conn = nil
+			err = fmt.Errorf("connection %q changed while it was opening, retry", id)
+		}
+	} else if err == nil {
 		m.connectors[id] = managedConnector{
 			connector:       conn,
 			lastValidatedAt: time.Now(),
@@ -192,6 +199,8 @@ func (m *ConnectionManager) finishConnectorCall(id string, call *connectorCall, 
 		}
 	}
 
+	call.connector = conn
+	call.err = err
 	close(call.done)
 }
 
@@ -249,6 +258,43 @@ func (m *ConnectionManager) Remove(id string) {
 		delete(m.connectors, id)
 	}
 	delete(m.failures, id)
+	m.dropInFlight(id)
+}
+
+// RemoveWithDatabases is Remove for a connection that was edited or deleted:
+// the runtime database connectors opened from it carry its old credentials
+// and go too. A failed health ping uses plain Remove, so it never kills a
+// long query running against another database of the same server.
+func (m *ConnectionManager) RemoveWithDatabases(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for key, c := range m.connectors {
+		if key == id || config.IsDatabaseOf(key, id) {
+			c.connector.Close()
+			delete(m.connectors, key)
+		}
+	}
+	for key := range m.failures {
+		if key == id || config.IsDatabaseOf(key, id) {
+			delete(m.failures, key)
+		}
+	}
+	for key := range m.inFlight {
+		if key == id || config.IsDatabaseOf(key, id) {
+			m.dropInFlight(key)
+		}
+	}
+}
+
+// dropInFlight detaches an opening call so its connector is closed when it
+// finishes and the next Get opens a fresh one from the current config.
+// Callers hold m.mu.
+func (m *ConnectionManager) dropInFlight(id string) {
+	if call, ok := m.inFlight[id]; ok {
+		call.removed = true
+		delete(m.inFlight, id)
+	}
 }
 
 // CloseAll closes all active connectors.

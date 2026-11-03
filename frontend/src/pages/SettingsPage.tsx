@@ -10,6 +10,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import type { LinkRecord } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 const THEMES = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -27,7 +28,7 @@ export default function SettingsPage() {
   const connections = useConnectionStore((state) => state.connections)
   // This list spans every connection, so naming both ends is what makes two
   // otherwise identical-looking links tellable apart.
-  const connectionName = (id: string) => connections.find((item) => item.id === id)?.name ?? id
+  const connectionName = (id: string) => findConnection(connections, id)?.name ?? id
   const pushToast = useToastStore((state) => state.push)
   const [editing, setEditing] = useState<LinkRecord | null>(null)
 

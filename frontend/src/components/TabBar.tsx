@@ -8,6 +8,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { tabPageId, useWorkspaceStore } from '@/stores/workspace'
 import { isRedisObjectType } from '@/lib/objectTypes'
 import type { ObjectType } from '@/types/api'
+import { findConnection } from '@/lib/databaseConnection'
 
 interface TabBarProps {
   connId: string
@@ -69,7 +70,7 @@ export function TabBar({ connId }: TabBarProps) {
   } = useWorkspaceStore()
   // Where the bulk-close menu is anchored, or null when it is shut.
   const [menuTab, setMenuTab] = useState<{ id: string; x: number; y: number } | null>(null)
-  const connection = useConnectionStore((state) => state.connections.find((item) => item.id === connId))
+  const connection = useConnectionStore((state) => findConnection(state.connections, connId))
   const isRedis = connection?.type === 'redis'
   const isKafka = connection?.type === 'kafka'
   const visibleTabs = tabs.filter((tab) => tabPageId(tab) === connId)

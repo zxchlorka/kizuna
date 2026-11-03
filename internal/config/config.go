@@ -1,11 +1,13 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+	"unicode/utf8"
 )
 
 type ConnectionConfig struct {
@@ -132,7 +134,7 @@ func (c *AppConfig) RemoveConnectionCascade(id string) (bool, []string) {
 	var removedLinkIDs []string
 	kept := make([]LinkConfig, 0, len(c.Links))
 	for _, link := range c.Links {
-		if link.SourceConnID == id || link.TargetConnID == id {
+		if link.SourceConnID == id || link.TargetConnID == id || IsDatabaseOf(link.SourceConnID, id) || IsDatabaseOf(link.TargetConnID, id) {
 			removedLinkIDs = append(removedLinkIDs, link.ID)
 			continue
 		}
@@ -151,6 +153,53 @@ func (c *AppConfig) GetConnection(id string) (ConnectionConfig, bool) {
 		}
 	}
 	return ConnectionConfig{}, false
+}
+
+// DatabaseIDSeparator joins a postgres connection id and a database name into
+// the id of a connection that exists only at runtime: the same server and
+// credentials pointed at another database. Nothing is stored for it, so it
+// always follows its parent's current host and password and dies with it.
+//
+// The database name is unpadded base64url (see DatabaseConnectionID): the id
+// travels in URL paths, where a raw "a/b" or "q?1" would cut the route.
+const DatabaseIDSeparator = "~"
+
+// DatabaseConnectionID builds the runtime id of database on parentID's server.
+func DatabaseConnectionID(parentID, database string) string {
+	return parentID + DatabaseIDSeparator + base64.RawURLEncoding.EncodeToString([]byte(database))
+}
+
+// IsDatabaseOf reports whether id is a runtime database connection of parentID.
+func IsDatabaseOf(id, parentID string) bool {
+	return strings.HasPrefix(id, parentID+DatabaseIDSeparator)
+}
+
+// ResolveConnection is GetConnection that also understands runtime database
+// ids. Read paths (opening a connector, listing databases) use it; mutations
+// keep using GetConnection, so a runtime id can never be edited or deleted.
+func (c *AppConfig) ResolveConnection(id string) (ConnectionConfig, bool) {
+	if conn, ok := c.GetConnection(id); ok {
+		return conn, true
+	}
+	parentID, encoded, ok := strings.Cut(id, DatabaseIDSeparator)
+	if !ok {
+		return ConnectionConfig{}, false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encoded)
+	database := string(raw)
+	if err != nil || database == "" || !utf8.ValidString(database) {
+		return ConnectionConfig{}, false
+	}
+	parent, ok := c.GetConnection(parentID)
+	if !ok || parent.Type != "postgres" {
+		return ConnectionConfig{}, false
+	}
+	parent.ID = id
+	parent.Name = parent.Name + " · " + database
+	parent.Database = database
+	// The parent's schema filter names schemas of its own database.
+	parent.VisibleSchemas = nil
+	return parent, true
 }
 
 func (c *AppConfig) UpdateConnection(id string, updated ConnectionConfig) bool {
