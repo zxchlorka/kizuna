@@ -84,20 +84,53 @@ func (c *AppConfig) RemoveFolder(id string) bool {
 	return true
 }
 
-// SetConnectionFolder moves a connection into folderID ("" = top level).
+// SetConnectionFolder moves a connection to the end of folderID ("" = top level).
 func (c *AppConfig) SetConnectionFolder(connID, folderID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.folderExists(folderID) {
 		return ErrFolderNotFound
 	}
+	last := 0
+	for _, conn := range c.Connections {
+		if conn.FolderID == folderID && conn.ID != connID {
+			last = max(last, conn.Position)
+		}
+	}
 	for i := range c.Connections {
 		if c.Connections[i].ID == connID {
 			c.Connections[i].FolderID = folderID
+			c.Connections[i].Position = last + 1
 			return nil
 		}
 	}
 	return ErrConnectionNotFound
+}
+
+// ArrangeConnections puts connIDs into folderID in exactly that order. The
+// list is the folder's whole new order, a connection dragged in from another
+// folder included, so one call both moves and orders.
+func (c *AppConfig) ArrangeConnections(folderID string, connIDs []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.folderExists(folderID) {
+		return ErrFolderNotFound
+	}
+	index := make(map[string]int, len(c.Connections))
+	for i, conn := range c.Connections {
+		index[conn.ID] = i
+	}
+	for _, id := range connIDs {
+		if _, ok := index[id]; !ok {
+			return ErrConnectionNotFound
+		}
+	}
+	for position, id := range connIDs {
+		conn := &c.Connections[index[id]]
+		conn.FolderID = folderID
+		conn.Position = position + 1
+	}
+	return nil
 }
 
 // normalizeFolders repairs what only a hand-edited config.json can hold: a

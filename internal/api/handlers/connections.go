@@ -49,6 +49,7 @@ type connectionResponse struct {
 	VisibleSchemas   []string               `json:"visible_schemas"`
 	ReadOnly         bool                   `json:"read_only"`
 	FolderID         string                 `json:"folder_id,omitempty"`
+	Position         int                    `json:"position,omitempty"`
 	PostgresConfig   *config.PostgresConfig `json:"postgres_config,omitempty"`
 	RedisConfig      *config.RedisConfig    `json:"redis_config,omitempty"`
 	KafkaConfig      *config.KafkaConfig    `json:"kafka_config,omitempty"`
@@ -350,6 +351,35 @@ func (h *ConnectionsHandler) UpdateFolder(w http.ResponseWriter, r *http.Request
 	writeJSON(w, http.StatusOK, map[string]any{"id": id, "folder_id": req.FolderID})
 }
 
+// Arrange sets the order of a folder's connections ("" = top level); a
+// connection dragged in from elsewhere moves into the folder on the way.
+func (h *ConnectionsHandler) Arrange(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FolderID      string   `json:"folder_id"`
+		ConnectionIDs []string `json:"connection_ids"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.ConnectionIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "connection_ids are required")
+		return
+	}
+
+	if err := h.cfg.ArrangeConnections(req.FolderID, req.ConnectionIDs); err != nil {
+		writeFolderError(w, err)
+		return
+	}
+
+	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
+		slog.Error("failed to save config", "error", err)
+		writeError(w, http.StatusInternalServerError, "failed to save configuration")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 
@@ -610,6 +640,7 @@ func buildConnectionResponse(conn config.ConnectionConfig) connectionResponse {
 		VisibleSchemas: slices.Clone(conn.VisibleSchemas),
 		ReadOnly:       conn.ReadOnly,
 		FolderID:       conn.FolderID,
+		Position:       conn.Position,
 		PostgresConfig: conn.PostgresConfig.Clone(),
 		RedisConfig:    conn.RedisConfig.Clone(),
 		KafkaConfig:    conn.KafkaConfig.Clone(),

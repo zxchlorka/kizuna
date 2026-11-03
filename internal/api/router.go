@@ -35,6 +35,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 		r.Get("/", connHandler.List)
 		r.Post("/", connHandler.Create)
 		r.Post("/test-config", connHandler.TestConfig)
+		r.Put("/arrange", connHandler.Arrange)
 
 		r.Route("/{id}", func(r chi.Router) {
 			r.Put("/", connHandler.Update)

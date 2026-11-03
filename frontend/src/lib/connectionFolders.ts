@@ -14,6 +14,23 @@ export interface FolderTree {
   connections: Connection[]
 }
 
+// Arranged connections first by position; the rest keep config order behind
+// them (sort is stable).
+const byPosition = (a: Connection, b: Connection) => (a.position ?? Infinity) - (b.position ?? Infinity) || 0
+
+// The connections of one folder in display order; '' is top level.
+export function folderConnections(connections: Connection[], folderId: string): Connection[] {
+  return connections.filter((c) => (c.folder_id ?? '') === folderId).sort(byPosition)
+}
+
+// The folder's order after dropping draggedId next to targetId.
+export function arrangeAround(ordered: Connection[], draggedId: string, targetId: string, after: boolean): string[] {
+  const ids = ordered.map((c) => c.id).filter((id) => id !== draggedId)
+  const at = ids.indexOf(targetId)
+  ids.splice(at < 0 ? ids.length : at + (after ? 1 : 0), 0, draggedId)
+  return ids
+}
+
 const byName = (a: { folder: Folder }, b: { folder: Folder }) =>
   a.folder.name.localeCompare(b.folder.name, undefined, { numeric: true, sensitivity: 'base' })
 
@@ -45,12 +62,14 @@ export function buildFolderTree(folders: Folder[], connections: Connection[], pr
       if (visited.has(node.folder.id)) continue
       visited.add(node.folder.id)
       node.children = finish(node.children)
+      node.connections.sort(byPosition)
       node.total = node.connections.length + node.children.reduce((sum, child) => sum + child.total, 0)
       if (!pruneEmpty || node.total > 0) kept.push(node)
     }
     return kept.sort(byName)
   }
   tree.children = finish(tree.children)
+  tree.connections.sort(byPosition)
   return tree
 }
 

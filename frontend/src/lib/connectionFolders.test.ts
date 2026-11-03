@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildFolderTree, flattenFolders, folderPath, isWithinFolder } from './connectionFolders'
+import { arrangeAround, buildFolderTree, flattenFolders, folderConnections, folderPath, isWithinFolder } from './connectionFolders'
 import type { Connection, Folder } from '@/types/api'
 
 const folders: Folder[] = [
@@ -68,5 +68,29 @@ describe('folder helpers', () => {
       '2:env2',
       '2:env10',
     ])
+  })
+})
+
+describe('ordering inside a folder', () => {
+  const c = (id: string, position?: number, folder_id?: string) => ({ id, name: id, position, folder_id }) as Connection
+
+  it('sorts arranged connections by position and keeps the rest in config order after them', () => {
+    const tree = buildFolderTree([], [c('stage'), c('prod', 2), c('dev'), c('local', 1)])
+    expect(tree.connections.map((x) => x.id)).toEqual(['local', 'prod', 'stage', 'dev'])
+  })
+
+  it.each([
+    ['before the target', 'prod', 'stage', false, ['prod', 'stage', 'dev']],
+    ['after the target', 'stage', 'dev', true, ['prod', 'dev', 'stage']],
+    ['dragged in from another folder', 'other', 'stage', true, ['stage', 'other', 'prod', 'dev']],
+  ])('arrangeAround: %s', (_, dragged, target, after, want) => {
+    const ordered = [c('stage', 1), c('prod', 2), c('dev', 3)]
+    expect(arrangeAround(ordered, dragged, target, after)).toEqual(want)
+  })
+
+  it('folderConnections returns one folder in display order', () => {
+    const all = [c('b', 2, 'f'), c('x', 1), c('a', 1, 'f')]
+    expect(folderConnections(all, 'f').map((x) => x.id)).toEqual(['a', 'b'])
+    expect(folderConnections(all, '').map((x) => x.id)).toEqual(['x'])
   })
 })

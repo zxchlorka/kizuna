@@ -3,7 +3,7 @@ import { CornerLeftUp } from 'lucide-react'
 import { ConnectionCard } from '@/components/ConnectionCard'
 import { FolderNameInput } from '@/components/folders/FolderNameInput'
 import { FolderSection } from '@/components/folders/FolderSection'
-import { folderPath, isWithinFolder, type FolderTree } from '@/lib/connectionFolders'
+import { arrangeAround, folderConnections, folderPath, isWithinFolder, type FolderTree } from '@/lib/connectionFolders'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useFoldersStore } from '@/stores/folders'
@@ -77,9 +77,15 @@ export function ConnectionFolderTree({
   const updateFolder = useFoldersStore((state) => state.update)
   const deleteFolder = useFoldersStore((state) => state.remove)
   const moveToFolder = useConnectionStore((state) => state.moveToFolder)
+  const arrange = useConnectionStore((state) => state.arrange)
+  // The full list, not the filtered one on screen: a new order has to place
+  // the connections a filter hides too.
+  const allConnections = useConnectionStore((state) => state.connections)
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [dragging, setDragging] = useState<DragItem | null>(null)
   const [overFolderId, setOverFolderId] = useState<string | null>(null)
+  // The card a dragged connection would land next to, and on which side.
+  const [overCard, setOverCard] = useState<{ id: string; after: boolean } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
 
   const fail = (title: string) => (error: unknown) =>
@@ -130,12 +136,14 @@ export function ConnectionFolderTree({
     dragEnd: () => {
       setDragging(null)
       setOverFolderId(null)
+      setOverCard(null)
     },
     // The innermost folder under the pointer claims the drag; stopPropagation
     // keeps the folders around it from highlighting too.
     dragOver: (e, folderId) => {
       if (!dragging) return
       e.stopPropagation()
+      setOverCard(null)
       if (!canDrop(folderId)) {
         setOverFolderId(null)
         return
@@ -150,6 +158,7 @@ export function ConnectionFolderTree({
       const item = dragging
       setDragging(null)
       setOverFolderId(null)
+      setOverCard(null)
       if (item && canDrop(folderId)) void moveItem(item, folderId)
     },
     creatingIn,
@@ -185,6 +194,29 @@ export function ConnectionFolderTree({
     },
   }
 
+  // Dropping a connection on a card places it before or after that card,
+  // whichever half the pointer is over; a card in another folder moves it there.
+  const cardDragOver = (e: DragEvent<HTMLDivElement>, conn: Connection) => {
+    if (dragging?.kind !== 'connection' || dragging.id === conn.id) return
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = 'move'
+    const rect = e.currentTarget.getBoundingClientRect()
+    setOverFolderId(null)
+    setOverCard({ id: conn.id, after: e.clientX > rect.left + rect.width / 2 })
+  }
+
+  const cardDrop = (e: DragEvent<HTMLDivElement>, conn: Connection) => {
+    if (dragging?.kind !== 'connection' || dragging.id === conn.id) return
+    e.preventDefault()
+    e.stopPropagation()
+    const after = overCard?.id === conn.id && overCard.after
+    const folderId = conn.folder_id ?? ''
+    const ids = arrangeAround(folderConnections(allConnections, folderId), dragging.id, conn.id, after)
+    controls.dragEnd()
+    void arrange(folderId, ids).catch(fail('Move failed'))
+  }
+
   const renderConnections = (connections: Connection[]) => (
     <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
       {connections.map((conn) => (
@@ -193,8 +225,19 @@ export function ConnectionFolderTree({
           draggable
           onDragStart={(e) => controls.dragStart(e, { kind: 'connection', id: conn.id, folderId: conn.folder_id ?? '' })}
           onDragEnd={controls.dragEnd}
-          className={cn(dragging?.kind === 'connection' && dragging.id === conn.id && 'opacity-40')}
+          onDragOver={(e) => cardDragOver(e, conn)}
+          onDrop={(e) => cardDrop(e, conn)}
+          className={cn('relative', dragging?.kind === 'connection' && dragging.id === conn.id && 'opacity-40')}
         >
+          {overCard?.id === conn.id && (
+            <div
+              aria-hidden
+              className={cn(
+                'pointer-events-none absolute inset-y-0 z-10 w-[2px] rounded-full bg-amber-500',
+                overCard.after ? '-right-[7px]' : '-left-[7px]'
+              )}
+            />
+          )}
           <ConnectionCard connection={conn} onDelete={onDelete} onEdit={onEdit} />
         </div>
       ))}

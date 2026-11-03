@@ -67,6 +67,8 @@ export interface Connection {
   read_only?: boolean
   // Folder on the connection list; absent at top level.
   folder_id?: string
+  // Order inside the folder, from 1; absent until arranged (sorts last).
+  position?: number
   visible_schemas: string[] | null
 }
 

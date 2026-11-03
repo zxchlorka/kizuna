@@ -180,3 +180,59 @@ func TestLoadRepairsHandEditedFolders(t *testing.T) {
 		t.Errorf("valid folder_id changed to %q", c.FolderID)
 	}
 }
+
+func TestArrangeConnections(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		folderID string
+		ids      []string
+		wantErr  error
+	}{
+		{name: "reorder inside a folder", folderID: "env", ids: []string{"pg-2"}},
+		{name: "move in at a position", folderID: "project", ids: []string{"pg-2", "pg-1"}},
+		{name: "unknown folder", folderID: "nope", ids: []string{"pg-1"}, wantErr: ErrFolderNotFound},
+		{name: "unknown connection", folderID: "project", ids: []string{"pg-1", "pg-9"}, wantErr: ErrConnectionNotFound},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := folderTree()
+			err := cfg.ArrangeConnections(tc.folderID, tc.ids)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			if err != nil {
+				// All or nothing: a bad id must not leave half the list moved.
+				if got, _ := cfg.GetConnection("pg-1"); got.FolderID != "project" || got.Position != 0 {
+					t.Fatalf("failed arrange changed pg-1: %#v", got)
+				}
+				return
+			}
+			for i, id := range tc.ids {
+				got, _ := cfg.GetConnection(id)
+				if got.FolderID != tc.folderID || got.Position != i+1 {
+					t.Fatalf("%s: folder=%q position=%d, want %q %d", id, got.FolderID, got.Position, tc.folderID, i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestSetConnectionFolderAppendsAtTheEnd(t *testing.T) {
+	t.Parallel()
+
+	cfg := folderTree()
+	if err := cfg.ArrangeConnections("project", []string{"pg-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := cfg.SetConnectionFolder("pg-2", "project"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := cfg.GetConnection("pg-2"); got.Position != 2 {
+		t.Fatalf("moved connection got position %d, want 2 (after pg-1)", got.Position)
+	}
+}
