@@ -81,3 +81,30 @@ describe('runtime databases', () => {
     expect(entries.find((e) => e.object === 'public.invoices')).toMatchObject({ connId: runtime, connName: 'stage-pg · billing' })
   })
 })
+
+describe('folder paths', () => {
+  const folders = [
+    { id: 'team', name: 'Billing' },
+    { id: 'env', name: 'Envs', parent_id: 'team' },
+  ]
+  const inFolders = [
+    { id: 'a', name: 'prod', type: 'postgres', folder_id: 'env' },
+    { id: 'b', name: 'prod', type: 'postgres' },
+  ] as Connection[]
+  const entries = buildPaletteEntries(inFolders, { 'a::public': [item('table', 'invoices')] }, {}, folders)
+
+  it('carries the full path on the connection and on its objects', () => {
+    expect(entries.map((e) => e.folderPath)).toEqual(['Billing / Envs', '', 'Billing / Envs'])
+  })
+
+  it('narrows by folder name: the prod outside Billing drops out', () => {
+    expect(searchPalette(entries, 'billing prod').map((e) => e.id)).toEqual(['a', 'a::public.invoices'])
+    expect(searchPalette(entries, 'billing invoices').map((e) => e.id)).toEqual(['a::public.invoices'])
+  })
+
+  it('puts a runtime database in its parent folder', () => {
+    const runtime = databaseConnectionId('a', 'archive')
+    const withRuntime = buildPaletteEntries(inFolders, { [`${runtime}::public`]: [item('table', 'old')] }, {}, folders)
+    expect(withRuntime.find((e) => e.connId === runtime)?.folderPath).toBe('Billing / Envs')
+  })
+})

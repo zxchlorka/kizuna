@@ -1,37 +1,24 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTheme } from 'next-themes'
-import { Layers, Plus, Search, Settings, Sun, Moon, X } from 'lucide-react'
+import { FolderPlus, Plus, Search, Settings, Sun, Moon, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CommandPaletteTrigger } from '@/components/CommandPaletteTrigger'
 import { ConnectionTypeTabs, type ConnectionTypeFilter } from '@/components/ConnectionTypeTabs'
-import {
-  collectTags,
-  filterConnectionsByName,
-  filterConnectionsByTags,
-  groupConnectionsByTag,
-  nextTagSelection,
-} from '@/lib/connectionGroups'
+import { buildFolderTree } from '@/lib/connectionFolders'
+import { collectTags, filterConnectionsByName, filterConnectionsByTags, nextTagSelection } from '@/lib/connectionGroups'
 import { getConnectionTagClass } from '@/lib/connectionTags'
 import { deleteConnectionEverywhere } from '@/lib/connectionDeletion'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import { ConnectionCard } from '@/components/ConnectionCard'
+import { useFoldersStore } from '@/stores/folders'
+import { useToastStore } from '@/stores/toast'
+import { ConnectionFolderTree } from '@/components/folders/ConnectionFolderTree'
 import { ConnectionWizard } from '@/components/ConnectionWizard'
 import { EmptyState } from '@/components/EmptyState'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
 import type { Connection } from '@/types/api'
 import { HEALTH_POLL_MS, useConnectionHealthStore } from '@/stores/connectionHealth'
-
-const GROUP_BY_TAG_KEY = 'kizuna:connections:groupByTag'
-
-function readGroupByTag() {
-  try {
-    return localStorage.getItem(GROUP_BY_TAG_KEY) === '1'
-  } catch {
-    return false
-  }
-}
 
 export default function ConnectionListPage() {
   const navigate = useNavigate()
@@ -56,7 +43,11 @@ export default function ConnectionListPage() {
   }
 
   const [query, setQuery] = useState('')
-  const [groupByTag, setGroupByTag] = useState(readGroupByTag)
+  const folders = useFoldersStore((state) => state.folders)
+  const fetchFolders = useFoldersStore((state) => state.fetch)
+  const pushToast = useToastStore((state) => state.push)
+  // Where an inline "new folder" field is open: '' top level, a folder id, or none.
+  const [creatingIn, setCreatingIn] = useState<string | null>(null)
 
   const typeFiltered =
     selectedType === 'all'
@@ -71,23 +62,21 @@ export default function ConnectionListPage() {
     [selectedTags, tagOptions]
   )
   const visibleConnections = filterConnectionsByTags(filterConnectionsByName(typeFiltered, query), activeTags)
-  const groups = useMemo(
-    () => (groupByTag ? groupConnectionsByTag(visibleConnections, activeTags) : []),
-    [groupByTag, visibleConnections, activeTags]
+  const filtering = query.trim() !== '' || activeTags.size > 0 || selectedType !== 'all'
+  const tree = useMemo(
+    () => buildFolderTree(folders, visibleConnections, filtering),
+    [folders, visibleConnections, filtering]
   )
 
   const selectTag = (key: string, e: React.MouseEvent) =>
     setSelectedTags(nextTagSelection(activeTags, key, e.metaKey || e.ctrlKey || e.shiftKey))
 
-  const toggleGroupByTag = () => {
-    const next = !groupByTag
-    setGroupByTag(next)
-    try {
-      localStorage.setItem(GROUP_BY_TAG_KEY, next ? '1' : '0')
-    } catch {
-      // Private mode or blocked storage: the toggle still works for this visit.
-    }
-  }
+  // A failed load leaves every connection at top level, which is still usable.
+  useEffect(() => {
+    void fetchFolders().catch((e: Error) =>
+      pushToast({ tone: 'error', title: 'Folders unavailable', message: e.message })
+    )
+  }, [fetchFolders, pushToast])
 
   useEffect(() => {
     hydrateHealth()
@@ -205,6 +194,12 @@ export default function ConnectionListPage() {
     setSearchParams(nextParams, { replace: true })
   }
 
+  const clearFilters = () => {
+    setQuery('')
+    setSelectedTags(new Set())
+    handleTypeChange('all')
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-background/90 backdrop-blur-md">
@@ -255,13 +250,14 @@ export default function ConnectionListPage() {
 
         {error && <ErrorBanner message={error} onRetry={() => void fetchConnections()} />}
 
-        {!loading && !error && connections.length === 0 && (
+        {!loading && !error && connections.length === 0 && folders.length === 0 && (
           <div className="animate-fade-in-up py-16" style={{ animationFillMode: 'both' }}>
             <EmptyState variant="no_connections" actionLabel="New Connection" onAction={openCreate} />
           </div>
         )}
 
-        {!loading && connections.length > 0 && (
+        {/* Folders outlive their connections: an emptied tree stays manageable. */}
+        {!loading && (connections.length > 0 || folders.length > 0) && (
           <>
             <div
               className="mb-6 flex flex-col gap-4 animate-fade-in-up md:flex-row md:items-end md:justify-between"
@@ -307,17 +303,17 @@ export default function ConnectionListPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={toggleGroupByTag}
-                  aria-pressed={groupByTag}
+                  onClick={() => {
+                    clearFilters()
+                    setCreatingIn('')
+                  }}
                   className={cn(
-                    'flex h-8 items-center gap-1.5 rounded-sm border px-2.5 font-mono text-xs transition-all duration-200',
-                    groupByTag
-                      ? 'border-amber-500/45 bg-amber-500/10 text-amber-500'
-                      : 'border-border text-muted-foreground hover:border-amber-500/40 hover:text-foreground'
+                    'flex h-8 items-center gap-1.5 rounded-sm border border-border px-2.5 font-mono text-xs text-muted-foreground transition-all duration-200',
+                    'hover:border-amber-500/40 hover:text-foreground'
                   )}
                 >
-                  <Layers className="h-3 w-3" />
-                  Group by tag
+                  <FolderPlus className="h-3 w-3" />
+                  Folder
                 </button>
                 <button
                   onClick={openCreate}
@@ -368,7 +364,7 @@ export default function ConnectionListPage() {
               </div>
             )}
 
-            {visibleConnections.length === 0 ? (
+            {visibleConnections.length === 0 && (filtering || folders.length === 0) ? (
               <div className="animate-fade-in-up py-10" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
                 {query.trim() ? (
                   <EmptyState
@@ -388,50 +384,16 @@ export default function ConnectionListPage() {
                   />
                 )}
               </div>
-            ) : groupByTag ? (
-              <div className="space-y-8">
-                {groups.map((group) => (
-                  <section key={group.key || 'untagged'} aria-label={group.label || 'No tag'}>
-                    <div className="mb-3 flex items-center gap-3">
-                      {group.label ? (
-                        <span
-                          className={cn(
-                            'rounded-sm border px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.14em]',
-                            getConnectionTagClass(group.label)
-                          )}
-                        >
-                          {group.label}
-                        </span>
-                      ) : (
-                        <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
-                          No tag
-                        </span>
-                      )}
-                      <span className="font-mono text-[10px] tabular-nums text-muted-foreground">
-                        {group.connections.length}
-                      </span>
-                      <div className="h-px flex-1 bg-border/60" />
-                    </div>
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {group.connections.map((conn) => (
-                        <ConnectionCard key={conn.id} connection={conn} onDelete={deleteConnectionEverywhere} onEdit={openEdit} />
-                      ))}
-                    </div>
-                  </section>
-                ))}
-              </div>
             ) : (
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                {visibleConnections.map((conn, i) => (
-                  <div
-                    key={conn.id}
-                    className="animate-fade-in-up"
-                    style={{ animationDelay: `${80 + i * 55}ms`, animationFillMode: 'both' }}
-                  >
-                    <ConnectionCard connection={conn} onDelete={deleteConnectionEverywhere} onEdit={openEdit} />
-                  </div>
-                ))}
-              </div>
+              <ConnectionFolderTree
+                tree={tree}
+                filtering={filtering}
+                onClearFilters={clearFilters}
+                creatingIn={creatingIn}
+                onCreatingInChange={setCreatingIn}
+                onEdit={openEdit}
+                onDelete={deleteConnectionEverywhere}
+              />
             )}
           </>
         )}

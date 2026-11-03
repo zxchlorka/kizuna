@@ -11,17 +11,21 @@ import (
 )
 
 type ConnectionConfig struct {
-	ID             string          `json:"id"`
-	Name           string          `json:"name"`
-	Type           string          `json:"type"` // "postgres", "redis", "kafka"
-	Host           string          `json:"host"`
-	Port           int             `json:"port"`
-	Database       string          `json:"database"`
-	Username       string          `json:"username"`
-	Password       string          `json:"password"` // encrypted
-	Tags           []string        `json:"tags,omitempty"`
-	VisibleSchemas []string        `json:"visible_schemas"`
-	ReadOnly       bool            `json:"read_only,omitempty"`
+	ID             string   `json:"id"`
+	Name           string   `json:"name"`
+	Type           string   `json:"type"` // "postgres", "redis", "kafka"
+	Host           string   `json:"host"`
+	Port           int      `json:"port"`
+	Database       string   `json:"database"`
+	Username       string   `json:"username"`
+	Password       string   `json:"password"` // encrypted
+	Tags           []string `json:"tags,omitempty"`
+	VisibleSchemas []string `json:"visible_schemas"`
+	ReadOnly       bool     `json:"read_only,omitempty"`
+	FolderID       string   `json:"folder_id,omitempty"` // "" = top level
+	// Position orders connections inside their folder, from 1; 0 (never
+	// arranged) sorts after every arranged one, in config order.
+	Position       int             `json:"position,omitempty"`
 	PostgresConfig *PostgresConfig `json:"postgres_config,omitempty"`
 	RedisConfig    *RedisConfig    `json:"redis_config,omitempty"`
 	KafkaConfig    *KafkaConfig    `json:"kafka_config,omitempty"`
@@ -53,6 +57,7 @@ type AppConfig struct {
 	mu            sync.RWMutex
 	Connections   []ConnectionConfig `json:"connections"`
 	Links         []LinkConfig       `json:"links,omitempty"`
+	Folders       []FolderConfig     `json:"folders,omitempty"`
 	EncryptionKey string             `json:"encryption_key"`
 	path          string
 }
@@ -72,6 +77,7 @@ func Load(path string) (*AppConfig, error) {
 		return nil, err
 	}
 	cfg.path = path
+	cfg.normalizeFolders()
 	return cfg, nil
 }
 

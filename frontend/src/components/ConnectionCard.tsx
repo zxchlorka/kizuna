@@ -1,11 +1,14 @@
 import { useState } from 'react'
-import { Activity, Lock, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { Activity, FolderInput, Lock, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionTypeIcon } from '@/components/ConnectionTypeIcon'
 import { DeleteConnectionDialog } from '@/components/DeleteConnectionDialog'
+import { MoveToFolderItems } from '@/components/folders/MoveToFolderItems'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { getConnectionTagClass } from '@/lib/connectionTags'
 import { cn } from '@/lib/utils'
 import { isConnectionHealthStale, useConnectionHealthStore } from '@/stores/connectionHealth'
+import { useConnectionStore } from '@/stores/connections'
 import { useLinksStore } from '@/stores/links'
 import { useToastStore } from '@/stores/toast'
 import type { Connection } from '@/types/api'
@@ -21,6 +24,7 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
   const pushToast = useToastStore((state) => state.push)
   const healthEntry = useConnectionHealthStore((state) => state.entries[connection.id])
   const refreshHealth = useConnectionHealthStore((state) => state.refresh)
+  const moveToFolder = useConnectionStore((state) => state.moveToFolder)
   const [retesting, setRetesting] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false)
@@ -198,6 +202,32 @@ export function ConnectionCard({ connection, onDelete, onEdit }: ConnectionCardP
                       <span className="absolute h-2.5 w-2.5 animate-glow-ping rounded-full bg-green-500" />
                     )}
                   </div>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <button
+                        onClick={(e) => e.stopPropagation()}
+                        disabled={deleting}
+                        className="rounded-sm p-1 text-muted-foreground/60 opacity-0 transition-all duration-150 group-hover:opacity-100 hover:bg-amber-500/10 hover:text-amber-500 focus-visible:opacity-100 disabled:pointer-events-none disabled:opacity-40 data-[state=open]:opacity-100"
+                        title="Move to folder"
+                      >
+                        <FolderInput className="h-3.5 w-3.5" />
+                      </button>
+                    </DropdownMenuTrigger>
+                    {/* The menu is portalled, but React still bubbles its clicks to the card. */}
+                    <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+                      <DropdownMenuLabel className="font-mono text-[11px] text-muted-foreground">Move to</DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <MoveToFolderItems
+                        currentFolderId={connection.folder_id ?? ''}
+                        onMove={(folderId) =>
+                          void moveToFolder(connection.id, folderId).catch((error) =>
+                            pushToast({ tone: 'error', title: 'Move failed', message: (error as Error).message })
+                          )
+                        }
+                      />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
 
                   <button
                     onClick={handleEdit}

@@ -13,6 +13,11 @@ interface ConnectionStore {
   update: (id: string, input: Partial<ConnectionInput>) => Promise<Connection>
   updateVisibleSchemas: (id: string, visibleSchemas: string[] | null) => Promise<Connection>
   remove: (id: string) => Promise<void>
+  moveToFolder: (id: string, folderId: string) => Promise<void>
+  // ids is the folder's whole new order; one dragged in from another folder moves with it.
+  arrange: (folderId: string, ids: string[]) => Promise<void>
+  // Mirrors a folder deletion: the backend lifts its connections into the parent.
+  liftFolder: (folderId: string, parentId: string) => void
   test: (id: string) => Promise<TestResult>
   testConfig: (input: Partial<ConnectionInput> & { id?: string }) => Promise<TestResult>
 }
@@ -109,6 +114,45 @@ export const useConnectionStore = create<ConnectionStore>((set, get) => ({
     const res = await fetchWithTimeout(`/api/connections/${id}`, { method: 'DELETE' })
     await throwOnApiError(res)
     set({ connections: get().connections.filter((c) => c.id !== id) })
+  },
+
+  moveToFolder: async (id: string, folderId: string) => {
+    const res = await fetchWithTimeout(`/api/connections/${id}/folder`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: folderId }),
+    })
+    await throwOnApiError(res)
+    // Mirrors the backend: a moved connection goes to the end of its new folder.
+    const last = Math.max(0, ...get().connections.filter((c) => (c.folder_id ?? '') === folderId && c.id !== id).map((c) => c.position ?? 0))
+    set({
+      connections: get().connections.map((c) =>
+        c.id === id ? { ...c, folder_id: folderId || undefined, position: last + 1 } : c
+      ),
+    })
+  },
+
+  arrange: async (folderId: string, ids: string[]) => {
+    const res = await fetchWithTimeout('/api/connections/arrange', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_id: folderId, connection_ids: ids }),
+    })
+    await throwOnApiError(res)
+    const positions = new Map(ids.map((id, index) => [id, index + 1]))
+    set({
+      connections: get().connections.map((c) =>
+        positions.has(c.id) ? { ...c, folder_id: folderId || undefined, position: positions.get(c.id) } : c
+      ),
+    })
+  },
+
+  liftFolder: (folderId: string, parentId: string) => {
+    set({
+      connections: get().connections.map((c) =>
+        c.folder_id === folderId ? { ...c, folder_id: parentId || undefined } : c
+      ),
+    })
   },
 
   test: async (id: string) => {
