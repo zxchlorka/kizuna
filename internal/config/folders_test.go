@@ -2,6 +2,8 @@ package config
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -132,5 +134,49 @@ func TestSetConnectionFolder(t *testing.T) {
 				t.Fatalf("folder_id = %q, want %q", got.FolderID, tc.folderID)
 			}
 		})
+	}
+}
+
+func TestLoadRepairsHandEditedFolders(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{
+		"folders": [
+			{"id": "a", "name": "A", "parent_id": "b"},
+			{"id": "b", "name": "B", "parent_id": "a"},
+			{"id": "self", "name": "Self", "parent_id": "self"},
+			{"id": "orphan", "name": "Orphan", "parent_id": "gone"},
+			{"id": "ok", "name": "Ok", "parent_id": "a"}
+		],
+		"connections": [
+			{"id": "pg-1", "folder_id": "gone"},
+			{"id": "pg-2", "folder_id": "b"}
+		]
+	}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+
+	parents := map[string]string{}
+	for _, f := range cfg.GetFolders() {
+		parents[f.ID] = f.ParentID
+	}
+	want := map[string]string{"a": "", "b": "a", "self": "", "orphan": "", "ok": "a"}
+	for id, parent := range want {
+		if parents[id] != parent {
+			t.Errorf("%s: parent = %q, want %q", id, parents[id], parent)
+		}
+	}
+	if c, _ := cfg.GetConnection("pg-1"); c.FolderID != "" {
+		t.Errorf("connection in a missing folder kept folder_id %q", c.FolderID)
+	}
+	if c, _ := cfg.GetConnection("pg-2"); c.FolderID != "b" {
+		t.Errorf("valid folder_id changed to %q", c.FolderID)
 	}
 }

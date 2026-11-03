@@ -30,6 +30,8 @@ export interface DragItem {
 // Everything a FolderSection needs from the tree, passed down unchanged
 // through every level.
 export interface FolderTreeControls {
+  // While filtering every folder is forced open, so folding is off.
+  filtering: boolean
   isOpen: (folderId: string) => boolean
   toggle: (folderId: string) => void
   overFolderId: string | null
@@ -52,6 +54,8 @@ interface ConnectionFolderTreeProps {
   // A search or tag filter is on: every folder opens so no match hides in a
   // collapsed one.
   filtering: boolean
+  // A filter would prune the new, still empty folder the moment it is made.
+  onClearFilters: () => void
   creatingIn: string | null
   onCreatingInChange: (parentId: string | null) => void
   onEdit: (connection: Connection) => void
@@ -61,6 +65,7 @@ interface ConnectionFolderTreeProps {
 export function ConnectionFolderTree({
   tree,
   filtering,
+  onClearFilters,
   creatingIn,
   onCreatingInChange,
   onEdit,
@@ -111,6 +116,7 @@ export function ConnectionFolderTree({
   }
 
   const controls: FolderTreeControls = {
+    filtering,
     isOpen: (folderId) => filtering || !collapsed.has(folderId),
     toggle,
     overFolderId,
@@ -148,6 +154,7 @@ export function ConnectionFolderTree({
     },
     creatingIn,
     startCreating: (parentId) => {
+      if (parentId !== null && filtering) onClearFilters()
       if (parentId && collapsed.has(parentId)) toggle(parentId)
       onCreatingInChange(parentId)
     },

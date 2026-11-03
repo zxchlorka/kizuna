@@ -194,6 +194,12 @@ export default function ConnectionListPage() {
     setSearchParams(nextParams, { replace: true })
   }
 
+  const clearFilters = () => {
+    setQuery('')
+    setSelectedTags(new Set())
+    handleTypeChange('all')
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <header className="sticky top-0 z-50 border-b border-border/60 bg-background/90 backdrop-blur-md">
@@ -296,7 +302,10 @@ export default function ConnectionListPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => setCreatingIn('')}
+                  onClick={() => {
+                    clearFilters()
+                    setCreatingIn('')
+                  }}
                   className={cn(
                     'flex h-8 items-center gap-1.5 rounded-sm border border-border px-2.5 font-mono text-xs text-muted-foreground transition-all duration-200',
                     'hover:border-amber-500/40 hover:text-foreground'
@@ -378,6 +387,7 @@ export default function ConnectionListPage() {
               <ConnectionFolderTree
                 tree={tree}
                 filtering={filtering}
+                onClearFilters={clearFilters}
                 creatingIn={creatingIn}
                 onCreatingInChange={setCreatingIn}
                 onEdit={openEdit}

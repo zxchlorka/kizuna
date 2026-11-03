@@ -100,6 +100,37 @@ func (c *AppConfig) SetConnectionFolder(connID, folderID string) error {
 	return ErrConnectionNotFound
 }
 
+// normalizeFolders repairs what only a hand-edited config.json can hold: a
+// parent that does not exist, a folder inside its own subtree, a connection
+// in a missing folder. Each lands at top level instead of vanishing from the
+// list or turning every later rename into "folder not found". Run on Load,
+// before the config is shared.
+func (c *AppConfig) normalizeFolders() {
+	for i := range c.Folders {
+		folder := &c.Folders[i]
+		if !c.folderExists(folder.ParentID) {
+			folder.ParentID = ""
+			continue
+		}
+		for p, hops := folder.ParentID, 0; p != ""; hops++ {
+			if p == folder.ID || hops > len(c.Folders) {
+				folder.ParentID = ""
+				break
+			}
+			j := c.folderIndex(p)
+			if j < 0 {
+				break
+			}
+			p = c.Folders[j].ParentID
+		}
+	}
+	for i := range c.Connections {
+		if !c.folderExists(c.Connections[i].FolderID) {
+			c.Connections[i].FolderID = ""
+		}
+	}
+}
+
 // folderIndex and folderExists expect c.mu to be held.
 func (c *AppConfig) folderIndex(id string) int {
 	for i, folder := range c.Folders {

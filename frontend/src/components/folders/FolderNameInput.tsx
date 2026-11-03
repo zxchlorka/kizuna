@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Folder } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -14,6 +14,14 @@ interface FolderNameInputProps {
 export function FolderNameInput({ initial = '', placeholder = 'Folder name', onSubmit, onCancel }: FolderNameInputProps) {
   const [value, setValue] = useState(initial)
   const [saving, setSaving] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
+
+  // Opened from a menu, autoFocus alone loses: the closing menu still holds
+  // focus inside its own scope. Focusing a tick later lands after it lets go.
+  useEffect(() => {
+    const timer = window.setTimeout(() => inputRef.current?.focus())
+    return () => window.clearTimeout(timer)
+  }, [])
 
   const submit = async () => {
     const name = value.trim()
@@ -34,6 +42,7 @@ export function FolderNameInput({ initial = '', placeholder = 'Folder name', onS
     <div className="flex h-8 items-center gap-2">
       <Folder className="h-4 w-4 shrink-0 text-amber-500" />
       <input
+        ref={inputRef}
         autoFocus
         value={value}
         disabled={saving}

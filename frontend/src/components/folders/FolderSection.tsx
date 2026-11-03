@@ -56,8 +56,10 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
           <button
             type="button"
             onClick={() => controls.toggle(folder.id)}
+            disabled={controls.filtering}
+            title={controls.filtering ? 'Folders stay open while a filter is on' : undefined}
             aria-expanded={open}
-            className="flex min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/60"
+            className="flex min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/60 disabled:cursor-default"
           >
             <ChevronRight
               className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150', open && 'rotate-90')}
@@ -83,7 +85,9 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
                 <MoreHorizontal className="h-3.5 w-3.5" />
               </button>
             </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-48">
+            {/* New subfolder and Rename open an autofocused input; handing focus back
+                to the trigger on close would take it straight away from that input. */}
+            <DropdownMenuContent align="end" className="min-w-48" onCloseAutoFocus={(e) => e.preventDefault()}>
               <DropdownMenuItem className="gap-2 text-xs" onSelect={() => controls.startCreating(folder.id)}>
                 <FolderPlus className="h-3.5 w-3.5" />
                 New subfolder

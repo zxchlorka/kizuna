@@ -35,7 +35,8 @@ describe('buildFolderTree', () => {
     expect(pruned.children[0].children[0].children.map((n) => n.folder.id)).toEqual(['env2'])
   })
 
-  it('survives a parent loop in a hand-edited config', () => {
+  // The backend repairs loops on load, so this only pins that the walk cannot hang.
+  it('does not recurse forever on a parent loop', () => {
     const loop: Folder[] = [
       { id: 'x', name: 'x', parent_id: 'y' },
       { id: 'y', name: 'y', parent_id: 'x' },

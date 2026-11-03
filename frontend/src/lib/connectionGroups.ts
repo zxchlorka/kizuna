@@ -1,6 +1,6 @@
 import type { Connection } from '@/types/api'
 
-// Environments sort by risk, the rest alphabetically, untagged last.
+// Tag chips sort environments by risk, the rest alphabetically.
 const ENV_RANK: Record<string, number> = {
   production: 0,
   prod: 0,
@@ -17,7 +17,7 @@ export function filterConnectionsByName(connections: Connection[], query: string
 
 const tagKeys = (conn: Connection) => (conn.tags ?? []).map((t) => t.trim()).filter(Boolean)
 
-const rank = (key: string) => (key === '' ? 99 : (ENV_RANK[key] ?? 50))
+const rank = (key: string) => ENV_RANK[key] ?? 50
 const byRank = (a: { key: string }, b: { key: string }) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key)
 
 export interface TagOption {
@@ -26,7 +26,7 @@ export interface TagOption {
   count: number
 }
 
-// Every distinct tag with the number of connections carrying it, in group order.
+// Every distinct tag with the number of connections carrying it, in chip order.
 export function collectTags(connections: Connection[]): TagOption[] {
   const tags = new Map<string, TagOption>()
   for (const conn of connections) {

@@ -74,6 +74,7 @@ func Load(path string) (*AppConfig, error) {
 		return nil, err
 	}
 	cfg.path = path
+	cfg.normalizeFolders()
 	return cfg, nil
 }
 
