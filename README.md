@@ -93,7 +93,7 @@ Connect all three source types from one wizard: **PostgreSQL**, **Redis**, and *
 
 ## ⌘K — jump anywhere
 
-**⌘K** (Ctrl K) jumps to any connection, table, view, topic, or Redis namespace from any page. Typing `ord` finds `public.orders` on every connection that has it; a second word narrows by connection: `ord stage`. It searches only what the browser already holds, so opening it never sends a query to your databases.
+**⌘K** on macOS, **Ctrl+K** on Windows and Linux, in any keyboard layout, jumps to any connection, table, view, topic, or Redis namespace from any page. Typing `ord` finds `public.orders` on every connection that has it; a second word narrows by connection: `ord stage`. It searches only what the browser already holds, so opening it never sends a query to your databases.
 
 <p align="center">
   <picture>
