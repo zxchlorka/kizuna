@@ -3,6 +3,41 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.12.0 — 2026-11-03
+
+### SQL console
+
+- A transaction now lives across runs. `BEGIN`, then the migration statement by
+  statement, a `SELECT` to check it, and `COMMIT` at the end — each as its own
+  Run — applies as one transaction. Before, every run took a different pooled
+  connection, the pool threw the open transaction away, and nothing in it was
+  applied. Outside a transaction a run still borrows a connection and returns
+  it right after.
+- A bar shows where the transaction stands: open, with Commit and Rollback;
+  failed, where only Rollback gets out; or rolled back, after a Stop or a
+  dropped connection undid it. Closing a tab with an open transaction asks
+  first and rolls it back.
+- A transaction left idle for 30 minutes — a closed browser, a forgotten tab —
+  is rolled back, so it stops holding locks and a pool connection. The next
+  run in that tab is refused once with the reason, so statements meant for the
+  old transaction are never autocommitted. Running statements have no timeout,
+  as before.
+- Opening a failed or skipped statement's result no longer blanks the whole
+  page. If a screen ever fails to render, it says so and offers a way back
+  instead of leaving a white page.
+
+### Connections
+
+- Nested folders on the connection list: `Project → service → prod / dev /
+  stage`, as deep as needed. Drag a connection onto a folder, or use Move to
+  on its card; drop it on the left or right half of another card to set the
+  order inside a folder. Deleting a folder moves its contents one level up.
+- ⌘K shows each connection's folder path and matches on it.
+- Tags stay as filters; Group by tag is replaced by folders.
+- Picking another database in the Postgres switcher no longer saves a copy of
+  the connection. The other database opens with the parent's current host and
+  credentials and leaves nothing behind on the connection list.
+
 ## v0.11.1 — 2026-10-28
 
 ### Distribution
