@@ -35,7 +35,11 @@ docker run -d --name kizuna -p 127.0.0.1:9090:9090 -v kizuna-data:/data zxchlork
 
 Open [http://localhost:9090](http://localhost:9090) and add your first connection. Configuration lives in the `kizuna-data` Docker volume; connection passwords are encrypted with AES-256-GCM. The image is built for amd64 and arm64 and is also on GHCR: `ghcr.io/zxchlorka/kizuna`.
 
-To update, run `docker pull zxchlorka/kizuna && docker rm -f kizuna`, then the same `docker run` command; your connections stay in the volume.
+To update, replace the container with one started from the newest image (`--pull always` fetches it; a plain `docker run` reuses the image already on the machine). Your connections stay in the volume:
+
+```bash
+docker rm -f kizuna && docker run -d --pull always --name kizuna -p 127.0.0.1:9090:9090 -v kizuna-data:/data zxchlorka/kizuna
+```
 
 <details>
 <summary><b>Docker Compose</b></summary>

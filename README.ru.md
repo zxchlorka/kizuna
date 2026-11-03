@@ -35,7 +35,11 @@ docker run -d --name kizuna -p 127.0.0.1:9090:9090 -v kizuna-data:/data zxchlork
 
 Откройте [http://localhost:9090](http://localhost:9090) и добавьте первое подключение. Конфигурация хранится в Docker-томе `kizuna-data`, а пароли подключений шифруются AES-256-GCM. Образ собран под amd64 и arm64 и есть также в GHCR: `ghcr.io/zxchlorka/kizuna`.
 
-Обновление — `docker pull zxchlorka/kizuna && docker rm -f kizuna` и та же команда `docker run`; подключения останутся в томе.
+Обновление — пересоздать контейнер из свежего образа (`--pull always` скачивает его, обычный `docker run` берёт тот, что уже лежит на машине). Подключения останутся в томе:
+
+```bash
+docker rm -f kizuna && docker run -d --pull always --name kizuna -p 127.0.0.1:9090:9090 -v kizuna-data:/data zxchlorka/kizuna
+```
 
 <details>
 <summary><b>Docker Compose</b></summary>
