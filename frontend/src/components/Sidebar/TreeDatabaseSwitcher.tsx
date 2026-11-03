@@ -12,7 +12,7 @@ import { fetchWithTimeout } from '@/lib/http'
 import { useConnectionStore } from '@/stores/connections'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore } from '@/stores/workspace'
-import { databaseConnectionId, findConnection } from '@/lib/databaseConnection'
+import { databaseConnectionId, findConnection, parentConnectionId } from '@/lib/databaseConnection'
 
 interface TreeDatabaseSwitcherProps {
   pageConnId: string
@@ -30,7 +30,10 @@ interface DatabasesResponse {
 export function TreeDatabaseSwitcher({ pageConnId, viewConnId }: TreeDatabaseSwitcherProps) {
   const pushToast = useToastStore((state) => state.push)
   const setTreeConn = useWorkspaceStore((state) => state.setTreeConn)
-  const pageConnection = useConnectionStore((state) => findConnection(state.connections, pageConnId))
+  // The stored connection behind the page; the page itself can be a runtime
+  // database when a link opened one directly.
+  const parentId = parentConnectionId(pageConnId)
+  const parentConnection = useConnectionStore((state) => findConnection(state.connections, parentId))
   const viewConnection = useConnectionStore((state) => findConnection(state.connections, viewConnId))
   const [databases, setDatabases] = useState<DatabasesResponse | null>(null)
   const [loading, setLoading] = useState(false)
@@ -60,7 +63,7 @@ export function TreeDatabaseSwitcher({ pageConnId, viewConnId }: TreeDatabaseSwi
     if (database === currentDatabase) {
       return
     }
-    setTreeConn(pageConnId, database === pageConnection?.database ? pageConnId : databaseConnectionId(pageConnId, database))
+    setTreeConn(pageConnId, database === parentConnection?.database ? parentId : databaseConnectionId(parentId, database))
   }
 
   return (

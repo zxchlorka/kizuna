@@ -359,11 +359,12 @@ func TestResolveConnection(t *testing.T) {
 		wantName string
 	}{
 		{name: "stored connection", id: "pg-1", wantOK: true, wantDB: "orders", wantName: "orders dev"},
-		{name: "runtime database", id: "pg-1~billing", wantOK: true, wantDB: "billing", wantName: "orders dev · billing"},
-		{name: "database name keeps its own separator", id: "pg-1~a~b", wantOK: true, wantDB: "a~b", wantName: "orders dev · a~b"},
+		{name: "runtime database", id: DatabaseConnectionID("pg-1", "billing"), wantOK: true, wantDB: "billing", wantName: "orders dev · billing"},
+		{name: "name with URL and separator characters", id: DatabaseConnectionID("pg-1", "a/b?c#d~e %f"), wantOK: true, wantDB: "a/b?c#d~e %f", wantName: "orders dev · a/b?c#d~e %f"},
+		{name: "raw name instead of base64url", id: "pg-1~billing!", wantOK: false},
 		{name: "empty database", id: "pg-1~", wantOK: false},
-		{name: "unknown parent", id: "pg-9~billing", wantOK: false},
-		{name: "non-postgres parent", id: "redis-1~billing", wantOK: false},
+		{name: "unknown parent", id: DatabaseConnectionID("pg-9", "billing"), wantOK: false},
+		{name: "non-postgres parent", id: DatabaseConnectionID("redis-1", "billing"), wantOK: false},
 	}
 
 	for _, tc := range tests {
@@ -386,10 +387,11 @@ func TestResolveConnection(t *testing.T) {
 		})
 	}
 
-	if derived, _ := cfg.ResolveConnection("pg-1~billing"); derived.VisibleSchemas != nil {
+	billing := DatabaseConnectionID("pg-1", "billing")
+	if derived, _ := cfg.ResolveConnection(billing); derived.VisibleSchemas != nil {
 		t.Fatalf("runtime database inherited the parent's schema filter: %v", derived.VisibleSchemas)
 	}
-	if _, ok := cfg.GetConnection("pg-1~billing"); ok {
+	if _, ok := cfg.GetConnection(billing); ok {
 		t.Fatal("GetConnection must not resolve runtime ids: mutations would then edit a connection that is not stored")
 	}
 	if len(cfg.GetConnections()) != 2 {

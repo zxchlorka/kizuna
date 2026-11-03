@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildPaletteEntries, mergeNamespaces, searchPalette, topNamespaces } from './commandPalette'
+import { databaseConnectionId } from './databaseConnection'
 import type { Connection, ObjectItem } from '@/types/api'
 
 const connections = [
@@ -70,5 +71,13 @@ describe('remembered Redis namespaces', () => {
   it('offers a namespace as a pattern in the connection separator', () => {
     const entries = buildPaletteEntries(redis, {}, { r1: ['nms'], gone: ['x'] })
     expect(searchPalette(entries, 'nms').map((e) => [e.object, e.objectType])).toEqual([['nms/*', 'namespace']])
+  })
+})
+
+describe('runtime databases', () => {
+  it('lists tables of an opened runtime database under its derived name', () => {
+    const runtime = databaseConnectionId('pg1', 'billing')
+    const entries = buildPaletteEntries(connections, { [`${runtime}::public`]: [item('table', 'invoices')] })
+    expect(entries.find((e) => e.object === 'public.invoices')).toMatchObject({ connId: runtime, connName: 'stage-pg · billing' })
   })
 })

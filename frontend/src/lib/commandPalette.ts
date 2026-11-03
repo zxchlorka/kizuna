@@ -1,3 +1,4 @@
+import { findConnection } from '@/lib/databaseConnection'
 import type { Connection, ObjectItem, ObjectType } from '@/types/api'
 
 export interface PaletteEntry {
@@ -44,7 +45,6 @@ export function buildPaletteEntries(
   treeItems: Record<string, ObjectItem[]>,
   redisNamespaces: Record<string, string[]> = {}
 ): PaletteEntry[] {
-  const names = new Map(connections.map((c) => [c.id, c.name]))
   const entries: PaletteEntry[] = connections.map((c) => ({
     id: c.id,
     connId: c.id,
@@ -56,7 +56,9 @@ export function buildPaletteEntries(
   const seen = new Set<string>()
   for (const [treeKey, items] of Object.entries(treeItems)) {
     const connId = treeKey.split('::', 1)[0]
-    const connName = names.get(connId)
+    // findConnection, not an exact-id map: an opened runtime database keeps its
+    // tree under its own id.
+    const connName = findConnection(connections, connId)?.name
     if (!connName) continue
     for (const item of items) {
       if (!SEARCHABLE.has(item.type)) continue

@@ -256,23 +256,35 @@ func TestConnectionManagerRemoveClosesRuntimeDatabases(t *testing.T) {
 		return &testManagerConnector{}, nil
 	})
 
-	for _, id := range []string{"pg-1", "pg-1~billing", "pg-10~billing"} {
+	billing := config.DatabaseConnectionID("pg-1", "billing")
+	otherBilling := config.DatabaseConnectionID("pg-10", "billing")
+	for _, id := range []string{"pg-1", billing, otherBilling} {
 		if _, err := manager.Get(context.Background(), id); err != nil {
 			t.Fatalf("get %s: %v", id, err)
 		}
 	}
-	if opened["pg-1~billing"] != "billing" {
-		t.Fatalf("runtime id opened against %q, want billing", opened["pg-1~billing"])
+	if opened[billing] != "billing" {
+		t.Fatalf("runtime id opened against %q, want billing", opened[billing])
 	}
 
-	manager.Remove("pg-1")
+	has := func(id string) bool {
+		manager.mu.RLock()
+		defer manager.mu.RUnlock()
+		_, ok := manager.connectors[id]
+		return ok
+	}
 
-	manager.mu.RLock()
-	defer manager.mu.RUnlock()
-	if _, ok := manager.connectors["pg-1~billing"]; ok {
+	// A failed health ping on the parent must not kill queries on its other databases.
+	manager.Remove("pg-1")
+	if !has(billing) {
+		t.Fatal("plain Remove closed a runtime database of the parent")
+	}
+
+	manager.RemoveWithDatabases("pg-1")
+	if has(billing) {
 		t.Fatal("runtime database kept a pool with the parent's old credentials")
 	}
-	if _, ok := manager.connectors["pg-10~billing"]; !ok {
+	if !has(otherBilling) {
 		t.Fatal("another parent's runtime database was closed")
 	}
 }

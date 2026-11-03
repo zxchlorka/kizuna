@@ -280,7 +280,7 @@ func (h *ConnectionsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	h.cfg.UpdateConnection(id, existing)
 
 	// Remove cached connector so it reconnects with new config
-	h.manager.Remove(id)
+	h.manager.RemoveWithDatabases(id)
 
 	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
 		slog.Error("failed to save config", "error", err)
@@ -335,7 +335,7 @@ func (h *ConnectionsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.manager.Remove(id)
+	h.manager.RemoveWithDatabases(id)
 
 	if err := h.cfg.Save(h.cfg.GetPath()); err != nil {
 		slog.Error("failed to save config", "error", err)

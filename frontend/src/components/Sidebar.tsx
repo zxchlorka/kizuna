@@ -20,7 +20,7 @@ import { ObjectTree } from '@/components/ObjectTree'
 import { useConnectionStore } from '@/stores/connections'
 import { useToastStore } from '@/stores/toast'
 import { useWorkspaceStore, type TreeVisibilityKey } from '@/stores/workspace'
-import { findConnection } from '@/lib/databaseConnection'
+import { findConnection, isDatabaseConnectionId } from '@/lib/databaseConnection'
 
 interface SidebarProps {
   connId: string
@@ -60,7 +60,10 @@ export function Sidebar({ connId }: SidebarProps) {
   const isClusterConnection = isRedisConnection && currentConnection?.mode === 'cluster'
   const readOnly = currentConnection?.read_only ?? false
 
+  // A runtime database stores no schema filter, so there is nothing to hydrate:
+  // doing it anyway would wipe the session filter every time the tree comes back.
   useEffect(() => {
+    if (isDatabaseConnectionId(viewConnId)) return
     hydrateVisibleSchemas(viewConnId, viewConnection?.visible_schemas)
   }, [viewConnId, viewConnection?.visible_schemas, hydrateVisibleSchemas])
 

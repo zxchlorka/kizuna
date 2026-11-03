@@ -3,6 +3,7 @@ import { Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { ConnectionTypeIcon } from '@/components/ConnectionTypeIcon'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { parentConnectionId } from '@/lib/databaseConnection'
 import { buildPaletteEntries, mergeNamespaces, redisSeparator, searchPalette, topNamespaces, type PaletteEntry } from '@/lib/commandPalette'
 import { cn } from '@/lib/utils'
 import { PALETTE_SHORTCUT, useCommandPaletteStore } from '@/stores/commandPalette'
@@ -139,7 +140,7 @@ export function CommandPalette() {
             </p>
           ) : (
             results.map((entry, index) => {
-              const type = typeById.get(entry.connId)
+              const type = typeById.get(parentConnectionId(entry.connId))
               return (
                 <button
                   key={entry.id}

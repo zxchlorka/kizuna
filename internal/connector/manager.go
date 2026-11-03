@@ -239,9 +239,23 @@ func (m *ConnectionManager) markFailure(id string, err error) {
 	}
 }
 
-// Remove closes and removes a connector from the pool, together with the
-// runtime database connectors opened from it: they carry its old credentials.
+// Remove closes and removes a connector from the pool.
 func (m *ConnectionManager) Remove(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if c, ok := m.connectors[id]; ok {
+		c.connector.Close()
+		delete(m.connectors, id)
+	}
+	delete(m.failures, id)
+}
+
+// RemoveWithDatabases is Remove for a connection that was edited or deleted:
+// the runtime database connectors opened from it carry its old credentials
+// and go too. A failed health ping uses plain Remove, so it never kills a
+// long query running against another database of the same server.
+func (m *ConnectionManager) RemoveWithDatabases(id string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
