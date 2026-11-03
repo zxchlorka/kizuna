@@ -288,3 +288,79 @@ func TestConnectionManagerRemoveClosesRuntimeDatabases(t *testing.T) {
 		t.Fatal("another parent's runtime database was closed")
 	}
 }
+
+type closeTrackingConnector struct {
+	testManagerConnector
+	closed atomic.Bool
+}
+
+func (c *closeTrackingConnector) Close() error {
+	c.closed.Store(true)
+	return nil
+}
+
+// A connector still opening when its connection is removed or edited carries
+// the old config: it must be closed, not cached, and the next Get must open a
+// fresh one.
+func TestConnectionManagerRemoveDropsOpeningConnector(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.AppConfig{
+		Connections: []config.ConnectionConfig{{ID: "pg-1", Type: "postgres", Database: "orders"}},
+	}
+	manager := NewConnectionManager(cfg)
+
+	release := make(chan struct{})
+	var opened []*closeTrackingConnector
+	var mu sync.Mutex
+	manager.RegisterFactory("postgres", func(_ context.Context, c config.ConnectionConfig, _ string) (Connector, error) {
+		conn := &closeTrackingConnector{}
+		mu.Lock()
+		first := len(opened) == 0
+		opened = append(opened, conn)
+		mu.Unlock()
+		if first {
+			<-release
+		}
+		return conn, nil
+	})
+
+	billing := config.DatabaseConnectionID("pg-1", "billing")
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.Get(context.Background(), billing)
+		done <- err
+	}()
+	for {
+		manager.mu.RLock()
+		_, opening := manager.inFlight[billing]
+		manager.mu.RUnlock()
+		if opening {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	manager.RemoveWithDatabases("pg-1")
+	close(release)
+	if err := <-done; err == nil {
+		t.Fatal("Get returned a connector opened from the removed config")
+	}
+
+	manager.mu.RLock()
+	_, cached := manager.connectors[billing]
+	manager.mu.RUnlock()
+	if cached {
+		t.Fatal("stale connector reached the cache")
+	}
+	if !opened[0].closed.Load() {
+		t.Fatal("stale connector was left open")
+	}
+
+	if _, err := manager.Get(context.Background(), billing); err != nil {
+		t.Fatalf("fresh Get after remove: %v", err)
+	}
+	if len(opened) != 2 {
+		t.Fatalf("expected a fresh open after remove, got %d opens", len(opened))
+	}
+}
