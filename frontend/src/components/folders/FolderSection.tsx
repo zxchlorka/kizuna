@@ -56,8 +56,8 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
           <button
             type="button"
             onClick={() => controls.toggle(folder.id)}
-            disabled={controls.filtering}
-            title={controls.filtering ? 'Folders stay open while a filter is on' : undefined}
+            disabled={controls.searching}
+            title={controls.searching ? 'Folders stay open while searching' : undefined}
             aria-expanded={open}
             className="flex min-w-0 items-center gap-2 rounded-sm py-1 pr-1 text-left focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-500/60 disabled:cursor-default"
           >
