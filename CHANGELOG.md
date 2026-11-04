@@ -3,6 +3,15 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.12.2 — 2026-11-04
+
+### Connections
+
+- Folders fold on the Postgres, Redis and Kafka tabs and with a tag selected,
+  not only on All. Any filter used to force every folder open with the chevron
+  disabled; now only a search by name does, so a match never hides in a folded
+  folder. The tabs share one folded state with All.
+
 ## v0.12.1 — 2026-11-03
 
 ### Navigation
