@@ -388,6 +388,7 @@ export default function ConnectionListPage() {
               <ConnectionFolderTree
                 tree={tree}
                 filtering={filtering}
+                searching={query.trim() !== ''}
                 onClearFilters={clearFilters}
                 creatingIn={creatingIn}
                 onCreatingInChange={setCreatingIn}
