@@ -51,8 +51,8 @@ func (h *FoldersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	folder := config.FolderConfig{ID: generateID(), Name: name, ParentID: req.ParentID}
-	if err := h.cfg.AddFolder(folder); err != nil {
+	folder, err := h.cfg.AddFolder(config.FolderConfig{ID: generateID(), Name: name, ParentID: req.ParentID})
+	if err != nil {
 		writeFolderError(w, err)
 		return
 	}
@@ -84,6 +84,30 @@ func (h *FoldersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, folder)
+}
+
+// Arrange sets the order of a folder's subfolders ("" = top level); a folder
+// dragged in from elsewhere moves there on the way.
+func (h *FoldersHandler) Arrange(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ParentID  string   `json:"parent_id"`
+		FolderIDs []string `json:"folder_ids"`
+	}
+	if !decodeJSON(w, r, &req) {
+		return
+	}
+	if len(req.FolderIDs) == 0 {
+		writeError(w, http.StatusBadRequest, "folder_ids are required")
+		return
+	}
+	if err := h.cfg.ArrangeFolders(req.ParentID, req.FolderIDs); err != nil {
+		writeFolderError(w, err)
+		return
+	}
+	if !h.save(w) {
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *FoldersHandler) Delete(w http.ResponseWriter, r *http.Request) {

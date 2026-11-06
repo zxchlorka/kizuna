@@ -236,3 +236,106 @@ func TestSetConnectionFolderAppendsAtTheEnd(t *testing.T) {
 		t.Fatalf("moved connection got position %d, want 2 (after pg-1)", got.Position)
 	}
 }
+
+func TestArrangeFolders(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		parentID string
+		ids      []string
+		wantErr  error
+	}{
+		{name: "reorder top level", parentID: "", ids: []string{"other", "team"}},
+		{name: "pull a nested folder out to top level", parentID: "", ids: []string{"team", "env", "other"}},
+		{name: "move in at a position", parentID: "project", ids: []string{"other", "env"}},
+		{name: "into its own subfolder", parentID: "env", ids: []string{"team"}, wantErr: ErrFolderCycle},
+		{name: "into itself", parentID: "team", ids: []string{"team"}, wantErr: ErrFolderCycle},
+		{name: "unknown parent", parentID: "nope", ids: []string{"team"}, wantErr: ErrFolderNotFound},
+		{name: "unknown folder", parentID: "", ids: []string{"team", "nope"}, wantErr: ErrFolderNotFound},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := folderTree()
+			err := cfg.ArrangeFolders(tc.parentID, tc.ids)
+			if !errors.Is(err, tc.wantErr) {
+				t.Fatalf("err = %v, want %v", err, tc.wantErr)
+			}
+			byID := map[string]FolderConfig{}
+			for _, f := range cfg.GetFolders() {
+				byID[f.ID] = f
+			}
+			if err != nil {
+				// All or nothing: a bad id must not leave half the list moved.
+				if byID["team"].Position != 0 || byID["env"].ParentID != "project" {
+					t.Fatalf("failed arrange changed folders: %#v", byID)
+				}
+				return
+			}
+			for i, id := range tc.ids {
+				if got := byID[id]; got.ParentID != tc.parentID || got.Position != i+1 {
+					t.Fatalf("%s: parent=%q position=%d, want %q %d", id, got.ParentID, got.Position, tc.parentID, i+1)
+				}
+			}
+		})
+	}
+}
+
+func TestNewAndMovedFoldersGoToTheEnd(t *testing.T) {
+	t.Parallel()
+
+	cfg := folderTree()
+	if err := cfg.ArrangeFolders("", []string{"other", "team"}); err != nil {
+		t.Fatal(err)
+	}
+	added, err := cfg.AddFolder(FolderConfig{ID: "new", Name: "A first by name"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if added.Position != 3 {
+		t.Fatalf("new folder position = %d, want 3", added.Position)
+	}
+	moved, err := cfg.UpdateFolder("env", "Env", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if moved.Position != 4 {
+		t.Fatalf("moved folder position = %d, want 4", moved.Position)
+	}
+	renamed, _ := cfg.UpdateFolder("other", "Renamed", "")
+	if renamed.Position != 1 {
+		t.Fatalf("rename in place moved the folder to %d", renamed.Position)
+	}
+}
+
+func TestLoadOrdersFoldersByNameOnce(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	data := `{"folders": [
+		{"id": "z", "name": "zeta"},
+		{"id": "a", "name": "Alpha"},
+		{"id": "p", "name": "Placed", "position": 1},
+		{"id": "kid", "name": "Kid", "parent_id": "a"}
+	]}`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, f := range cfg.GetFolders() {
+		got[f.ID] = f.Position
+	}
+	want := map[string]int{"p": 1, "a": 2, "z": 3, "kid": 1}
+	for id, pos := range want {
+		if got[id] != pos {
+			t.Errorf("%s: position = %d, want %d", id, got[id], pos)
+		}
+	}
+}

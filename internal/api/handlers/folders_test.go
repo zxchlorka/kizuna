@@ -55,6 +55,27 @@ func TestFolderEndpoints(t *testing.T) {
 			wantStatus: http.StatusBadRequest,
 		},
 		{
+			name: "arrange folders",
+			call: func(_ *ConnectionsHandler, f *FoldersHandler, w http.ResponseWriter) {
+				f.Arrange(w, newFolderRequest(http.MethodPut, "", `{"parent_id":"","folder_ids":["project","team"]}`))
+			},
+			wantStatus: http.StatusNoContent,
+		},
+		{
+			name: "arrange a folder into its own subfolder",
+			call: func(_ *ConnectionsHandler, f *FoldersHandler, w http.ResponseWriter) {
+				f.Arrange(w, newFolderRequest(http.MethodPut, "", `{"parent_id":"project","folder_ids":["team"]}`))
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name: "arrange without ids",
+			call: func(_ *ConnectionsHandler, f *FoldersHandler, w http.ResponseWriter) {
+				f.Arrange(w, newFolderRequest(http.MethodPut, "", `{"parent_id":""}`))
+			},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name: "delete missing folder",
 			call: func(_ *ConnectionsHandler, f *FoldersHandler, w http.ResponseWriter) {
 				f.Delete(w, newFolderRequest(http.MethodDelete, "nope", ""))

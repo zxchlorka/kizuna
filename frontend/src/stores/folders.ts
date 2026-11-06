@@ -11,6 +11,8 @@ interface FoldersStore {
   // Rename and move are one call: the backend takes both fields every time.
   update: (id: string, name: string, parentId: string) => Promise<Folder>
   remove: (id: string) => Promise<void>
+  // ids is parentId's whole new order, a folder moved in from elsewhere included.
+  arrange: (parentId: string, ids: string[]) => Promise<void>
 }
 
 export const useFoldersStore = create<FoldersStore>((set, get) => ({
@@ -45,6 +47,21 @@ export const useFoldersStore = create<FoldersStore>((set, get) => ({
     const folder = (await res.json()) as Folder
     set({ folders: get().folders.map((f) => (f.id === id ? folder : f)) })
     return folder
+  },
+
+  arrange: async (parentId: string, ids: string[]) => {
+    const res = await fetchWithTimeout('/api/folders/arrange', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ parent_id: parentId, folder_ids: ids }),
+    })
+    await throwOnApiError(res)
+    const position = new Map(ids.map((id, i) => [id, i + 1]))
+    set({
+      folders: get().folders.map((f) =>
+        position.has(f.id) ? { ...f, parent_id: parentId || undefined, position: position.get(f.id) } : f
+      ),
+    })
   },
 
   // Deleting a folder never deletes what it holds: subfolders and connections

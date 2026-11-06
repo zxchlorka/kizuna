@@ -82,6 +82,7 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 	r.Route("/api/folders", func(r chi.Router) {
 		r.Get("/", foldersHandler.List)
 		r.Post("/", foldersHandler.Create)
+		r.Put("/arrange", foldersHandler.Arrange)
 		r.Put("/{id}", foldersHandler.Update)
 		r.Delete("/{id}", foldersHandler.Delete)
 	})

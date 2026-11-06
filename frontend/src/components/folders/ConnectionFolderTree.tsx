@@ -1,14 +1,22 @@
-import { useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import { CornerLeftUp } from 'lucide-react'
 import { ConnectionCard } from '@/components/ConnectionCard'
 import { FolderNameInput } from '@/components/folders/FolderNameInput'
 import { FolderSection } from '@/components/folders/FolderSection'
-import { arrangeAround, folderConnections, folderPath, isWithinFolder, type FolderTree } from '@/lib/connectionFolders'
+import {
+  arrangeAround,
+  edgeScrollSpeed,
+  folderChildren,
+  folderConnections,
+  folderPath,
+  isWithinFolder,
+  type FolderTree,
+} from '@/lib/connectionFolders'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { useFoldersStore } from '@/stores/folders'
 import { useToastStore } from '@/stores/toast'
-import type { Connection } from '@/types/api'
+import type { Connection, Folder } from '@/types/api'
 
 const COLLAPSED_KEY = 'kizuna:connections:collapsedFolders'
 
@@ -36,6 +44,10 @@ export interface FolderTreeControls {
   isOpen: (folderId: string) => boolean
   toggle: (folderId: string) => void
   overFolderId: string | null
+  // The folder a dragged folder would land before or after, as its sibling.
+  overEdge: { id: string; after: boolean } | null
+  headerDragOver: (e: DragEvent<HTMLElement>, folder: Folder) => void
+  headerDrop: (e: DragEvent, folder: Folder) => void
   dragStart: (e: DragEvent, item: DragItem) => void
   dragEnd: () => void
   dragOver: (e: DragEvent, folderId: string) => void
@@ -52,13 +64,11 @@ export interface FolderTreeControls {
 
 interface ConnectionFolderTreeProps {
   tree: FolderTree
-  // A filter is on (search, tags or a type tab); empty folders are pruned.
-  filtering: boolean
   // A search by name is on: every folder opens so no match hides in a
   // collapsed one.
   searching: boolean
-  // A filter would prune the new, still empty folder the moment it is made.
-  onClearFilters: () => void
+  // A search would prune the new, still empty folder the moment it is made.
+  onClearSearch: () => void
   creatingIn: string | null
   onCreatingInChange: (parentId: string | null) => void
   onEdit: (connection: Connection) => void
@@ -67,9 +77,8 @@ interface ConnectionFolderTreeProps {
 
 export function ConnectionFolderTree({
   tree,
-  filtering,
   searching,
-  onClearFilters,
+  onClearSearch,
   creatingIn,
   onCreatingInChange,
   onEdit,
@@ -80,6 +89,7 @@ export function ConnectionFolderTree({
   const createFolder = useFoldersStore((state) => state.create)
   const updateFolder = useFoldersStore((state) => state.update)
   const deleteFolder = useFoldersStore((state) => state.remove)
+  const arrangeFolders = useFoldersStore((state) => state.arrange)
   const moveToFolder = useConnectionStore((state) => state.moveToFolder)
   const arrange = useConnectionStore((state) => state.arrange)
   // The full list, not the filtered one on screen: a new order has to place
@@ -90,7 +100,31 @@ export function ConnectionFolderTree({
   const [overFolderId, setOverFolderId] = useState<string | null>(null)
   // The card a dragged connection would land next to, and on which side.
   const [overCard, setOverCard] = useState<{ id: string; after: boolean } | null>(null)
+  const [overEdge, setOverEdge] = useState<{ id: string; after: boolean } | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
+  const dragStartFrame = useRef(0)
+
+  // While something is dragged near the top or bottom of the window, scroll the
+  // page, so a folder off screen can be reached without dropping first.
+  useEffect(() => {
+    if (!dragging) return
+    let y = -1
+    let frame = 0
+    const track = (e: globalThis.DragEvent) => {
+      y = e.clientY
+    }
+    const step = () => {
+      if (y >= 0) window.scrollBy(0, edgeScrollSpeed(y, window.innerHeight))
+      frame = requestAnimationFrame(step)
+    }
+    // Capture: folders and cards stop the dragover from bubbling.
+    document.addEventListener('dragover', track, true)
+    frame = requestAnimationFrame(step)
+    return () => {
+      document.removeEventListener('dragover', track, true)
+      cancelAnimationFrame(frame)
+    }
+  }, [dragging])
 
   const fail = (title: string) => (error: unknown) =>
     pushToast({ tone: 'error', title, message: (error as Error).message })
@@ -130,17 +164,50 @@ export function ConnectionFolderTree({
     isOpen: (folderId) => searching || !collapsed.has(folderId),
     toggle,
     overFolderId,
+    overEdge,
+    // The top and bottom thirds of a folder's header place a dragged folder
+    // before or after it; the middle, like the rest of the folder, drops it in.
+    headerDragOver: (e, folder) => {
+      if (dragging?.kind !== 'folder' || dragging.id === folder.id) return
+      const rect = e.currentTarget.getBoundingClientRect()
+      const offset = e.clientY - rect.top
+      const edge = offset < rect.height / 3 ? false : offset > (rect.height * 2) / 3 ? true : null
+      // Inside the dragged folder's own branch there is nowhere to put it.
+      if (edge === null || isWithinFolder(folders, folder.id, dragging.id)) {
+        setOverEdge(null)
+        return
+      }
+      e.preventDefault()
+      e.stopPropagation()
+      e.dataTransfer.dropEffect = 'move'
+      setOverFolderId(null)
+      setOverEdge({ id: folder.id, after: edge })
+    },
+    headerDrop: (e, folder) => {
+      if (dragging?.kind !== 'folder' || overEdge?.id !== folder.id) return
+      e.preventDefault()
+      e.stopPropagation()
+      const parentId = folder.parent_id ?? ''
+      const ids = arrangeAround(folderChildren(folders, parentId), dragging.id, folder.id, overEdge.after)
+      controls.dragEnd()
+      void arrangeFolders(parentId, ids).catch(fail('Move failed'))
+    },
     dragStart: (e, item) => {
       // Firefox starts a drag only once something is set on the transfer.
       e.dataTransfer.setData('text/plain', item.id)
       e.dataTransfer.effectAllowed = 'move'
       e.stopPropagation()
-      setDragging(item)
+      // A frame later: dragging a nested item shows the top-level drop strip
+      // above the list, and a layout shift under the pointer during dragstart
+      // makes Chrome cancel the drag on the spot.
+      dragStartFrame.current = requestAnimationFrame(() => setDragging(item))
     },
     dragEnd: () => {
+      cancelAnimationFrame(dragStartFrame.current)
       setDragging(null)
       setOverFolderId(null)
       setOverCard(null)
+      setOverEdge(null)
     },
     // The innermost folder under the pointer claims the drag; stopPropagation
     // keeps the folders around it from highlighting too.
@@ -148,6 +215,7 @@ export function ConnectionFolderTree({
       if (!dragging) return
       e.stopPropagation()
       setOverCard(null)
+      setOverEdge(null)
       if (!canDrop(folderId)) {
         setOverFolderId(null)
         return
@@ -160,14 +228,12 @@ export function ConnectionFolderTree({
       e.preventDefault()
       e.stopPropagation()
       const item = dragging
-      setDragging(null)
-      setOverFolderId(null)
-      setOverCard(null)
+      controls.dragEnd()
       if (item && canDrop(folderId)) void moveItem(item, folderId)
     },
     creatingIn,
     startCreating: (parentId) => {
-      if (parentId !== null && filtering) onClearFilters()
+      if (parentId !== null && searching) onClearSearch()
       if (parentId && collapsed.has(parentId)) toggle(parentId)
       onCreatingInChange(parentId)
     },

@@ -77,6 +77,8 @@ export interface Folder {
   name: string
   // Absent at top level.
   parent_id?: string
+  // Order among sibling folders, from 1.
+  position?: number
 }
 
 export interface PostgresConnectionInput {

@@ -4,7 +4,7 @@ import { FolderPlus, Plus, Search, Settings, Sun, Moon, X } from 'lucide-react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { CommandPaletteTrigger } from '@/components/CommandPaletteTrigger'
 import { ConnectionTypeTabs, type ConnectionTypeFilter } from '@/components/ConnectionTypeTabs'
-import { buildFolderTree } from '@/lib/connectionFolders'
+import { buildFolderTree, occupiedFolderIds } from '@/lib/connectionFolders'
 import { collectTags, filterConnectionsByName, filterConnectionsByTags, nextTagSelection } from '@/lib/connectionGroups'
 import { getConnectionTagClass } from '@/lib/connectionTags'
 import { deleteConnectionEverywhere } from '@/lib/connectionDeletion'
@@ -62,10 +62,17 @@ export default function ConnectionListPage() {
     [selectedTags, tagOptions]
   )
   const visibleConnections = filterConnectionsByTags(filterConnectionsByName(typeFiltered, query), activeTags)
-  const filtering = query.trim() !== '' || activeTags.size > 0 || selectedType !== 'all'
-  const tree = useMemo(
-    () => buildFolderTree(folders, visibleConnections, filtering),
-    [folders, visibleConnections, filtering]
+  const searching = query.trim() !== ''
+  const filtering = searching || activeTags.size > 0 || selectedType !== 'all'
+  const occupied = useMemo(() => occupiedFolderIds(folders, connections), [folders, connections])
+  // A search shows only the folders with matches. A type tab or a tag hides the
+  // folders whose connections it filters out, but a folder with nothing in it
+  // belongs to every view: one made on the Kafka tab stays there for the Kafka
+  // connections to be dragged in.
+  const tree = buildFolderTree(
+    folders,
+    visibleConnections,
+    searching ? () => true : filtering ? (id) => occupied.has(id) : undefined
   )
 
   const selectTag = (key: string, e: React.MouseEvent) =>
@@ -194,11 +201,6 @@ export default function ConnectionListPage() {
     setSearchParams(nextParams, { replace: true })
   }
 
-  const clearFilters = () => {
-    setQuery('')
-    setSelectedTags(new Set())
-    handleTypeChange('all')
-  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -304,7 +306,7 @@ export default function ConnectionListPage() {
                 <button
                   type="button"
                   onClick={() => {
-                    clearFilters()
+                    setQuery('')
                     setCreatingIn('')
                   }}
                   className={cn(
@@ -364,7 +366,7 @@ export default function ConnectionListPage() {
               </div>
             )}
 
-            {visibleConnections.length === 0 && (filtering || folders.length === 0) ? (
+            {visibleConnections.length === 0 && tree.children.length === 0 && creatingIn === null ? (
               <div className="animate-fade-in-up py-10" style={{ animationDelay: '80ms', animationFillMode: 'both' }}>
                 {query.trim() ? (
                   <EmptyState
@@ -387,9 +389,8 @@ export default function ConnectionListPage() {
             ) : (
               <ConnectionFolderTree
                 tree={tree}
-                filtering={filtering}
-                searching={query.trim() !== ''}
-                onClearFilters={clearFilters}
+                searching={searching}
+                onClearSearch={() => setQuery('')}
                 creatingIn={creatingIn}
                 onCreatingInChange={setCreatingIn}
                 onEdit={openEdit}

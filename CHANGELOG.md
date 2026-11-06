@@ -3,6 +3,28 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.12.3 — 2026-11-06
+
+### Connections
+
+- Folders keep the order you give them. Drag a folder onto the top or bottom
+  third of another folder's header to place it before or after; the middle
+  still drops it inside. Folders used to sort by name only. New and moved
+  folders go to the end; existing folders keep their alphabetical order until
+  you move one. Backed by `PUT /api/folders/arrange` and a `position` on each
+  folder.
+- A nested folder or connection can be dragged out again. Starting the drag
+  showed the "move to top level" strip above the list, and that shift under
+  the pointer made Chrome cancel the drag at once.
+- The page scrolls while you drag near its top or bottom edge, faster closer
+  to the edge, so a folder off screen is reachable. The browser alone scrolled
+  only in a strip a few pixels tall.
+- Creating a folder no longer switches to All. An empty folder now shows on
+  every type tab and tag, ready for connections to be dragged in; a folder
+  holding only connections a filter hides stays hidden. A search by name still
+  shows only folders with matches, so creating a folder clears just the
+  search.
+
 ## v0.12.2 — 2026-11-04
 
 ### Connections
