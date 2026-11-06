@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { arrangeAround, buildFolderTree, flattenFolders, folderConnections, folderPath, isWithinFolder } from './connectionFolders'
+import {
+  arrangeAround,
+  buildFolderTree,
+  edgeScrollSpeed,
+  flattenFolders,
+  folderChildren,
+  folderConnections,
+  folderPath,
+  isWithinFolder,
+  occupiedFolderIds,
+} from './connectionFolders'
 import type { Connection, Folder } from '@/types/api'
 
 const folders: Folder[] = [
@@ -30,9 +40,32 @@ describe('buildFolderTree', () => {
   })
 
   it('prunes branches without connections when asked', () => {
-    const pruned = buildFolderTree(folders, [conn('b', 'env2')], true)
+    const pruned = buildFolderTree(folders, [conn('b', 'env2')], () => true)
     expect(pruned.children.map((n) => n.folder.id)).toEqual(['team'])
     expect(pruned.children[0].children[0].children.map((n) => n.folder.id)).toEqual(['env2'])
+  })
+
+  // A type tab: 'a' sits in project but is filtered out, so project goes;
+  // Archive and env 10 hold nothing at all and stay to drop connections into.
+  it('keeps folders the prune check spares', () => {
+    const all = [conn('a', 'project'), conn('b', 'env2')]
+    const occupied = occupiedFolderIds(folders, all)
+    expect([...occupied].sort()).toEqual(['env2', 'project', 'team'])
+    const tab = buildFolderTree(folders, [], (id) => occupied.has(id))
+    expect(tab.children.map((n) => n.folder.id)).toEqual(['empty'])
+  })
+
+  it('orders sibling folders by position, ties by name', () => {
+    const placed: Folder[] = [
+      { id: 'b', name: 'B', position: 2 },
+      { id: 'a', name: 'A', position: 3 },
+      { id: 'z', name: 'Z', position: 1 },
+      { id: 'y', name: 'Y', position: 2 },
+    ]
+    expect(buildFolderTree(placed, []).children.map((n) => n.folder.id)).toEqual(['z', 'b', 'y', 'a'])
+    expect(folderChildren(placed, '').map((f) => f.id)).toEqual(['z', 'b', 'y', 'a'])
+    // Dragging 'a' before 'b' among the top-level folders.
+    expect(arrangeAround(folderChildren(placed, ''), 'a', 'b', false)).toEqual(['z', 'a', 'b', 'y'])
   })
 
   // The backend repairs loops on load, so this only pins that the walk cannot hang.
@@ -92,5 +125,17 @@ describe('ordering inside a folder', () => {
     const all = [c('b', 2, 'f'), c('x', 1), c('a', 1, 'f')]
     expect(folderConnections(all, 'f').map((x) => x.id)).toEqual(['a', 'b'])
     expect(folderConnections(all, '').map((x) => x.id)).toEqual(['x'])
+  })
+})
+
+describe('edgeScrollSpeed', () => {
+  it('scrolls up near the top, down near the bottom, faster closer to the edge', () => {
+    expect(edgeScrollSpeed(500, 1000)).toBe(0)
+    expect(edgeScrollSpeed(0, 1000)).toBe(-22)
+    expect(edgeScrollSpeed(-20, 1000)).toBe(-22)
+    expect(edgeScrollSpeed(1000, 1000)).toBe(22)
+    expect(edgeScrollSpeed(80, 1000)).toBeLessThan(0)
+    expect(edgeScrollSpeed(80, 1000)).toBeGreaterThan(edgeScrollSpeed(10, 1000))
+    expect(edgeScrollSpeed(960, 1000)).toBeGreaterThan(0)
   })
 })

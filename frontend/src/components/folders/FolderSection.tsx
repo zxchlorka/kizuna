@@ -28,6 +28,7 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
   const parentId = folder.parent_id ?? ''
   const open = controls.isOpen(folder.id)
   const over = controls.overFolderId === folder.id
+  const edge = controls.overEdge?.id === folder.id ? controls.overEdge : null
   const renaming = controls.renamingId === folder.id
   const empty = node.children.length === 0 && node.connections.length === 0
 
@@ -36,8 +37,17 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
       aria-label={folder.name}
       onDragOver={(e) => controls.dragOver(e, folder.id)}
       onDrop={(e) => controls.drop(e, folder.id)}
-      className={cn('rounded-sm transition-colors duration-150', over && 'bg-amber-500/[0.05] ring-1 ring-amber-500/40')}
+      className={cn('relative rounded-sm transition-colors duration-150', over && 'bg-amber-500/[0.05] ring-1 ring-amber-500/40')}
     >
+      {edge && (
+        <div
+          aria-hidden
+          className={cn(
+            'pointer-events-none absolute inset-x-0 z-10 h-[2px] rounded-full bg-amber-500',
+            edge.after ? '-bottom-[7px]' : '-top-[7px]'
+          )}
+        />
+      )}
       {renaming ? (
         <div className="px-1">
           <FolderNameInput
@@ -51,6 +61,8 @@ export function FolderSection({ node, controls, renderConnections }: FolderSecti
           draggable
           onDragStart={(e) => controls.dragStart(e, { kind: 'folder', id: folder.id, folderId: parentId })}
           onDragEnd={controls.dragEnd}
+          onDragOver={(e) => controls.headerDragOver(e, folder)}
+          onDrop={(e) => controls.headerDrop(e, folder)}
           className="group/folder flex h-8 items-center gap-2 px-1"
         >
           <button

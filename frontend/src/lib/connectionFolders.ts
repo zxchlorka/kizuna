@@ -23,22 +23,35 @@ export function folderConnections(connections: Connection[], folderId: string): 
   return connections.filter((c) => (c.folder_id ?? '') === folderId).sort(byPosition)
 }
 
-// The folder's order after dropping draggedId next to targetId.
-export function arrangeAround(ordered: Connection[], draggedId: string, targetId: string, after: boolean): string[] {
+// The order of a folder's connections, or of a parent's subfolders, after
+// dropping draggedId next to targetId.
+export function arrangeAround(ordered: Array<{ id: string }>, draggedId: string, targetId: string, after: boolean): string[] {
   const ids = ordered.map((c) => c.id).filter((id) => id !== draggedId)
   const at = ids.indexOf(targetId)
   ids.splice(at < 0 ? ids.length : at + (after ? 1 : 0), 0, draggedId)
   return ids
 }
 
-const byName = (a: { folder: Folder }, b: { folder: Folder }) =>
-  a.folder.name.localeCompare(b.folder.name, undefined, { numeric: true, sensitivity: 'base' })
+// By position; equal positions (two folders lifted out of a deleted one) by name.
+const folderOrder = (a: Folder, b: Folder) =>
+  (a.position ?? 0) - (b.position ?? 0) ||
+  a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' })
+const byOrder = (a: { folder: Folder }, b: { folder: Folder }) => folderOrder(a.folder, b.folder)
+
+// The subfolders of parentId in display order; '' is top level.
+export function folderChildren(folders: Folder[], parentId: string): Folder[] {
+  return folders.filter((f) => (f.parent_id ?? '') === parentId).sort(folderOrder)
+}
 
 // Builds the tree the connection list renders. A connection or folder whose
 // parent is gone (a config edited by hand) lands at top level instead of
-// vanishing. With pruneEmpty, branches without a single connection are dropped:
-// a search or tag filter shows where matches are, not every folder there is.
-export function buildFolderTree(folders: Folder[], connections: Connection[], pruneEmpty = false): FolderTree {
+// vanishing. prune decides which branches without a single connection to drop:
+// a filtered view shows where matches are, not every folder there is.
+export function buildFolderTree(
+  folders: Folder[],
+  connections: Connection[],
+  prune?: (folderId: string) => boolean
+): FolderTree {
   const nodes = new Map<string, FolderNode>(
     folders.map((folder) => [folder.id, { folder, children: [], connections: [], total: 0 }])
   )
@@ -64,13 +77,34 @@ export function buildFolderTree(folders: Folder[], connections: Connection[], pr
       node.children = finish(node.children)
       node.connections.sort(byPosition)
       node.total = node.connections.length + node.children.reduce((sum, child) => sum + child.total, 0)
-      if (!pruneEmpty || node.total > 0) kept.push(node)
+      if (node.total > 0 || !prune?.(node.folder.id)) kept.push(node)
     }
-    return kept.sort(byName)
+    return kept.sort(byOrder)
   }
   tree.children = finish(tree.children)
   tree.connections.sort(byPosition)
   return tree
+}
+
+// Folders holding at least one connection, directly or anywhere below.
+export function occupiedFolderIds(folders: Folder[], connections: Connection[]): Set<string> {
+  const ids = new Set<string>()
+  const walk = (nodes: FolderNode[]) =>
+    nodes.forEach((node) => {
+      if (node.total > 0) ids.add(node.folder.id)
+      walk(node.children)
+    })
+  walk(buildFolderTree(folders, connections).children)
+  return ids
+}
+
+// Pixels per frame to scroll the page while something is dragged near its top
+// or bottom edge: negative up, positive down, 0 away from the edges. Browsers
+// scroll on their own only in a strip a few pixels tall.
+export function edgeScrollSpeed(y: number, viewportHeight: number, edge = 96, max = 22): number {
+  if (y < edge) return -Math.ceil(((edge - Math.max(y, 0)) / edge) * max)
+  if (y > viewportHeight - edge) return Math.ceil(((y - (viewportHeight - edge)) / edge) * max)
+  return 0
 }
 
 // Folder names from the top down to folderId: ["Team", "Project"].

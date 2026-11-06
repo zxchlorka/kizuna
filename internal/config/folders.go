@@ -1,6 +1,11 @@
 package config
 
-import "errors"
+import (
+	"cmp"
+	"errors"
+	"slices"
+	"strings"
+)
 
 // FolderConfig groups connections on the connection list. Folders nest through
 // ParentID ("" = top level); a connection points at its folder via FolderID.
@@ -8,6 +13,9 @@ type FolderConfig struct {
 	ID       string `json:"id"`
 	Name     string `json:"name"`
 	ParentID string `json:"parent_id,omitempty"`
+	// Position orders folders among their siblings, from 1. Load numbers the
+	// ones a config from before ordering existed lacks, by name.
+	Position int `json:"position,omitempty"`
 }
 
 var (
@@ -22,15 +30,17 @@ func (c *AppConfig) GetFolders() []FolderConfig {
 	return append([]FolderConfig{}, c.Folders...)
 }
 
-// AddFolder stores a folder under parentID, which must exist unless it is "".
-func (c *AppConfig) AddFolder(folder FolderConfig) error {
+// AddFolder stores a folder at the end of parentID, which must exist unless
+// it is "", and returns it with its position.
+func (c *AppConfig) AddFolder(folder FolderConfig) (FolderConfig, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if !c.folderExists(folder.ParentID) {
-		return ErrFolderNotFound
+		return FolderConfig{}, ErrFolderNotFound
 	}
+	folder.Position = c.lastFolderPosition(folder.ParentID, folder.ID) + 1
 	c.Folders = append(c.Folders, folder)
-	return nil
+	return folder, nil
 }
 
 // UpdateFolder renames a folder and moves it under parentID, refusing a move
@@ -42,21 +52,40 @@ func (c *AppConfig) UpdateFolder(id, name, parentID string) (FolderConfig, error
 	if i < 0 || !c.folderExists(parentID) {
 		return FolderConfig{}, ErrFolderNotFound
 	}
-	// Bounded by the folder count so a hand-edited config.json that already
-	// holds a loop cannot hang the request.
-	for p, hops := parentID, 0; p != "" && hops <= len(c.Folders); hops++ {
-		if p == id {
-			return FolderConfig{}, ErrFolderCycle
-		}
-		j := c.folderIndex(p)
-		if j < 0 {
-			break
-		}
-		p = c.Folders[j].ParentID
+	if c.isWithinFolder(parentID, id) {
+		return FolderConfig{}, ErrFolderCycle
+	}
+	if c.Folders[i].ParentID != parentID {
+		c.Folders[i].Position = c.lastFolderPosition(parentID, id) + 1
 	}
 	c.Folders[i].Name = name
 	c.Folders[i].ParentID = parentID
 	return c.Folders[i], nil
+}
+
+// ArrangeFolders puts folderIDs under parentID in exactly that order. The list
+// is the parent's whole new order, a folder dragged in from elsewhere
+// included, so one call both moves and orders.
+func (c *AppConfig) ArrangeFolders(parentID string, folderIDs []string) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.folderExists(parentID) {
+		return ErrFolderNotFound
+	}
+	for _, id := range folderIDs {
+		if c.folderIndex(id) < 0 {
+			return ErrFolderNotFound
+		}
+		if c.isWithinFolder(parentID, id) {
+			return ErrFolderCycle
+		}
+	}
+	for position, id := range folderIDs {
+		folder := &c.Folders[c.folderIndex(id)]
+		folder.ParentID = parentID
+		folder.Position = position + 1
+	}
+	return nil
 }
 
 // RemoveFolder deletes a folder and lifts what it held, subfolders and
@@ -162,6 +191,20 @@ func (c *AppConfig) normalizeFolders() {
 			c.Connections[i].FolderID = ""
 		}
 	}
+	// Folders saved before they had an order: behind their positioned
+	// siblings, by name, as the list used to sort them.
+	unordered := make([]*FolderConfig, 0)
+	for i := range c.Folders {
+		if c.Folders[i].Position == 0 {
+			unordered = append(unordered, &c.Folders[i])
+		}
+	}
+	slices.SortStableFunc(unordered, func(a, b *FolderConfig) int {
+		return cmp.Compare(strings.ToLower(a.Name), strings.ToLower(b.Name))
+	})
+	for _, folder := range unordered {
+		folder.Position = c.lastFolderPosition(folder.ParentID, folder.ID) + 1
+	}
 }
 
 // folderIndex and folderExists expect c.mu to be held.
@@ -176,4 +219,33 @@ func (c *AppConfig) folderIndex(id string) int {
 
 func (c *AppConfig) folderExists(id string) bool {
 	return id == "" || c.folderIndex(id) >= 0
+}
+
+// isWithinFolder reports whether folderID is ancestorID or sits anywhere
+// below it. Bounded by the folder count so a hand-edited config.json that
+// already holds a loop cannot hang the request.
+func (c *AppConfig) isWithinFolder(folderID, ancestorID string) bool {
+	for p, hops := folderID, 0; p != "" && hops <= len(c.Folders); hops++ {
+		if p == ancestorID {
+			return true
+		}
+		j := c.folderIndex(p)
+		if j < 0 {
+			return false
+		}
+		p = c.Folders[j].ParentID
+	}
+	return false
+}
+
+// lastFolderPosition is the highest position among parentID's folders,
+// leaving out exceptID.
+func (c *AppConfig) lastFolderPosition(parentID, exceptID string) int {
+	last := 0
+	for _, folder := range c.Folders {
+		if folder.ParentID == parentID && folder.ID != exceptID {
+			last = max(last, folder.Position)
+		}
+	}
+	return last
 }
