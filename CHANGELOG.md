@@ -3,6 +3,26 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.13.0 — 2026-11-09
+
+### Kafka
+
+- Export chosen JSON fields of a topic to CSV. **Export** in the topic toolbar
+  opens a list of field paths, pre-filled from the JSON columns added to the
+  table, with the field picker beside each. The file covers what the toolbar
+  shows: the selected partition, the seek offset or time read in the chosen
+  direction, and the applied filter or search.
+- The download is streamed, so a topic of hundreds of millions of messages
+  goes straight to disk. It reads up to the end offsets taken at the moment
+  you click, so an export of a live topic finishes.
+- One column per field. A path through `[]`, such as `items[].id`, puts every
+  element into one cell as a JSON array. A message with none of the fields is
+  left out; a missing field leaves its cell empty. Integers above 2^53 keep
+  their digits.
+- A panel bottom-left shows each export as it runs: messages read of the
+  total, rows written, the rate and the time left. An export can be stopped
+  from there. Several exports fold into one line that opens on click.
+
 ## v0.12.3 — 2026-11-06
 
 ### Connections
