@@ -14,7 +14,7 @@ import { useOpenLinkSource, useOpenLinkTarget } from '@/hooks/useOpenLink'
 import { canReverse, connectionLinks, linkTouchesObject } from '@/lib/links'
 import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
-import { topicColumnsKey, useKafkaStore } from '@/stores/kafka'
+import { kafkaFieldExportUrl, topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord, ObjectItem } from '@/types/api'
@@ -279,6 +279,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanned={tab?.scanned ?? 0}
             scanReached={tab?.scanReached ?? ''}
             topic={topic}
+            fieldExportUrl={(fields, filters) => kafkaFieldExportUrl(connId, topic, fields, filters)}
             columns={columns}
             onAddColumn={(path) => addColumn(connId, topic, path)}
             onRemoveColumn={(path) => removeColumn(connId, topic, path)}

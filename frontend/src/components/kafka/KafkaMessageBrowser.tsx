@@ -24,6 +24,7 @@ import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { cn } from '@/lib/utils'
 import {
   activeConditions,
+  buildMessageFilters,
   filterLoadedMessages,
   MAX_SCAN_MATCHES,
   type KafkaDirection,
@@ -32,6 +33,8 @@ import {
   type KafkaMessageRow,
   type KafkaSeek,
 } from '@/stores/kafka'
+import type { FilterExpr } from '@/types/api'
+import { KafkaExportDialog } from '@/components/kafka/KafkaExportDialog'
 import type { LinkRecord } from '@/types/api'
 
 interface KafkaMessageBrowserProps {
@@ -105,6 +108,8 @@ interface KafkaMessageBrowserProps {
   otherConnectionLinks: LinkRecord[]
   allConnectionLinks: LinkRecord[]
   connectionName: (connId: string) => string
+  // The CSV download of chosen fields over the given request filters.
+  fieldExportUrl: (fields: string[], filters: FilterExpr[]) => string
 }
 
 const allPartitions = '__all__'
@@ -220,6 +225,7 @@ export function KafkaMessageBrowser({
   otherConnectionLinks,
   allConnectionLinks,
   connectionName,
+  fieldExportUrl,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
@@ -238,6 +244,14 @@ export function KafkaMessageBrowser({
   // it did not answer the question in full, and the file has to say so.
   const scanComplete = !scanning && !deepScanning && !deepScanCanceled && !scanLimitReached && !scanPartial && !hasMore
   const [pickerOpen, setPickerOpen] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  // The export covers what is applied, never the unapplied draft in the filter
+  // dialog: a topic search's conditions, else the loaded-messages filter's.
+  const exportSearch = searchActive
+    ? { conditions: searchConditions, mode: searchMode }
+    : filterActive
+      ? { conditions: filterConditions, mode: filterMode }
+      : null
   // The message is captured alongside the group: opening the dialog closes the
   // floating menu, and the topic/reverse lists resolve their values from it.
   const [linkPicker, setLinkPicker] = useState<{
@@ -439,7 +453,35 @@ export function KafkaMessageBrowser({
           <Search className="h-3.5 w-3.5" />
           Search topic
         </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="h-8 gap-1.5 font-mono text-[11px]"
+          onClick={() => setExportOpen(true)}
+          title="Download chosen fields of every message in this range as CSV"
+        >
+          <Download className="h-3.5 w-3.5" />
+          Export
+        </Button>
       </form>
+
+      {/* Mounted only while open, so every open starts from the current columns. */}
+      {exportOpen && (
+        <KafkaExportDialog
+          open
+          onOpenChange={setExportOpen}
+          initialFields={columns}
+          messages={messages}
+          partitionFilter={partitionFilter}
+          seek={seek}
+          direction={direction}
+          conditionCount={exportSearch ? activeConditions(exportSearch.conditions).length : 0}
+          downloadUrl={(fields) =>
+            fieldExportUrl(fields, buildMessageFilters(partitionFilter, seek, direction, exportSearch))
+          }
+        />
+      )}
 
       <KafkaFilterDialog
         open={filterDialogOpen}
