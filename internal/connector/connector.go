@@ -232,6 +232,14 @@ type KafkaOffsetResetter interface {
 	ResetGroupOffsets(ctx context.Context, req KafkaOffsetResetRequest) (*KafkaOffsetResetResult, error)
 }
 
+// KafkaFieldExporter is an optional capability for connectors that can stream
+// chosen JSON fields of a topic's messages (Kafka). The API exposes it via
+// GET /objects/{name}/fields.csv. filters take the same shape as GetData's;
+// emit receives one row of cells per message that has at least one field.
+type KafkaFieldExporter interface {
+	ExportFields(ctx context.Context, topic string, fields []string, filters []FilterExpr, emit func(cells []string) error) error
+}
+
 type ObjectInfo struct {
 	Name       string   `json:"name"`
 	Schema     string   `json:"schema"`

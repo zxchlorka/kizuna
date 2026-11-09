@@ -91,3 +91,42 @@ func TestParseExportFields(t *testing.T) {
 		})
 	}
 }
+
+func TestExportWindows(t *testing.T) {
+	fixed := func(start, end int64) func(int32) (int64, int64) {
+		return func(int32) (int64, int64) { return start, end }
+	}
+	tests := []struct {
+		name      string
+		scoped    []int32
+		bounds    func(int32) (int64, int64)
+		seek      map[int32]int64
+		direction readDirection
+		want      map[int32]partitionWindow
+	}{
+		{name: "newest without seek reads the whole partition", scoped: []int32{0}, bounds: fixed(10, 50), direction: directionNewest, want: map[int32]partitionWindow{0: {from: 10, upper: 50}}},
+		{name: "oldest without seek reads the whole partition", scoped: []int32{0}, bounds: fixed(10, 50), direction: directionOldest, want: map[int32]partitionWindow{0: {from: 10, upper: 50}}},
+		{name: "newest seek is the ceiling", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 30}, direction: directionNewest, want: map[int32]partitionWindow{0: {from: 10, upper: 30}}},
+		{name: "oldest seek is the floor", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 30}, direction: directionOldest, want: map[int32]partitionWindow{0: {from: 30, upper: 50}}},
+		{name: "newest seek below the start leaves nothing", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 5}, direction: directionNewest, want: map[int32]partitionWindow{}},
+		{name: "oldest seek past the end leaves nothing", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 60}, direction: directionOldest, want: map[int32]partitionWindow{}},
+		{name: "newest seek past the end covers the partition", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 80}, direction: directionNewest, want: map[int32]partitionWindow{0: {from: 10, upper: 50}}},
+		{name: "oldest seek below the start starts at the start", scoped: []int32{0}, bounds: fixed(10, 50), seek: map[int32]int64{0: 2}, direction: directionOldest, want: map[int32]partitionWindow{0: {from: 10, upper: 50}}},
+		{name: "empty partition has no window", scoped: []int32{0}, bounds: fixed(7, 7), direction: directionNewest, want: map[int32]partitionWindow{}},
+		{name: "partition without a seek bound is read whole", scoped: []int32{0, 1}, bounds: fixed(10, 50), seek: map[int32]int64{0: 30}, direction: directionOldest, want: map[int32]partitionWindow{0: {from: 30, upper: 50}, 1: {from: 10, upper: 50}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := exportWindows(tt.scoped, tt.bounds, tt.seek, tt.direction)
+			if len(got) != len(tt.want) {
+				t.Fatalf("windows = %v, want %v", got, tt.want)
+			}
+			for id, window := range tt.want {
+				if got[id] != window {
+					t.Errorf("partition %d = %+v, want %+v", id, got[id], window)
+				}
+			}
+		})
+	}
+}
