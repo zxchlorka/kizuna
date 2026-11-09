@@ -73,6 +73,11 @@ func NewRouter(cfg *config.AppConfig, manager *connector.ConnectionManager) chi.
 		})
 	})
 
+	r.Route("/api/exports", func(r chi.Router) {
+		r.Get("/", dataHandler.ListExports)
+		r.Delete("/{exportID}", dataHandler.CancelExport)
+	})
+
 	r.Route("/api/links", func(r chi.Router) {
 		r.Get("/", linksHandler.List)
 		r.Post("/", linksHandler.Create)

@@ -137,6 +137,42 @@ func TestExportFieldsIntegration(t *testing.T) {
 		})
 	}
 
+	t.Run("progress counts offsets up to the snapshot total", func(t *testing.T) {
+		var reports [][2]int64
+		err := conn.ExportFields(ctx, topic, []string{"user_id"}, nil, func([]string) error { return nil }, func(read, total int64) {
+			reports = append(reports, [2]int64{read, total})
+		})
+		if err != nil {
+			t.Fatalf("export: %v", err)
+		}
+		// 150 user records, 10 without user_id, 5 text: every offset counts,
+		// whether or not it became a row.
+		if len(reports) < 2 || reports[0] != [2]int64{0, 165} {
+			t.Fatalf("first report %v of %d, want [0 165] first", reports[:min(1, len(reports))], len(reports))
+		}
+		if last := reports[len(reports)-1]; last != [2]int64{165, 165} {
+			t.Fatalf("last report %v, want [165 165]", last)
+		}
+		for i := 1; i < len(reports); i++ {
+			if reports[i][0] < reports[i-1][0] {
+				t.Fatalf("progress went backwards: %v", reports)
+			}
+		}
+	})
+
+	t.Run("partition filter narrows the total", func(t *testing.T) {
+		var total int64
+		err := conn.ExportFields(ctx, topic, []string{"user_id"}, eqFilters("partition", "1"), func([]string) error { return nil }, func(_, all int64) {
+			total = all
+		})
+		if err != nil {
+			t.Fatalf("export: %v", err)
+		}
+		if total != 55 {
+			t.Fatalf("partition 1 total %d, want 55: 50 users, 3 without user_id, 2 text", total)
+		}
+	})
+
 	t.Run("messages produced during the export are left out", func(t *testing.T) {
 		extra := make([]*kgo.Record, 0, 20)
 		for i := range 20 {
@@ -167,7 +203,7 @@ func TestExportFieldsIntegration(t *testing.T) {
 				cancelExport()
 			}
 			return nil
-		})
+		}, nil)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("err = %v, want context.Canceled", err)
 		}
@@ -249,7 +285,7 @@ func exportUserIDs(ctx context.Context, t *testing.T, conn *KafkaConnector, topi
 		}
 		ids = append(ids, cells[0])
 		return nil
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("export: %v", err)
 	}

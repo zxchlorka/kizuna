@@ -1,8 +1,10 @@
 package handlers
 
 import (
+	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -40,31 +42,56 @@ func (h *DataHandler) ExportFields(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "object is required")
 		return
 	}
-
 	q := r.URL.Query()
+	// The page names the export so its progress row exists before the request
+	// lands; a script calling the endpoint directly gets one made up.
+	exportID := q.Get("export_id")
+	if exportID == "" {
+		exportID = newExportID()
+	} else if !exportIDPattern.MatchString(exportID) {
+		writeError(w, http.StatusBadRequest, "export_id must be 1-64 letters, digits or dashes")
+		return
+	}
 	var fields []string
-	if err := json.Unmarshal([]byte(q.Get("fields")), &fields); err != nil || len(fields) == 0 {
-		writeError(w, http.StatusBadRequest, "fields must be a non-empty JSON array of field paths")
+	fieldsErr := json.Unmarshal([]byte(q.Get("fields")), &fields)
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	job, err := h.exports.start(exportID, id, object, fields, cancel)
+	if err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	// Registered first so that a request refused below still shows up in the
+	// panel with its reason: the browser only says "Failed".
+	refuse := func(status int, msg string) {
+		h.exports.finish(job, errors.New(msg), false)
+		writeError(w, status, msg)
+	}
+
+	if fieldsErr != nil || len(fields) == 0 {
+		refuse(http.StatusBadRequest, "fields must be a non-empty JSON array of field paths")
 		return
 	}
 	var filters []connector.FilterExpr
 	if raw := q.Get("filters"); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &filters); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid filters JSON: "+err.Error())
+			refuse(http.StatusBadRequest, "invalid filters JSON: "+err.Error())
 			return
 		}
 	}
 
-	conn, cancel, err := getConnector(r.Context(), h.manager, id)
+	conn, release, err := getConnector(ctx, h.manager, id)
 	if err != nil {
+		h.exports.finish(job, err, false)
 		writeConnectorError(w, err)
 		return
 	}
-	defer cancel()
+	defer release()
 
 	exporter, ok := conn.(connector.KafkaFieldExporter)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "this source cannot export fields")
+		refuse(http.StatusBadRequest, "this source cannot export fields")
 		return
 	}
 
@@ -79,30 +106,48 @@ func (h *DataHandler) ExportFields(w http.ResponseWriter, r *http.Request) {
 		return out.Write(fields)
 	}
 
-	rows := 0
-	err = exporter.ExportFields(r.Context(), object, fields, filters, func(cells []string) error {
+	// A failed write means the browser stopped reading, which is not the
+	// broker's fault and should not read as a failure.
+	writeFailed := false
+	write := func(cells []string) error {
 		if !started {
 			if err := start(); err != nil {
+				writeFailed = true
 				return err
 			}
 		}
 		if err := out.Write(cells); err != nil {
+			writeFailed = true
 			return err
 		}
-		rows++
-		if rows%fieldExportFlushRows == 0 {
+		return nil
+	}
+	err = exporter.ExportFields(ctx, object, fields, filters, func(cells []string) error {
+		if err := write(cells); err != nil {
+			return err
+		}
+		if job.rows.Add(1)%fieldExportFlushRows == 0 {
 			out.Flush()
-			return out.Error()
+			if err := out.Error(); err != nil {
+				writeFailed = true
+				return err
+			}
 		}
 		return nil
+	}, func(read, total int64) {
+		job.read.Store(read)
+		job.total.Store(total)
 	})
 	if err == nil && !started {
 		err = start()
+		writeFailed = err != nil
 	}
 	if err == nil {
 		out.Flush()
 		err = out.Error()
+		writeFailed = err != nil
 	}
+	status := h.exports.finish(job, err, writeFailed || r.Context().Err() != nil)
 	if err == nil {
 		return
 	}
@@ -110,6 +155,10 @@ func (h *DataHandler) ExportFields(w http.ResponseWriter, r *http.Request) {
 		writeConnectorError(w, err)
 		return
 	}
-	slog.Error("field export aborted", "connection", id, "topic", object, "rows", rows, "error", err)
+	level := slog.LevelInfo
+	if status == exportFailed {
+		level = slog.LevelError
+	}
+	slog.Log(r.Context(), level, "field export stopped", "status", status, "connection", id, "topic", object, "rows", job.rows.Load(), "error", err)
 	panic(http.ErrAbortHandler)
 }

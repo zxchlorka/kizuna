@@ -30,7 +30,11 @@ func (c *KafkaConnector) ExportFields(
 	fields []string,
 	filters []connector.FilterExpr,
 	emit func(cells []string) error,
+	progress func(read, total int64),
 ) error {
+	if progress == nil {
+		progress = func(int64, int64) {}
+	}
 	columns, err := parseExportFields(fields)
 	if err != nil {
 		return err
@@ -76,8 +80,18 @@ func (c *KafkaConnector) ExportFields(
 		return partitionOffsets(topic, id, starts, ends)
 	}, seekBounds, direction)
 	if len(windows) == 0 {
+		progress(0, 0)
 		return nil
 	}
+	// Offsets, not messages: compaction gaps and transaction markers make the
+	// two differ slightly, and offsets are what can be known before reading.
+	var total int64
+	position := make(map[int32]int64, len(windows))
+	for id, window := range windows {
+		total += window.upper - window.from
+		position[id] = window.from
+	}
+	progress(0, total)
 
 	// A client of its own: the shared one serialises every browse of this
 	// connection behind consumeMu, and an export holding it for minutes would
@@ -151,14 +165,23 @@ func (c *KafkaConnector) ExportFields(
 			// (compaction, transaction markers), so an empty fetch at or past the
 			// end also finishes the partition.
 			reached := len(partition.Records) > 0 && partition.Records[len(partition.Records)-1].Offset >= window.upper-1
+			if len(partition.Records) > 0 {
+				position[partition.Partition] = min(window.upper, partition.Records[len(partition.Records)-1].Offset+1)
+			}
 			if reached || (len(partition.Records) == 0 && partition.HighWatermark >= window.upper) {
 				done[partition.Partition] = true
 				finished = append(finished, partition.Partition)
+				position[partition.Partition] = window.upper
 			}
 		})
 		if emitErr != nil {
 			return emitErr
 		}
+		var read int64
+		for id, window := range windows {
+			read += position[id] - window.from
+		}
+		progress(read, total)
 		if len(finished) > 0 {
 			client.PauseFetchPartitions(map[string][]int32{topic: finished})
 		}

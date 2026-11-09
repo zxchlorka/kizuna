@@ -88,20 +88,32 @@ type testFieldExporter struct {
 	rows       [][]string
 	failBefore error
 	failAfter  error
-	topic      string
-	fields     []string
-	filters    []connector.FilterExpr
+	total      int64
+	// block holds the export open after its rows until ctx ends, the way a long
+	// read does, and closes started once it is under way.
+	block   bool
+	started chan struct{}
+	topic   string
+	fields  []string
+	filters []connector.FilterExpr
 }
 
-func (c *testFieldExporter) ExportFields(_ context.Context, topic string, fields []string, filters []connector.FilterExpr, emit func([]string) error) error {
+func (c *testFieldExporter) ExportFields(ctx context.Context, topic string, fields []string, filters []connector.FilterExpr, emit func([]string) error, progress func(read, total int64)) error {
 	c.topic, c.fields, c.filters = topic, fields, filters
 	if c.failBefore != nil {
 		return c.failBefore
 	}
+	progress(0, c.total)
 	for _, row := range c.rows {
 		if err := emit(row); err != nil {
 			return err
 		}
+	}
+	progress(c.total, c.total)
+	if c.block {
+		close(c.started)
+		<-ctx.Done()
+		return ctx.Err()
 	}
 	return c.failAfter
 }

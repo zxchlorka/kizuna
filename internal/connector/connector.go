@@ -236,8 +236,17 @@ type KafkaOffsetResetter interface {
 // chosen JSON fields of a topic's messages (Kafka). The API exposes it via
 // GET /objects/{name}/fields.csv. filters take the same shape as GetData's;
 // emit receives one row of cells per message that has at least one field.
+// progress, when set, reports offsets read against the total in range: once
+// with read 0 before the first fetch, then after every fetch, ending at total.
 type KafkaFieldExporter interface {
-	ExportFields(ctx context.Context, topic string, fields []string, filters []FilterExpr, emit func(cells []string) error) error
+	ExportFields(
+		ctx context.Context,
+		topic string,
+		fields []string,
+		filters []FilterExpr,
+		emit func(cells []string) error,
+		progress func(read, total int64),
+	) error
 }
 
 type ObjectInfo struct {
