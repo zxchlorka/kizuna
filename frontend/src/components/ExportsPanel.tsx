@@ -1,5 +1,6 @@
-import { useEffect } from 'react'
-import { ChevronDown, ChevronUp, Download, X } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { ChevronDown, ChevronUp, Download } from 'lucide-react'
+import { ConfirmDialog } from '@/components/ConfirmDialog'
 import {
   compactNumber,
   exportElapsedSeconds,
@@ -55,8 +56,24 @@ function detail(job: ExportJob, now: number): string {
   }
 }
 
-function ExportRow({ job, now, onStop }: { job: ExportJob; now: number; onStop: (id: string) => void }) {
-  const active = isActive(job)
+function statusText(job: ExportJob): string {
+  return job.status === 'running' ? `${exportPercent(job).toFixed(1)}%` : statusLabel[job.status]
+}
+
+const statusTone = (job: ExportJob) =>
+  job.status === 'failed' || job.status === 'interrupted' ? 'text-destructive' : 'text-muted-foreground'
+
+function ExportRow({
+  job,
+  now,
+  onStop,
+  onDismiss,
+}: {
+  job: ExportJob
+  now: number
+  onStop: (id: string) => void
+  onDismiss: (id: string) => void
+}) {
   const percent = exportPercent(job)
   return (
     <div className="px-3 py-2.5" title={`${job.topic}: ${job.fields.join(', ')}`}>
@@ -65,23 +82,28 @@ function ExportRow({ job, now, onStop }: { job: ExportJob; now: number; onStop: 
           {job.topic}
           <span className="text-muted-foreground"> {job.fields.join(', ')}</span>
         </span>
-        <span
-          className={cn(
-            'shrink-0 font-mono text-[11px] tabular-nums',
-            job.status === 'failed' || job.status === 'interrupted' ? 'text-destructive' : 'text-muted-foreground'
-          )}
-        >
-          {job.status === 'running' ? `${percent.toFixed(1)}%` : statusLabel[job.status]}
-        </span>
-        <button
-          type="button"
-          className="shrink-0 rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-          onClick={() => onStop(job.id)}
-          title={active ? 'Stop this export' : 'Dismiss'}
-          aria-label={active ? `Stop the export of ${job.topic}` : `Dismiss the export of ${job.topic}`}
-        >
-          <X className="h-3 w-3" />
-        </button>
+        <span className={cn('shrink-0 font-mono text-[11px] tabular-nums', statusTone(job))}>{statusText(job)}</span>
+        {/* Nothing while starting: the server does not know this export yet. */}
+        {job.status === 'running' && (
+          <button
+            type="button"
+            className="shrink-0 rounded-sm font-mono text-[11px] text-muted-foreground transition-colors hover:text-destructive"
+            onClick={() => onStop(job.id)}
+            aria-label={`Stop the export of ${job.topic}`}
+          >
+            Stop
+          </button>
+        )}
+        {!isActive(job) && (
+          <button
+            type="button"
+            className="shrink-0 rounded-sm font-mono text-[11px] text-muted-foreground transition-colors hover:text-foreground"
+            onClick={() => onDismiss(job.id)}
+            aria-label={`Dismiss the export of ${job.topic}`}
+          >
+            Dismiss
+          </button>
+        )}
       </div>
       <div
         className="mt-1.5 h-1 overflow-hidden rounded-full bg-muted"
@@ -101,15 +123,15 @@ function ExportRow({ job, now, onStop }: { job: ExportJob; now: number; onStop: 
   )
 }
 
-// ExportsPanel sits bottom-left on every page while there are field exports to
-// show. One export is shown in full; several fold into a single summary line
-// that opens on click, so a batch of downloads does not cover the sidebar.
+// ExportsPanel sits bottom-right on every page while there are field exports to
+// show, folded to one line unless opened, so it does not cover the page.
 export function ExportsPanel() {
   const jobs = useExportsStore((state) => state.jobs)
   const expanded = useExportsStore((state) => state.expanded)
   const setExpanded = useExportsStore((state) => state.setExpanded)
   const refresh = useExportsStore((state) => state.refresh)
   const stop = useExportsStore((state) => state.stop)
+  const [stoppingId, setStoppingId] = useState<string | null>(null)
 
   // Picks up exports still running after a reload of the page.
   useEffect(() => {
@@ -121,53 +143,80 @@ export function ExportsPanel() {
   }
 
   const now = Date.now()
-  const onStop = (id: string) => void stop(id)
-
-  if (jobs.length === 1) {
-    return (
-      <div className="fixed bottom-4 left-4 z-[60] w-[22rem] max-w-[calc(100vw-2rem)] rounded-sm border border-border bg-card shadow-lg">
-        <ExportRow job={jobs[0]} now={now} onStop={onStop} />
-      </div>
-    )
-  }
-
   const summary = summarizeExports(jobs)
+  const single = jobs.length === 1 ? jobs[0] : null
+  // Looked up live, so the warning closes itself if the export ends meanwhile.
+  const stopping = jobs.find((job) => job.id === stoppingId && job.status === 'running') ?? null
+
   return (
-    <div className="fixed bottom-4 left-4 z-[60] w-[22rem] max-w-[calc(100vw-2rem)] rounded-sm border border-border bg-card shadow-lg">
-      {expanded && (
-        <div className="max-h-[50vh] divide-y divide-border overflow-y-auto border-b border-border">
-          {jobs.map((job) => (
-            <ExportRow key={job.id} job={job} now={now} onStop={onStop} />
-          ))}
-        </div>
-      )}
-      <button
-        type="button"
-        className="flex w-full items-center gap-2 px-3 py-2 text-left"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-      >
-        <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
-          {summary.count} exports
-          {summary.running > 0 && (
-            <span className="text-muted-foreground">
-              {' '}
-              · {summary.running} running · {Math.floor(summary.percent)}%
-            </span>
-          )}
-        </span>
-        {expanded ? (
-          <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        ) : (
-          <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+    <>
+      <div
+        className={cn(
+          'fixed bottom-4 right-4 z-50 max-w-[calc(100vw-2rem)] rounded-sm border border-border bg-card shadow-lg',
+          expanded ? 'w-[22rem]' : 'w-72'
         )}
-      </button>
-      {!expanded && summary.running > 0 && (
-        <div className="h-0.5 bg-muted">
-          <div className="h-full bg-orange-500 transition-[width] duration-700 ease-out" style={{ width: `${summary.percent}%` }} />
-        </div>
-      )}
-    </div>
+      >
+        {expanded && (
+          <div className="max-h-[50vh] divide-y divide-border overflow-y-auto border-b border-border">
+            {jobs.map((job) => (
+              <ExportRow key={job.id} job={job} now={now} onStop={setStoppingId} onDismiss={(id) => void stop(id)} />
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          className="flex w-full items-center gap-2 px-3 py-2 text-left"
+          onClick={() => setExpanded(!expanded)}
+          aria-expanded={expanded}
+          title={single ? `${single.topic}: ${single.fields.join(', ')}` : undefined}
+        >
+          <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span className="min-w-0 flex-1 truncate font-mono text-xs text-foreground">
+            {single && !expanded ? single.topic : `${summary.count} export${summary.count === 1 ? '' : 's'}`}
+            {!single && summary.running > 0 && (
+              <span className="text-muted-foreground">
+                {' '}
+                · {summary.running} running · {Math.floor(summary.percent)}%
+              </span>
+            )}
+          </span>
+          {single && !expanded && (
+            <span className={cn('shrink-0 font-mono text-[11px] tabular-nums', statusTone(single))}>{statusText(single)}</span>
+          )}
+          {expanded ? (
+            <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          ) : (
+            <ChevronUp className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          )}
+        </button>
+        {!expanded && summary.running > 0 && (
+          <div className="h-0.5 bg-muted">
+            <div className="h-full bg-orange-500 transition-[width] duration-700 ease-out" style={{ width: `${summary.percent}%` }} />
+          </div>
+        )}
+      </div>
+
+      <ConfirmDialog
+        open={stopping !== null}
+        title="Stop this export?"
+        description={
+          stopping && (
+            <>
+              <span className="font-mono">{stopping.topic}</span> is at {statusText(stopping)}. Stopping fails the download
+              and all progress is lost: an export cannot resume, so the next run starts from the beginning.
+            </>
+          )
+        }
+        confirmLabel="Stop export"
+        destructive
+        onOpenChange={(open) => {
+          if (!open) setStoppingId(null)
+        }}
+        onConfirm={() => {
+          if (stoppingId !== null) void stop(stoppingId)
+          setStoppingId(null)
+        }}
+      />
+    </>
   )
 }

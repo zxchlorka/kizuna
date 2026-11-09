@@ -3,6 +3,17 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.13.1 — 2026-11-09
+
+### Kafka
+
+- The export panel moved to the bottom-right corner and stays folded to one
+  line, even with a single export, so it no longer covers the page. A click
+  opens it.
+- The cross is gone. A running export stops only through **Stop**, which warns
+  first that the progress will be lost, since an export cannot resume.
+  Finished exports are cleared with **Dismiss**.
+
 ## v0.13.0 — 2026-11-09
 
 ### Kafka
