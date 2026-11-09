@@ -160,6 +160,7 @@ The producer can send one message, a batch of comma-separated JSON objects in **
 - Search a topic by key, header, or JSON fields, with several conditions joined by AND/OR and `equals` / `contains` / "field exists". The scan shows its progress and can be stopped at any point.
 - Seek by offset or time, and read newest-first or oldest-first.
 - Chosen JSON fields can be shown as their own columns.
+- Export chosen JSON fields of a topic to CSV, within the partition, range, and filters set in the toolbar, with progress shown while it runs.
 - Reset a consumer group's offsets to the start, the end, or a point in time; before anything is sent, you see how many messages the group will re-read or skip.
 - The Config tab shows every topic setting with where its value comes from and what it would be without the override.
 
