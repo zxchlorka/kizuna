@@ -91,6 +91,13 @@ func (c *KafkaConnector) ExportFields(
 		total += window.upper - window.from
 		position[id] = window.from
 	}
+	report := func() {
+		var read int64
+		for id, window := range windows {
+			read += position[id] - window.from
+		}
+		progress(read, total)
+	}
 	progress(0, total)
 
 	// A client of its own: the shared one serialises every browse of this
@@ -145,6 +152,12 @@ func (c *KafkaConnector) ExportFields(
 			if emitErr != nil || partition.Topic != topic || !ok || done[partition.Partition] {
 				return
 			}
+			// Counted as read before its rows go out, so the row count never
+			// runs ahead of the read count beside it.
+			if len(partition.Records) > 0 {
+				position[partition.Partition] = min(window.upper, partition.Records[len(partition.Records)-1].Offset+1)
+				report()
+			}
 			for _, record := range partition.Records {
 				if record.Offset >= window.upper {
 					break
@@ -165,9 +178,6 @@ func (c *KafkaConnector) ExportFields(
 			// (compaction, transaction markers), so an empty fetch at or past the
 			// end also finishes the partition.
 			reached := len(partition.Records) > 0 && partition.Records[len(partition.Records)-1].Offset >= window.upper-1
-			if len(partition.Records) > 0 {
-				position[partition.Partition] = min(window.upper, partition.Records[len(partition.Records)-1].Offset+1)
-			}
 			if reached || (len(partition.Records) == 0 && partition.HighWatermark >= window.upper) {
 				done[partition.Partition] = true
 				finished = append(finished, partition.Partition)
@@ -177,11 +187,7 @@ func (c *KafkaConnector) ExportFields(
 		if emitErr != nil {
 			return emitErr
 		}
-		var read int64
-		for id, window := range windows {
-			read += position[id] - window.from
-		}
-		progress(read, total)
+		report()
 		if len(finished) > 0 {
 			client.PauseFetchPartitions(map[string][]int32{topic: finished})
 		}

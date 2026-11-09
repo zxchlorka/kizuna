@@ -139,7 +139,17 @@ func TestExportFieldsIntegration(t *testing.T) {
 
 	t.Run("progress counts offsets up to the snapshot total", func(t *testing.T) {
 		var reports [][2]int64
-		err := conn.ExportFields(ctx, topic, []string{"user_id"}, nil, func([]string) error { return nil }, func(read, total int64) {
+		var rows, latestRead int64
+		err := conn.ExportFields(ctx, topic, []string{"user_id"}, nil, func([]string) error {
+			// The panel shows both counters side by side; a row written ahead
+			// of the messages counted as read reads as nonsense there.
+			rows++
+			if rows > latestRead {
+				return fmt.Errorf("row %d written while only %d messages counted as read", rows, latestRead)
+			}
+			return nil
+		}, func(read, total int64) {
+			latestRead = read
 			reports = append(reports, [2]int64{read, total})
 		})
 		if err != nil {
