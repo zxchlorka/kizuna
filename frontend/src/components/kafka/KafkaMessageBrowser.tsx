@@ -108,8 +108,9 @@ interface KafkaMessageBrowserProps {
   otherConnectionLinks: LinkRecord[]
   allConnectionLinks: LinkRecord[]
   connectionName: (connId: string) => string
-  // The CSV download of chosen fields over the given request filters.
-  fieldExportUrl: (fields: string[], filters: FilterExpr[]) => string
+  // Registers a field export for the progress panel and returns its CSV
+  // download URL over the given request filters.
+  startFieldExport: (fields: string[], filters: FilterExpr[]) => string
 }
 
 const allPartitions = '__all__'
@@ -225,7 +226,7 @@ export function KafkaMessageBrowser({
   otherConnectionLinks,
   allConnectionLinks,
   connectionName,
-  fieldExportUrl,
+  startFieldExport,
 }: KafkaMessageBrowserProps) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const [modalMessage, setModalMessage] = useState<KafkaMessageRow | null>(null)
@@ -477,8 +478,8 @@ export function KafkaMessageBrowser({
           seek={seek}
           direction={direction}
           conditionCount={exportSearch ? activeConditions(exportSearch.conditions).length : 0}
-          downloadUrl={(fields) =>
-            fieldExportUrl(fields, buildMessageFilters(partitionFilter, seek, direction, exportSearch))
+          startDownload={(fields) =>
+            startFieldExport(fields, buildMessageFilters(partitionFilter, seek, direction, exportSearch))
           }
         />
       )}

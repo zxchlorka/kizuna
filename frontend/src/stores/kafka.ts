@@ -554,9 +554,19 @@ export function buildMessageFilters(
 }
 
 // kafkaFieldExportUrl is the CSV download of the chosen fields over the range
-// the filters describe (see ExportFields in the backend).
-export function kafkaFieldExportUrl(connId: string, topic: string, fields: string[], filters: FilterExpr[]): string {
+// the filters describe (see ExportFields in the backend). exportId names the
+// export in GET /api/exports, which is where its progress shows up.
+export function kafkaFieldExportUrl(
+  connId: string,
+  topic: string,
+  fields: string[],
+  filters: FilterExpr[],
+  exportId?: string
+): string {
   const params = new URLSearchParams({ fields: JSON.stringify(fields) })
+  if (exportId) {
+    params.set('export_id', exportId)
+  }
   if (filters.length > 0) {
     params.set('filters', JSON.stringify(filters))
   }

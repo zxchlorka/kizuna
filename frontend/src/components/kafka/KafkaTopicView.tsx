@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { useConnectionStore } from '@/stores/connections'
 import { kafkaFieldExportUrl, topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
+import { newExportId, useExportsStore } from '@/stores/exports'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord, ObjectItem } from '@/types/api'
 import { findConnection } from '@/lib/databaseConnection'
@@ -53,6 +54,7 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const columns = useKafkaStore((state) => state.columnsByTopic[topicColumnsKey(connId, topic)] ?? EMPTY_COLUMNS)
   const addColumn = useKafkaStore((state) => state.addColumn)
   const removeColumn = useKafkaStore((state) => state.removeColumn)
+  const trackExport = useExportsStore((state) => state.track)
   const fetchTopicChildren = useKafkaStore((state) => state.fetchTopicChildren)
   const loadInitialMessages = useKafkaStore((state) => state.loadInitialMessages)
   const refreshMessages = useKafkaStore((state) => state.refreshMessages)
@@ -279,7 +281,11 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
             scanned={tab?.scanned ?? 0}
             scanReached={tab?.scanReached ?? ''}
             topic={topic}
-            fieldExportUrl={(fields, filters) => kafkaFieldExportUrl(connId, topic, fields, filters)}
+            startFieldExport={(fields, filters) => {
+              const id = newExportId()
+              trackExport({ id, connection_id: connId, topic, fields })
+              return kafkaFieldExportUrl(connId, topic, fields, filters, id)
+            }}
             columns={columns}
             onAddColumn={(path) => addColumn(connId, topic, path)}
             onRemoveColumn={(path) => removeColumn(connId, topic, path)}

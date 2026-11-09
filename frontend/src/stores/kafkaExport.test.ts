@@ -41,6 +41,11 @@ describe('kafkaFieldExportUrl', () => {
     expect(url.searchParams.has('filters')).toBe(false)
   })
 
+  it('names the export when given an id', () => {
+    const url = new URL(kafkaFieldExportUrl('c1', 't', ['a'], [], 'abc123'), 'http://x')
+    expect(url.searchParams.get('export_id')).toBe('abc123')
+  })
+
   it('sends filters when there are any', () => {
     const url = new URL(kafkaFieldExportUrl('c1', 't', ['a', 'b'], [{ column: 'partition', op: 'eq', value: '2' }]), 'http://x')
     expect(JSON.parse(url.searchParams.get('filters') ?? '[]')).toEqual([{ column: 'partition', op: 'eq', value: '2' }])

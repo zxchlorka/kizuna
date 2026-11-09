@@ -6,6 +6,7 @@ import SettingsPage from '@/pages/SettingsPage'
 import { CommandPalette } from '@/components/CommandPalette'
 import { ErrorBoundary } from '@/components/ErrorBoundary'
 import { ToastViewport } from '@/components/ToastViewport'
+import { ExportsPanel } from '@/components/ExportsPanel'
 import { startSqlSessionCleanup } from '@/lib/sqlSessions'
 import { restoreWorkspace, syncWorkspaceWithConnections } from '@/lib/workspacePersistence'
 import { useConnectionStore } from '@/stores/connections'
@@ -48,6 +49,7 @@ export default function App() {
       </ErrorBoundary>
       <CommandPalette />
       <ToastViewport />
+      <ExportsPanel />
     </>
   )
 }

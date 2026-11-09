@@ -17,7 +17,8 @@ interface KafkaExportDialogProps {
   seek: KafkaSeek
   direction: KafkaDirection
   conditionCount: number
-  downloadUrl: (fields: string[]) => string
+  // Registers the export with the progress panel and returns its download URL.
+  startDownload: (fields: string[]) => string
 }
 
 // describeRange says which part of each partition goes into the file, in the
@@ -45,7 +46,7 @@ export function KafkaExportDialog({
   seek,
   direction,
   conditionCount,
-  downloadUrl,
+  startDownload,
 }: KafkaExportDialogProps) {
   // Seeded once per mount; the browser mounts this only while it is open, so
   // every open starts from the table's current columns and a re-render of the
@@ -63,10 +64,11 @@ export function KafkaExportDialog({
 
   const download = () => {
     if (chosen.length === 0) return
-    // A plain link: the browser streams the file to disk, shows its progress and
-    // offers cancel, and a broken transfer is reported as a failed download.
+    // A plain link: the browser streams the file to disk however large it is,
+    // and a broken transfer is reported as a failed download. How far the
+    // export has read shows in the panel bottom-left.
     const link = document.createElement('a')
-    link.href = downloadUrl(chosen)
+    link.href = startDownload(chosen)
     link.download = ''
     document.body.appendChild(link)
     link.click()
