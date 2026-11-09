@@ -16,6 +16,7 @@ import (
 type DataHandler struct {
 	cfg     *config.AppConfig
 	manager *connector.ConnectionManager
+	exports *exportRegistry
 }
 
 type CreateKeyRequest struct {
@@ -26,7 +27,7 @@ type CreateKeyRequest struct {
 }
 
 func NewDataHandler(cfg *config.AppConfig, manager *connector.ConnectionManager) *DataHandler {
-	return &DataHandler{cfg: cfg, manager: manager}
+	return &DataHandler{cfg: cfg, manager: manager, exports: newExportRegistry()}
 }
 
 func (h *DataHandler) GetData(w http.ResponseWriter, r *http.Request) {

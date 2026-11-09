@@ -16,7 +16,6 @@ import (
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
 	"github.com/zxchlorka/kizuna/internal/connector"
-	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -292,24 +291,9 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 	defer cancelMeta()
 
 	metadataStart := time.Now()
-	var starts, ends kadm.ListedOffsets
-	group, groupCtx := errgroup.WithContext(metaCtx)
-	group.Go(func() error {
-		listed, err := c.admin.ListStartOffsets(groupCtx, topic)
-		if err == nil {
-			starts = listed
-		}
-		return err
-	})
-	group.Go(func() error {
-		listed, err := c.admin.ListEndOffsets(groupCtx, topic)
-		if err == nil {
-			ends = listed
-		}
-		return err
-	})
-	if err := group.Wait(); err != nil {
-		return nil, normalizeKafkaError(err)
+	starts, ends, err := c.listOffsetBounds(metaCtx, topic)
+	if err != nil {
+		return nil, err
 	}
 	metadataMs := time.Since(metadataStart).Milliseconds()
 	endsByPartition, ok := ends[topic]

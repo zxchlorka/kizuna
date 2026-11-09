@@ -3,6 +3,7 @@ import { fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/ht
 import { fieldPresence, matchField, matchFieldContains } from '@/lib/jsonPaths'
 import type {
   ColumnMeta,
+  FilterExpr,
   KafkaOffsetResetRequest,
   KafkaOffsetResetResult,
   KafkaProduceRequest,
@@ -131,7 +132,7 @@ export function conditionTarget(condition: KafkaMatchCondition): KafkaMatchTarge
 // 'or' widens (any one does).
 export type KafkaMatchMode = 'and' | 'or'
 
-interface KafkaSearch {
+export interface KafkaSearch {
   conditions: KafkaMatchCondition[]
   mode: KafkaMatchMode
 }
@@ -497,31 +498,21 @@ function kafkaMessageKey(
   return `${kafkaTopicKey(connId, topic, tabId)}::${partition ?? 'all'}::${JSON.stringify(beforeOffsets ?? {})}`
 }
 
-async function requestMessages(
-  connId: string,
-  topic: string,
+// buildMessageFilters is what the toolbar means as request filters: partition,
+// direction, seek and the applied conditions. The browse adds its pagination
+// cursor on top; the field export sends it as is, so both read the same range.
+export function buildMessageFilters(
   partition: number | null,
-  cursorOffsets: Record<string, number> | null,
-  search: KafkaSearch | null,
   seek: KafkaSeek | null,
   direction: KafkaDirection,
-  signal?: AbortSignal
-): Promise<MessagesResponse> {
-  const filters: Array<{ column: string; op: string; value: string }> = []
+  search: KafkaSearch | null
+): FilterExpr[] {
+  const filters: FilterExpr[] = []
   if (partition !== null) {
     filters.push({ column: 'partition', op: 'eq', value: String(partition) })
   }
   if (direction === 'oldest') {
     filters.push({ column: 'order', op: 'eq', value: 'oldest' })
-  }
-  if (cursorOffsets && Object.keys(cursorOffsets).length > 0) {
-    // The cursor column has to match the order above: the backend reads only the
-    // field belonging to the direction it was asked for.
-    filters.push({
-      column: direction === 'oldest' ? 'after_offsets' : 'before_offsets',
-      op: 'eq',
-      value: JSON.stringify(cursorOffsets),
-    })
   }
   // Sent alongside before_offsets rather than instead of it: the seek fixes
   // where paging starts, the cursor tracks how far down it has walked, and the
@@ -557,6 +548,50 @@ async function requestMessages(
       }
     })
     filters.push({ column: 'match_mode', op: 'eq', value: search.mode })
+  }
+
+  return filters
+}
+
+// kafkaFieldExportUrl is the CSV download of the chosen fields over the range
+// the filters describe (see ExportFields in the backend). exportId names the
+// export in GET /api/exports, which is where its progress shows up.
+export function kafkaFieldExportUrl(
+  connId: string,
+  topic: string,
+  fields: string[],
+  filters: FilterExpr[],
+  exportId?: string
+): string {
+  const params = new URLSearchParams({ fields: JSON.stringify(fields) })
+  if (exportId) {
+    params.set('export_id', exportId)
+  }
+  if (filters.length > 0) {
+    params.set('filters', JSON.stringify(filters))
+  }
+  return `/api/connections/${connId}/objects/${encodeURIComponent(topic)}/fields.csv?${params.toString()}`
+}
+
+async function requestMessages(
+  connId: string,
+  topic: string,
+  partition: number | null,
+  cursorOffsets: Record<string, number> | null,
+  search: KafkaSearch | null,
+  seek: KafkaSeek | null,
+  direction: KafkaDirection,
+  signal?: AbortSignal
+): Promise<MessagesResponse> {
+  const filters = buildMessageFilters(partition, seek, direction, search)
+  if (cursorOffsets && Object.keys(cursorOffsets).length > 0) {
+    // The cursor column has to match the order above: the backend reads only the
+    // field belonging to the direction it was asked for.
+    filters.push({
+      column: direction === 'oldest' ? 'after_offsets' : 'before_offsets',
+      op: 'eq',
+      value: JSON.stringify(cursorOffsets),
+    })
   }
 
   const params = new URLSearchParams({ limit: '100' })
