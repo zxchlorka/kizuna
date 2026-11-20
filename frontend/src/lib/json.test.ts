@@ -38,6 +38,12 @@ describe('quoteInexactNumbers', () => {
     expect(quoteInexactNumbers(SNOWFLAKE)).toBe(`"${SNOWFLAKE}"`)
   })
 
+  // 16 digits are enough to lose one: 2^53 + 1 is the smallest integer a
+  // double cannot hold, and the fast path used to look only at 17 and up.
+  it('quotes a 16-digit integer past 2^53 and leaves 2^53 itself alone', () => {
+    expect(quoteInexactNumbers('{"a":9007199254740993,"b":9007199254740992}')).toBe('{"a":"9007199254740993","b":9007199254740992}')
+  })
+
   it('leaves payloads without long digit runs untouched', () => {
     const text = '{"a":1,"b":[true,false,null],"c":"x"}'
     expect(quoteInexactNumbers(text)).toBe(text)
