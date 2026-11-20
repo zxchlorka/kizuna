@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { KafkaFormatBadge } from '@/components/kafka/KafkaFormatBadge'
 import { clipboardFailureMessage, writeClipboardText } from '@/lib/clipboard'
 import { formatJson } from '@/lib/json'
+import { isJsonFormat } from '@/lib/kafkaColumns'
 import { downloadTextFile, timestampForFilename } from '@/lib/tableExport'
 import { useToastStore } from '@/stores/toast'
 import type { KafkaMessageRow } from '@/stores/kafka'
@@ -29,14 +30,14 @@ export function messageEnvelope(message: KafkaMessageRow, indent = ''): string {
     null,
     2
   )
-  const value = message.format === 'json' ? (formatJson(message.value) ?? JSON.stringify(message.value)) : JSON.stringify(message.value)
+  const value = isJsonFormat(message.format) ? (formatJson(message.value) ?? JSON.stringify(message.value)) : JSON.stringify(message.value)
   // head ends in "\n}"; drop it, append the value, close the object again.
   const text = `${head.slice(0, -2)},\n  "value": ${value.split('\n').join('\n  ')}\n}`
   return indent === '' ? text : text.split('\n').join(`\n${indent}`)
 }
 
 function prettyValue(value: string, format: string, pretty: boolean): string {
-  if (!pretty || format !== 'json') {
+  if (!pretty || !isJsonFormat(format)) {
     return value
   }
   return formatJson(value) ?? value
@@ -107,7 +108,7 @@ export function KafkaMessageDetail({ message, onExpand, tall }: KafkaMessageDeta
           <span className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted-foreground">
             Value <KafkaFormatBadge format={message.format} />
           </span>
-          {message.format === 'json' && (
+          {isJsonFormat(message.format) && (
             <Button type="button" size="sm" variant="ghost" className="h-6 px-2 font-mono text-[10px]" onClick={() => setPretty((current) => !current)}>
               {pretty ? 'Raw' : 'Formatted'}
             </Button>

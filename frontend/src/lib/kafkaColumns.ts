@@ -28,11 +28,17 @@ export const NO_VALUE = '—'
  * round it to a different id, which is the whole class of bug this project
  * spent v0.8.1 removing.
  */
+// isJsonFormat says whether a message value is JSON: written as JSON, or
+// protobuf the server read with the topic's .proto and sent as JSON.
+export function isJsonFormat(format: string): boolean {
+  return format === 'json' || format === 'protobuf'
+}
+
 export function columnValues(value: string, format: string, paths: string[]): string[] {
   if (paths.length === 0) {
     return []
   }
-  if (format !== 'json') {
+  if (!isJsonFormat(format)) {
     return paths.map(() => NO_VALUE)
   }
 

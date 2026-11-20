@@ -4,6 +4,7 @@ const formatStyles: Record<string, string> = {
   json: 'border-emerald-500/20 bg-emerald-500/5 text-emerald-500',
   text: 'border-sky-500/20 bg-sky-500/5 text-sky-500',
   binary: 'border-amber-500/20 bg-amber-500/5 text-amber-500',
+  protobuf: 'border-violet-500/20 bg-violet-500/5 text-violet-500',
   empty: 'border-border bg-muted/20 text-muted-foreground',
 }
 

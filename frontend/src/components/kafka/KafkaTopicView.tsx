@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Layers, Lock, MessagesSquare, RefreshCw, Send, SlidersHorizontal, Users } from 'lucide-react'
+import { FileCode2, Layers, Lock, MessagesSquare, RefreshCw, Send, SlidersHorizontal, Users } from 'lucide-react'
 import { KafkaConsumerGroups } from '@/components/kafka/KafkaConsumerGroups'
 import { KafkaResetOffsetsDialog } from '@/components/kafka/KafkaResetOffsetsDialog'
 import { KafkaTopicConfig } from '@/components/kafka/KafkaTopicConfig'
 import { KafkaMessageBrowser } from '@/components/kafka/KafkaMessageBrowser'
 import { KafkaPartitionsTable } from '@/components/kafka/KafkaPartitionsTable'
 import { KafkaProduceModal } from '@/components/kafka/KafkaProduceModal'
+import { KafkaProtoDialog } from '@/components/kafka/KafkaProtoDialog'
 import { CreateLinkDialog } from '@/components/links/CreateLinkDialog'
 import { ErrorBanner } from '@/components/ErrorBanner'
 import { LoadingSkeleton } from '@/components/LoadingSkeleton'
@@ -17,6 +18,7 @@ import { useConnectionStore } from '@/stores/connections'
 import { kafkaFieldExportUrl, topicColumnsKey, useKafkaStore } from '@/stores/kafka'
 import { useLinksStore } from '@/stores/links'
 import { newExportId, useExportsStore } from '@/stores/exports'
+import { fetchTopicProto, shortMessageName, type TopicProto } from '@/stores/kafkaProto'
 import type { KafkaMessageRow } from '@/stores/kafka'
 import type { LinkRecord, ObjectItem } from '@/types/api'
 import { findConnection } from '@/lib/databaseConnection'
@@ -43,6 +45,8 @@ const tabs: Array<{ id: TopicTab; label: string; icon: typeof MessagesSquare }> 
 export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   const [activeTab, setActiveTab] = useState<TopicTab>('messages')
   const [produceOpen, setProduceOpen] = useState(false)
+  const [proto, setProto] = useState<TopicProto | null>(null)
+  const [protoOpen, setProtoOpen] = useState(false)
   const readOnly = useConnectionStore(
     (state) => findConnection(state.connections, connId)?.read_only ?? false
   )
@@ -106,6 +110,18 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
   useEffect(() => {
     void fetchLinks().catch(() => undefined)
   }, [fetchLinks])
+
+  useEffect(() => {
+    let current = true
+    setProto(null)
+    fetchTopicProto(connId, topic)
+      .then((attached) => current && setProto(attached))
+      // Without it the topic simply reads as before; nothing to report.
+      .catch(() => undefined)
+    return () => {
+      current = false
+    }
+  }, [connId, topic])
 
   const partitions = useMemo(
     () => (tab?.children ?? []).filter((child) => child.type === 'kafka_partition'),
@@ -207,6 +223,19 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* Reading a contract writes nothing to Kafka, so read-only
+                  connections get it too. */}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-8 gap-1.5"
+                onClick={() => setProtoOpen(true)}
+                title={proto ? `${proto.file_name}: ${proto.message}` : 'Read binary messages with a .proto contract'}
+              >
+                <FileCode2 className={cn('h-3.5 w-3.5', proto && 'text-violet-500')} />
+                {proto ? `proto · ${shortMessageName(proto.message)}` : 'Add proto'}
+              </Button>
               {readOnly ? (
                 <span className="inline-flex items-center gap-1.5 rounded-sm border border-amber-500/30 bg-amber-500/5 px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-amber-600 dark:text-amber-400">
                   <Lock className="h-3 w-3" />
@@ -358,6 +387,19 @@ export function KafkaTopicView({ tabId, connId, topic }: KafkaTopicViewProps) {
           void fetchTopicChildren(connId, topic, tabId)
           // Same search-aware refresh: producing while a search is active re-runs
           // the search rather than silently discarding it for a browse page.
+          void refreshMessages(connId, topic, tabId)
+        }}
+      />
+
+      <KafkaProtoDialog
+        open={protoOpen}
+        onOpenChange={setProtoOpen}
+        connId={connId}
+        topic={topic}
+        proto={proto}
+        onChanged={(next) => {
+          setProto(next)
+          // Loaded messages were read with the old contract, or none.
           void refreshMessages(connId, topic, tabId)
         }}
       />

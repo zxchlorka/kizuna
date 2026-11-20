@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { fetchWithTimeout, RequestAbortedError, throwOnApiError } from '@/lib/http'
+import { isJsonFormat } from '@/lib/kafkaColumns'
 import { fieldPresence, matchField, matchFieldContains } from '@/lib/jsonPaths'
 import type {
   ColumnMeta,
@@ -323,7 +324,7 @@ function conditionMatches(row: KafkaMessageRow, condition: KafkaMatchCondition):
   // above messageMatchesField; until this guard existed the negatives negated a
   // helper that returns false for unparseable payloads and quietly included
   // them here while the server excluded them.
-  if (row.format !== 'json') {
+  if (!isJsonFormat(row.format)) {
     return false
   }
 
