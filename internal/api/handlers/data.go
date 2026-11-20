@@ -69,6 +69,11 @@ func (h *DataHandler) GetData(w http.ResponseWriter, r *http.Request) {
 		Filters:  filters,
 	}
 
+	if opts.ValueDecoder, err = h.topicValueDecoder(r.Context(), id, name); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
 	conn, cancel, err := getConnector(r.Context(), h.manager, id)
 	if err != nil {
 		writeConnectorError(w, err)

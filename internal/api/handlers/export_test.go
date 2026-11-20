@@ -96,10 +96,11 @@ type testFieldExporter struct {
 	topic   string
 	fields  []string
 	filters []connector.FilterExpr
+	decoder connector.PayloadDecoder
 }
 
-func (c *testFieldExporter) ExportFields(ctx context.Context, topic string, fields []string, filters []connector.FilterExpr, emit func([]string) error, progress func(read, total int64)) error {
-	c.topic, c.fields, c.filters = topic, fields, filters
+func (c *testFieldExporter) ExportFields(ctx context.Context, topic string, fields []string, filters []connector.FilterExpr, decoder connector.PayloadDecoder, emit func([]string) error, progress func(read, total int64)) error {
+	c.topic, c.fields, c.filters, c.decoder = topic, fields, filters, decoder
 	if c.failBefore != nil {
 		return c.failBefore
 	}

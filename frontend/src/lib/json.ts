@@ -9,10 +9,11 @@
 // in Redis values and Kafka payloads. So nothing in this module ever puts a
 // value through Number — text in, text out.
 
-// Fast path: a double holds ~17 significant decimal digits, so a payload with
-// no long digit-or-point run has nothing that could have been rounded and needs
-// no rewriting at all.
-const RISKY_NUMBER = /\d[\d.]{16,}/
+// Fast path: a double holds every number of up to 15 significant digits, so a
+// payload with no digit-or-point run of 16 or more has nothing that could have
+// been rounded and needs no rewriting at all. 16 digits can already lose one:
+// 9007199254740993, 2^53 + 1, reads back as ...992.
+const RISKY_NUMBER = /\d[\d.]{15,}/
 
 const NUMBER_CHARS = /[-+.eE0-9]/
 

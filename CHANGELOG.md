@@ -3,6 +3,30 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.14.0 — 2026-11-20
+
+### Kafka
+
+- Protobuf messages are readable. **Add proto** in the topic header attaches
+  a `.proto` file to the topic, and Kizuna picks its likely top-level message
+  type: the first one no other message refers to. Another type can be chosen
+  from the list, and the file can be replaced or removed. The contract is kept
+  in the Kizuna config, per topic, until removed.
+- Binary values are read as that message and shown as JSON, with the field
+  names of the `.proto` and 64-bit integers kept exact. Columns, Filter loaded,
+  Search topic, links and the CSV export all work on them as on JSON. JSON and
+  text messages stay as they are; a value that does not fit the message type
+  stays base64, so a wrong type never shows made-up fields.
+- A file that does not compile shows the compiler error with its line. Only
+  the well-known `google/protobuf` imports resolve; types from other files
+  have to be in the same file.
+
+### Fixed
+
+- A 16-digit integer past 2^53, such as 9007199254740993, no longer shows
+  rounded by one. The check for numbers a double cannot hold skipped anything
+  shorter than 17 characters.
+
 ## v0.13.1 — 2026-11-09
 
 ### Kafka

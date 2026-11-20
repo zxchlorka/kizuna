@@ -94,6 +94,11 @@ func (h *DataHandler) ExportFields(w http.ResponseWriter, r *http.Request) {
 		refuse(http.StatusBadRequest, "this source cannot export fields")
 		return
 	}
+	decoder, err := h.topicValueDecoder(ctx, id, object)
+	if err != nil {
+		refuse(http.StatusInternalServerError, err.Error())
+		return
+	}
 
 	out := csv.NewWriter(w)
 	started := false
@@ -122,7 +127,7 @@ func (h *DataHandler) ExportFields(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	err = exporter.ExportFields(ctx, object, fields, filters, func(cells []string) error {
+	err = exporter.ExportFields(ctx, object, fields, filters, decoder, func(cells []string) error {
 		if err := write(cells); err != nil {
 			return err
 		}

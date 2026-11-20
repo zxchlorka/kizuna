@@ -7,7 +7,7 @@
 // through nested objects/arrays to a canonical path instead of typing it by hand.
 //
 // Design constraints (see the Task 6 brief):
-//   - Only rows whose format is 'json' are parsed. Everything else is ignored.
+//   - Only rows whose format is 'json' (or protobuf read as JSON) are parsed. Everything else is ignored.
 //   - The sample is capped (DEFAULT_SAMPLE_CAP) and the walk is bounded by depth,
 //     total node count and example length, so a hostile or enormous payload can
 //     never block the main thread.
@@ -23,6 +23,7 @@
 // src.event_data.events[].name.
 
 import { formatPath, type PathSegment } from '@/lib/jsonPaths'
+import { isJsonFormat } from '@/lib/kafkaColumns'
 
 // The shape categories a value can fall into. Scalars (string/number/boolean/
 // null) are selectable leaves; object/array are structural and expand.
@@ -269,7 +270,7 @@ export function buildSchemaTree(rows: readonly SampleRow[], options: SampleOptio
   // Collect up to `sampleCap` json-format rows without touching the source array.
   const jsonRows: SampleRow[] = []
   for (const row of rows) {
-    if (row && row.format === 'json') {
+    if (row && isJsonFormat(row.format)) {
       jsonRows.push(row)
       if (jsonRows.length >= sampleCap) break
     }

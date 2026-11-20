@@ -161,6 +161,7 @@ The producer can send one message, a batch of comma-separated JSON objects in **
 - Seek by offset or time, and read newest-first or oldest-first.
 - Chosen JSON fields can be shown as their own columns.
 - Export chosen JSON fields of a topic to CSV, within the partition, range, and filters set in the toolbar, with progress shown while it runs.
+- Attach a `.proto` file to a topic to read its protobuf messages as JSON, with columns, search, and export working on them.
 - Reset a consumer group's offsets to the start, the end, or a point in time; before anything is sent, you see how many messages the group will re-read or skip.
 - The Config tab shows every topic setting with where its value comes from and what it would be without the override.
 

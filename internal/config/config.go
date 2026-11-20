@@ -58,6 +58,7 @@ type AppConfig struct {
 	Connections   []ConnectionConfig `json:"connections"`
 	Links         []LinkConfig       `json:"links,omitempty"`
 	Folders       []FolderConfig     `json:"folders,omitempty"`
+	TopicProtos   []TopicProtoConfig `json:"topic_protos,omitempty"`
 	EncryptionKey string             `json:"encryption_key"`
 	path          string
 }
@@ -147,6 +148,7 @@ func (c *AppConfig) RemoveConnectionCascade(id string) (bool, []string) {
 		kept = append(kept, link)
 	}
 	c.Links = kept
+	c.TopicProtos = slices.DeleteFunc(c.TopicProtos, func(proto TopicProtoConfig) bool { return proto.ConnID == id })
 	return true, removedLinkIDs
 }
 

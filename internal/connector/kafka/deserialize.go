@@ -7,10 +7,15 @@ import (
 	"unicode/utf8"
 
 	"github.com/twmb/franz-go/pkg/kgo"
+	"github.com/zxchlorka/kizuna/internal/connector"
 )
 
-// deserializePayload auto-detects the payload shape. Avro/Protobuf via Schema
-// Registry is a future slice; until then the format is json, text, or binary.
+// formatProtobuf marks a value read with the topic's .proto contract. Its value
+// is JSON, so everything that works on a JSON message works on it too.
+const formatProtobuf = "protobuf"
+
+// deserializePayload auto-detects the payload shape: json, text, or binary.
+// Protobuf needs the topic's contract; see deserializeValue.
 func deserializePayload(data []byte) (string, string) {
 	if len(data) == 0 {
 		return "", "empty"
@@ -29,6 +34,20 @@ func deserializePayload(data []byte) (string, string) {
 	}
 
 	return base64.StdEncoding.EncodeToString(data), "binary"
+}
+
+// deserializeValue is deserializePayload for a message value, which the
+// topic's decoder, when there is one, reads first unless the value is JSON.
+// Before text, too: a small protobuf message is often valid UTF-8.
+func deserializeValue(data []byte, decoder connector.PayloadDecoder) (string, string) {
+	value, format := deserializePayload(data)
+	if decoder == nil || format == "json" || format == "empty" {
+		return value, format
+	}
+	if decoded, ok := decoder.Decode(data); ok {
+		return decoded, formatProtobuf
+	}
+	return value, format
 }
 
 func recordHeaders(record *kgo.Record) map[string]string {

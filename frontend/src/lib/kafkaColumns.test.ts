@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { columnLabel, columnValues, formatLeaves, NO_VALUE } from '@/lib/kafkaColumns'
+import { columnLabel, columnValues, formatLeaves, isJsonFormat, NO_VALUE } from '@/lib/kafkaColumns'
 
 // The shape from events_v2: two kinds of message in one topic, one carrying
 // src.event_data.cp and the other src.event_data.events[].
@@ -27,6 +27,14 @@ describe('columnValues', () => {
   // column is a dash rather than a crash or an empty cell that reads as "".
   it('answers a non-JSON payload with dashes', () => {
     expect(columnValues('plain log line', 'text', PATHS)).toEqual([NO_VALUE, NO_VALUE, NO_VALUE])
+  })
+
+  // A protobuf value read with the topic's contract arrives as JSON.
+  it('reads a protobuf value decoded to JSON', () => {
+    expect(columnValues('{"event_type":"batch","user_id":9007199254740993}', 'protobuf', ['event_type', 'user_id'])).toEqual([
+      'batch',
+      '9007199254740993',
+    ])
   })
 
   it('answers a payload that claims json but does not parse', () => {
@@ -72,5 +80,11 @@ describe('columnLabel', () => {
   it('shortens a long path to its last two segments', () => {
     expect(columnLabel('src.event_data.cp.name')).toBe('…cp.name')
     expect(columnLabel('src.event_data.events[].name')).toBe('…events[].name')
+  })
+})
+
+describe('isJsonFormat', () => {
+  it('treats JSON and decoded protobuf alike, nothing else', () => {
+    expect(['json', 'protobuf', 'text', 'binary', 'empty', ''].map(isJsonFormat)).toEqual([true, true, false, false, false, false])
   })
 })

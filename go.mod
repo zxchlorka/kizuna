@@ -3,6 +3,7 @@ module github.com/zxchlorka/kizuna
 go 1.26.0
 
 require (
+	github.com/bufbuild/protocompile v0.14.1
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jackc/pgx/v5 v5.9.0
 	github.com/redis/go-redis/v9 v9.18.0
@@ -10,6 +11,7 @@ require (
 	github.com/twmb/franz-go/pkg/kadm v1.18.0
 	github.com/twmb/franz-go/pkg/kmsg v1.13.1
 	golang.org/x/sync v0.20.0
+	google.golang.org/protobuf v1.34.2
 )
 
 require (
