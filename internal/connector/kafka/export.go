@@ -29,6 +29,7 @@ func (c *KafkaConnector) ExportFields(
 	topic string,
 	fields []string,
 	filters []connector.FilterExpr,
+	decoder connector.PayloadDecoder,
 	emit func(cells []string) error,
 	progress func(read, total int64),
 ) error {
@@ -165,10 +166,16 @@ func (c *KafkaConnector) ExportFields(
 				if record.Offset < window.from || record.Attrs.IsControl() {
 					continue
 				}
-				if matchQ.active() && !messageMatchesQuery(finalizeRow(rawCandidateRow(record)), matchQ) {
+				if matchQ.active() && !messageMatchesQuery(finalizeRow(rawCandidateRow(record), decoder), matchQ) {
 					continue
 				}
-				if cells, found := extractExportCells(record.Value, columns); found {
+				value := record.Value
+				if decoder != nil {
+					if decoded, format := deserializeValue(value, decoder); format == formatProtobuf {
+						value = []byte(decoded)
+					}
+				}
+				if cells, found := extractExportCells(value, columns); found {
 					if emitErr = emit(cells); emitErr != nil {
 						return
 					}

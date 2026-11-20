@@ -140,7 +140,7 @@ func TestExportFieldsIntegration(t *testing.T) {
 	t.Run("progress counts offsets up to the snapshot total", func(t *testing.T) {
 		var reports [][2]int64
 		var rows, latestRead int64
-		err := conn.ExportFields(ctx, topic, []string{"user_id"}, nil, func([]string) error {
+		err := conn.ExportFields(ctx, topic, []string{"user_id"}, nil, nil, func([]string) error {
 			// The panel shows both counters side by side; a row written ahead
 			// of the messages counted as read reads as nonsense there.
 			rows++
@@ -172,7 +172,7 @@ func TestExportFieldsIntegration(t *testing.T) {
 
 	t.Run("partition filter narrows the total", func(t *testing.T) {
 		var total int64
-		err := conn.ExportFields(ctx, topic, []string{"user_id"}, eqFilters("partition", "1"), func([]string) error { return nil }, func(_, all int64) {
+		err := conn.ExportFields(ctx, topic, []string{"user_id"}, eqFilters("partition", "1"), nil, func([]string) error { return nil }, func(_, all int64) {
 			total = all
 		})
 		if err != nil {
@@ -207,7 +207,7 @@ func TestExportFieldsIntegration(t *testing.T) {
 		cancelCtx, cancelExport := context.WithCancel(ctx)
 		defer cancelExport()
 		rows := 0
-		err := conn.ExportFields(cancelCtx, topic, []string{"user_id"}, nil, func([]string) error {
+		err := conn.ExportFields(cancelCtx, topic, []string{"user_id"}, nil, nil, func([]string) error {
 			rows++
 			if rows == 10 {
 				cancelExport()
@@ -289,7 +289,7 @@ func eqFilters(pairs ...string) []connector.FilterExpr {
 func exportUserIDs(ctx context.Context, t *testing.T, conn *KafkaConnector, topic string, filters []connector.FilterExpr, onRow func()) []string {
 	t.Helper()
 	var ids []string
-	err := conn.ExportFields(ctx, topic, []string{"user_id"}, filters, func(cells []string) error {
+	err := conn.ExportFields(ctx, topic, []string{"user_id"}, filters, nil, func(cells []string) error {
 		if onRow != nil {
 			onRow()
 		}

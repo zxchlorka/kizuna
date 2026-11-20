@@ -236,6 +236,7 @@ type KafkaOffsetResetter interface {
 // chosen JSON fields of a topic's messages (Kafka). The API exposes it via
 // GET /objects/{name}/fields.csv. filters take the same shape as GetData's;
 // emit receives one row of cells per message that has at least one field.
+// decoder, when set, reads values in the topic's binary format, as in DataOpts.
 // progress, when set, reports offsets read against the total in range: once
 // with read 0 before the first fetch, then after every fetch, ending at total.
 type KafkaFieldExporter interface {
@@ -244,6 +245,7 @@ type KafkaFieldExporter interface {
 		topic string,
 		fields []string,
 		filters []FilterExpr,
+		decoder PayloadDecoder,
 		emit func(cells []string) error,
 		progress func(read, total int64),
 	) error
@@ -292,6 +294,16 @@ type DataOpts struct {
 	OrderBy  string       `json:"order_by"`
 	OrderDir string       `json:"order_dir"`
 	Filters  []FilterExpr `json:"filters"`
+	// ValueDecoder reads Kafka values in the topic's binary format; nil when
+	// the topic has none attached.
+	ValueDecoder PayloadDecoder `json:"-"`
+}
+
+// PayloadDecoder turns a binary Kafka value, such as protobuf read with the
+// .proto contract attached to the topic, into JSON. ok is false when the value
+// is not of that type; it is then shown as it would be without the decoder.
+type PayloadDecoder interface {
+	Decode(value []byte) (json string, ok bool)
 }
 
 type FilterExpr struct {

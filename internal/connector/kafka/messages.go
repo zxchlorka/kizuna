@@ -456,12 +456,12 @@ func (c *KafkaConnector) GetData(ctx context.Context, topic string, opts connect
 		}
 		// Content search must inspect every candidate, so it deserializes them all
 		// before testing the match predicate.
-		rows = filterMatches(finalizeRows(rows), matchQ)
+		rows = filterMatches(finalizeRows(rows, opts.ValueDecoder), matchQ)
 		meta["matched"] = len(rows)
 	} else {
 		// Deferred deserialization: only the rows that survived page selection are
 		// deserialized for display.
-		rows = finalizeRows(rows)
+		rows = finalizeRows(rows, opts.ValueDecoder)
 		meta["partial"] = consumed.partial
 		if consumed.partial {
 			meta["partial_reason"] = "read_budget_exhausted"
@@ -1120,18 +1120,18 @@ func rawCandidateRow(record *kgo.Record) map[string]any {
 // finalizeRows deserializes each raw candidate into its display row in place.
 // It is the only place JSON/text/binary detection happens for the normal browse
 // path, so discarded candidates are never deserialized.
-func finalizeRows(rows []map[string]any) []map[string]any {
+func finalizeRows(rows []map[string]any, decoder connector.PayloadDecoder) []map[string]any {
 	for i := range rows {
-		rows[i] = finalizeRow(rows[i])
+		rows[i] = finalizeRow(rows[i], decoder)
 	}
 	return rows
 }
 
 // finalizeRow turns one raw candidate into a display row, deserializing the
 // copied key/value bytes and stripping the internal raw fields.
-func finalizeRow(raw map[string]any) map[string]any {
+func finalizeRow(raw map[string]any, decoder connector.PayloadDecoder) map[string]any {
 	key, _ := deserializePayload(rawBytes(raw, rawKeyField))
-	value, format := deserializePayload(rawBytes(raw, rawValueField))
+	value, format := deserializeValue(rawBytes(raw, rawValueField), decoder)
 
 	row := map[string]any{
 		"partition": raw["partition"],
@@ -1937,7 +1937,7 @@ func messageMatchesField(row map[string]any, field string, want string, op match
 	if field == "" {
 		return true
 	}
-	if format, _ := row["format"].(string); format != "json" {
+	if format, _ := row["format"].(string); format != "json" && format != formatProtobuf {
 		return false
 	}
 	raw, ok := row["value"].(string)

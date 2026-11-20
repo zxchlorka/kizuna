@@ -209,7 +209,7 @@ func TestConsumeWindowsDefersDeserializationUntilFinalPage(t *testing.T) {
 	}
 
 	// Only the selected page is deserialized for display.
-	page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest))
+	page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest), nil)
 	if len(page) != pageSize {
 		t.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 	}
@@ -1671,7 +1671,7 @@ func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			res := read(b)
-			page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest))
+			page := finalizeRows(selectDirectionalPrefixes(res.rows, pageSize, directionNewest), nil)
 			if len(page) != pageSize {
 				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 			}
@@ -1682,7 +1682,7 @@ func BenchmarkNormalBrowseLargePayloads(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			res := read(b)
-			page := selectDirectionalPrefixes(finalizeRows(res.rows), pageSize, directionNewest)
+			page := selectDirectionalPrefixes(finalizeRows(res.rows, nil), pageSize, directionNewest)
 			if len(page) != pageSize {
 				b.Fatalf("expected a %d-row page, got %d", pageSize, len(page))
 			}
