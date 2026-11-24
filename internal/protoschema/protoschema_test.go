@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -142,6 +143,26 @@ func TestDecode(t *testing.T) {
 	// the int64 as a bare number with every digit, map keys sorted.
 	wantFull := `{"user_id":9007199254740993,"tags":[{"name":"a","weight":1},{"name":"b"}],"source":"SOURCE_APP","token":"AQI=","counters":{"x":3,"y":2},"seen_at":"2026-03-01T12:00:00Z","score":0.5,"active":true}`
 
+	// The producer moved on to a newer contract: fields 17-20 are not in ours.
+	var newer []byte
+	newer = append(newer, full...)
+	newer = protowire.AppendTag(newer, 17, protowire.BytesType)
+	newer = protowire.AppendString(newer, "alpha")
+	newer = protowire.AppendTag(newer, 18, protowire.VarintType)
+	newer = protowire.AppendVarint(newer, 3)
+	newer = protowire.AppendTag(newer, 18, protowire.VarintType)
+	newer = protowire.AppendVarint(newer, 4)
+	newer = protowire.AppendTag(newer, 19, protowire.BytesType)
+	newer = protowire.AppendBytes(newer, []byte{0x08, 0x05})
+	newer = protowire.AppendTag(newer, 20, protowire.BytesType)
+	newer = protowire.AppendBytes(newer, []byte{0xff})
+	wantNewer := strings.TrimSuffix(wantFull, "}") + `,"17":"alpha","18":[3,4],"19":{"1":5},"20":"/w=="}`
+
+	// A Tag carrying a field 9 it does not declare.
+	nestedUnknown := []byte{0x12, 0x0b, 0x0a, 0x06, 'a', 'b', 'c', 'd', 'e', 'f', 0x4a, 0x01, 'z'}
+	// user_id 5, then a field 17 several times its size.
+	mostlyUnknown := []byte{0x08, 0x05, 0x8a, 0x01, 0x06, 'a', 'b', 'c', 'd', 'e', 'f'}
+
 	tests := []struct {
 		name    string
 		decoder *Decoder
@@ -153,8 +174,10 @@ func TestDecode(t *testing.T) {
 		{name: "enum value the contract does not know stays a number", decoder: event, value: []byte{0x18, 0x07}, want: `{"source":7}`, wantOK: true},
 		{name: "JSON is not this message", decoder: event, value: []byte(`{"user_id":1}`)},
 		{name: "plain text is not this message", decoder: event, value: []byte("hello world")},
+		{name: "fields of a newer contract show under their numbers", decoder: event, value: newer, want: wantNewer, wantOK: true},
+		{name: "unknown field inside a nested message", decoder: event, value: nestedUnknown, want: `{"tags":[{"name":"abcdef","9":"z"}]}`, wantOK: true},
+		{name: "mostly unknown is not this message", decoder: event, value: mostlyUnknown},
 		{name: "another message with a field this one lacks", decoder: event, value: encode(t, schema, "demo.events.v1.Note", `{"text":"x","extra":"y"}`)},
-		{name: "unknown field inside a nested message", decoder: event, value: []byte{0x12, 0x03, 0x4a, 0x01, 'z'}},
 		{name: "string that is not UTF-8", decoder: note, value: []byte{0x0a, 0x01, 0xff}},
 		{name: "truncated", decoder: event, value: full[:len(full)-3]},
 	}
