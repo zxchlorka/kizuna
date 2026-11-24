@@ -249,7 +249,7 @@ export function KafkaProduceModal({
             ) : (
               <div className="space-y-1.5">
                 {expansion.messages.slice(0, PREVIEW_LIMIT).map((message, index) => (
-                  <div key={index} className="overflow-x-auto whitespace-pre rounded-sm border border-border/60 bg-background/60 px-2 py-1 font-mono text-[11px]">
+                  <div key={index} className="whitespace-pre-wrap rounded-sm border border-border/60 bg-background/60 px-2 py-1 font-mono text-[11px] [overflow-wrap:anywhere]">
                     {message.key ? <span className="text-cyan-700 dark:text-cyan-300">{message.key} → </span> : null}
                     {message.value}
                   </div>

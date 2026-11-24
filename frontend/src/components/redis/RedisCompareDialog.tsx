@@ -81,7 +81,7 @@ export function RedisCompareDialog({ open, connId, anchor, anchorType, onOpenCha
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange} modal={false}>
-      <DialogContent className="max-w-5xl [&>*]:min-w-0">
+      <DialogContent className="max-w-5xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Compare keys</DialogTitle>
           <DialogDescription className="font-mono text-xs">

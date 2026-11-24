@@ -212,7 +212,7 @@ export function JsonFieldPickerDialog({ open, onOpenChange, messages, onUseField
           item's min-content width and pushes the row out from under the
           dialog's max-width, which is what made values run beneath the
           presence column. */}
-      <DialogContent className="max-w-4xl [&>*]:min-w-0">
+      <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <ListTree className="h-4 w-4 text-orange-500" />

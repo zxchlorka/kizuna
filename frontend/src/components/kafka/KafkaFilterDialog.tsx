@@ -41,7 +41,7 @@ export function KafkaFilterDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl [&>*]:min-w-0">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Message filters</DialogTitle>
           {/* One line. The two rules worth knowing — joiner precedence and how

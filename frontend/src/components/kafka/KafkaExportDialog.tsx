@@ -85,7 +85,7 @@ export function KafkaExportDialog({
   return (
     <>
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-lg [&>*]:min-w-0">
+        <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle className="font-mono text-sm">Export fields to CSV</DialogTitle>
             <DialogDescription className="font-mono text-xs">
