@@ -43,7 +43,7 @@ export function KafkaProtoDialog({ open, onOpenChange, connId, topic, proto, onC
         onOpenChange(next)
       }}
     >
-      <DialogContent className="max-w-lg [&>*]:min-w-0">
+      <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">Protobuf contract</DialogTitle>
           <DialogDescription className="font-mono text-xs">

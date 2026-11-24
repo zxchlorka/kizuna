@@ -3,6 +3,23 @@
 Notable changes per release. Each heading matches a git tag, so `git show v0.5.0`
 gives the same notes from the command line.
 
+## v0.14.1 — 2026-11-24
+
+### Kafka
+
+- A `.proto` that is older than the producer still reads the topic. Fields
+  the contract does not declare no longer turn the whole message into base64:
+  they show in the JSON under their field number, such as `"17": "text"`, as a
+  number, text, nested object or array, and Search topic and the CSV export
+  see them too. A value stays base64 when most of its bytes do not fit the
+  message type.
+
+### Fixed
+
+- The Produce dialog no longer scrolls sideways with long JSON. One long line
+  stretched the dialog past the screen; preview lines now wrap on screen while
+  the produced value stays as typed. The same fix applies to every dialog.
+
 ## v0.14.0 — 2026-11-20
 
 ### Kafka

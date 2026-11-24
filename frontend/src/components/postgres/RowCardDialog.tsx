@@ -62,7 +62,7 @@ export function RowCardDialog({ open, columns, row, title, onOpenChange }: RowCa
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl [&>*]:min-w-0">
+      <DialogContent className="max-w-3xl">
         <DialogHeader>
           <DialogTitle className="font-mono text-sm">{title}</DialogTitle>
           <DialogDescription className="font-mono text-xs">

@@ -13,9 +13,12 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/bufbuild/protocompile"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/types/dynamicpb"
@@ -119,13 +122,15 @@ type Decoder struct {
 // Decode reports false when value is not this message. Protobuf parses almost
 // anything without complaint, so a value of another type, or no protobuf at
 // all, is recognised by what parsing leaves over: any field the contract does
-// not declare, or declares with another wire type, ends up unknown.
+// not declare, or declares with another wire type, ends up unknown. A producer
+// on a newer contract leaves some over too, so a value passes while most of its
+// bytes are fields the contract knows, and the rest show under their numbers.
 func (d *Decoder) Decode(value []byte) (string, bool) {
 	message := dynamicpb.NewMessage(d.message)
 	if err := proto.Unmarshal(value, message); err != nil {
 		return "", false
 	}
-	if hasUnknownFields(message) {
+	if 2*unknownBytes(message) > len(value) {
 		return "", false
 	}
 	var buf bytes.Buffer
@@ -133,33 +138,30 @@ func (d *Decoder) Decode(value []byte) (string, bool) {
 	return buf.String(), true
 }
 
-func hasUnknownFields(message protoreflect.Message) bool {
-	if len(message.GetUnknown()) > 0 {
-		return true
-	}
-	found := false
+func unknownBytes(message protoreflect.Message) int {
+	total := len(message.GetUnknown())
 	message.Range(func(field protoreflect.FieldDescriptor, value protoreflect.Value) bool {
 		switch {
 		case field.IsMap():
 			if field.MapValue().Message() != nil {
 				value.Map().Range(func(_ protoreflect.MapKey, entry protoreflect.Value) bool {
-					found = hasUnknownFields(entry.Message())
-					return !found
+					total += unknownBytes(entry.Message())
+					return true
 				})
 			}
 		case field.IsList():
 			if field.Message() != nil {
 				list := value.List()
-				for i := 0; i < list.Len() && !found; i++ {
-					found = hasUnknownFields(list.Get(i).Message())
+				for i := range list.Len() {
+					total += unknownBytes(list.Get(i).Message())
 				}
 			}
 		case field.Message() != nil:
-			found = hasUnknownFields(value.Message())
+			total += unknownBytes(value.Message())
 		}
-		return !found
+		return true
 	})
-	return found
+	return total
 }
 
 // writeMessage writes the set fields in declaration order under their .proto
@@ -208,7 +210,121 @@ func writeMessage(buf *bytes.Buffer, message protoreflect.Message) {
 			writeValue(buf, field, value)
 		}
 	}
+	// Proto3 parsing keeps undeclared fields as raw wire bytes, always whole.
+	if raw, ok := parseRaw(message.GetUnknown()); ok {
+		writeRawFields(buf, raw, !first)
+	}
 	buf.WriteByte('}')
+}
+
+// rawField is a wire field read without a contract: a number for the varint
+// and fixed types, the payload for the length-delimited and group ones.
+type rawField struct {
+	number protowire.Number
+	typ    protowire.Type
+	n      uint64
+	data   []byte
+}
+
+// parseRaw splits b into wire fields; false unless it is a whole run of them.
+func parseRaw(b []byte) ([]rawField, bool) {
+	var fields []rawField
+	for len(b) > 0 {
+		number, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return nil, false
+		}
+		b = b[n:]
+		field := rawField{number: number, typ: typ}
+		switch typ {
+		case protowire.VarintType:
+			field.n, n = protowire.ConsumeVarint(b)
+		case protowire.Fixed32Type:
+			var v uint32
+			v, n = protowire.ConsumeFixed32(b)
+			field.n = uint64(v)
+		case protowire.Fixed64Type:
+			field.n, n = protowire.ConsumeFixed64(b)
+		case protowire.BytesType:
+			field.data, n = protowire.ConsumeBytes(b)
+		default:
+			n = protowire.ConsumeFieldValue(number, typ, b)
+			if n >= 0 {
+				field.data = b[:n]
+			}
+		}
+		if n < 0 {
+			return nil, false
+		}
+		b = b[n:]
+		fields = append(fields, field)
+	}
+	return fields, true
+}
+
+// writeRawFields writes fields as JSON members keyed by field number, a number
+// seen more than once as an array. The wire does not say which type a field
+// was declared with, so the most readable reading is taken: an integer, text,
+// a nested message, else base64.
+func writeRawFields(buf *bytes.Buffer, fields []rawField, comma bool) {
+	var order []protowire.Number
+	byNumber := map[protowire.Number][]rawField{}
+	for _, field := range fields {
+		if _, seen := byNumber[field.number]; !seen {
+			order = append(order, field.number)
+		}
+		byNumber[field.number] = append(byNumber[field.number], field)
+	}
+	for _, number := range order {
+		if comma {
+			buf.WriteByte(',')
+		}
+		comma = true
+		writeString(buf, strconv.Itoa(int(number)))
+		buf.WriteByte(':')
+		values := byNumber[number]
+		if len(values) == 1 {
+			writeRawValue(buf, values[0])
+			continue
+		}
+		buf.WriteByte('[')
+		for i, value := range values {
+			if i > 0 {
+				buf.WriteByte(',')
+			}
+			writeRawValue(buf, value)
+		}
+		buf.WriteByte(']')
+	}
+}
+
+func writeRawValue(buf *bytes.Buffer, field rawField) {
+	switch field.typ {
+	case protowire.BytesType:
+		if isText(field.data) {
+			writeString(buf, string(field.data))
+			return
+		}
+		if nested, ok := parseRaw(field.data); ok && len(nested) > 0 {
+			buf.WriteByte('{')
+			writeRawFields(buf, nested, false)
+			buf.WriteByte('}')
+			return
+		}
+		writeString(buf, base64.StdEncoding.EncodeToString(field.data))
+	case protowire.StartGroupType:
+		writeString(buf, base64.StdEncoding.EncodeToString(field.data))
+	default:
+		buf.WriteString(strconv.FormatUint(field.n, 10))
+	}
+}
+
+// isText is true for UTF-8 without control characters other than whitespace,
+// which a nested message almost always has in its tags and lengths.
+func isText(b []byte) bool {
+	return utf8.Valid(b) && !bytes.ContainsFunc(b, func(r rune) bool {
+		return unicode.IsControl(r) && r != '\t' && r != '\n' && r != '\r'
+	})
 }
 
 func writeMap(buf *bytes.Buffer, field protoreflect.FieldDescriptor, entries protoreflect.Map) {
